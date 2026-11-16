@@ -224,12 +224,11 @@ so every writer (the interface, the CLI) plans the same deployments:
 }
 ```
 
-`image` and `job_variables` are optional; omitted fields fall back to the
-`MIROIR_PREFECT_POOL`, `MIROIR_IMAGE`, and `MIROIR_PREFECT_JOB_VARIABLES`
-environment variables (bootstrap defaults for a first setup). Either source
-enables the Prefect integration. On the cluster, the deployment section should
-carry a digest-pinned image — the cluster's registry mirror serves stale
-mutable tags.
+`image` and `job_variables` are optional. The section is what enables the Prefect
+integration and is the only source of these settings; they map onto the
+deployment's `work_pool_name` and `job_variables` in Prefect, with `image` kept
+inside the job variables. On the cluster, the deployment section should carry a
+digest-pinned image — the cluster's registry mirror serves stale mutable tags.
 
 ```bash
 uv run --locked pipelines-miroir deployments plan
@@ -300,8 +299,8 @@ uv run --locked pipelines-miroir --config miroir.json serve --duckdb /tmp/miroir
 ```
 
 Without a configured work pool, requests run as local subprocesses and need
-`--duckdb` (a local DuckDB file). With `deployment.work_pool` in the configuration
-or `MIROIR_PREFECT_POOL` set, they are submitted as Prefect flow runs instead.
+`--duckdb` (a local DuckDB file). With `deployment.work_pool` in the configuration,
+they are submitted as Prefect flow runs instead.
 
 Behind a TLS-terminating proxy, set Uvicorn's `FORWARDED_ALLOW_IPS` to the trusted
 proxy addresses/networks. The cluster trusts its ingress pod network; this makes
@@ -396,8 +395,8 @@ stay stable. Service edits write the upgraded shape. An explicit `"analyses": []
 means no analyses; connection-level analysis fields are invalid once the list exists.
 
 Requests run as `pipelines-miroir execute <operation>` subprocesses against
-the same local DuckDB file; with `MIROIR_PREFECT_POOL` set they are submitted
-as Prefect flow runs instead. Requests for one connection queue behind each other.
+the same local DuckDB file; with a `deployment` section in the configuration they
+are submitted as Prefect flow runs instead. Requests for one connection queue behind each other.
 
 The JSON API takes `Authorization: Bearer $MIROIR_API_TOKEN`:
 
@@ -422,7 +421,7 @@ The JSON API takes `Authorization: Bearer $MIROIR_API_TOKEN`:
 | `POST /api/connections/{id}/prepare` | Prepare execution for this connection only |
 | `PUT /api/connections/{id}/credentials/{name}` | Replace a credential: `{"value": "..."}` (204) |
 | `POST /api/connections/{id}/check`, `DELETE /api/connections/{id}` | Test or remove a connection |
-| `POST /api/refresh`, `GET /api/deployments/plan` | Reconcile with Prefect (needs `MIROIR_PREFECT_POOL`) |
+| `POST /api/refresh`, `GET /api/deployments/plan` | Reconcile with Prefect (needs the `deployment` section) |
 
 ### Uploading and automatically receiving Apple Health exports
 

@@ -80,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
         "serve", help="Web interface and HTTP API (needs MIROIR_API_TOKEN)"
     )
     # Only needed without an orchestrator, for the local-subprocess executor;
-    # requests run as Prefect flow runs when MIROIR_PREFECT_POOL is set.
+    # requests run as Prefect flow runs when the configuration has a deployment.
     serve.add_argument("--duckdb", type=Path)
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8765)
@@ -109,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     deployments = commands.add_parser(
         "deployments",
-        help="Reconcile Prefect deployments with the miroir (needs MIROIR_PREFECT_POOL)",
+        help="Reconcile Prefect deployments with the configuration's deployment section",
     )
     deployments.add_argument("action", choices=("plan", "apply"))
     refresh = commands.add_parser(
@@ -231,23 +231,18 @@ def _secret_store(store: Any) -> Any:
 def _orchestrator(args: argparse.Namespace, store: Any, miroir: Any) -> Any:
     """The Prefect adapter when this installation executes through Prefect.
 
-    The configuration's deployment section is authoritative for execution
-    settings (decision 016); the MIROIR_* environment variables are fallback
-    defaults, so the interface and the CLI plan the same deployments. Either
-    source enables the adapter.
+    The configuration's deployment section enables it and is the only source of
+    execution settings (decisions 016, 029), so the interface and the CLI plan
+    the same deployments.
     """
-    pool = os.environ.get("MIROIR_PREFECT_POOL")
-    if not pool and not getattr(miroir, "deployment", None):
+    if getattr(miroir, "deployment", None) is None:
         return None
     from src.adapters.prefect import PrefectOrchestrator
 
     return PrefectOrchestrator(
         store,
-        pool,
         # Where flow runs find the configuration (worker or Job mount).
         os.environ.get("MIROIR_PREFECT_CONFIG_PATH", str(args.config.resolve())),
-        image=os.environ.get("MIROIR_IMAGE") or None,
-        job_variables=json.loads(os.environ.get("MIROIR_PREFECT_JOB_VARIABLES", "{}")),
     )
 
 
@@ -262,12 +257,17 @@ def _orchestrate(
     if orchestrator is None:
         print(
             "No Prefect deployment configured: set deployment.work_pool in the"
-            " configuration, or MIROIR_PREFECT_POOL as a default",
+            " configuration",
             file=sys.stderr,
         )
         return 2
     service = MiroirService(
-        args.config, store, Path(DEFAULT_ARTIFACTS), orchestrator, secrets, orchestrator
+        args.config,
+        store,
+        Path(DEFAULT_ARTIFACTS),
+        executor=orchestrator,
+        secrets=secrets,
+        orchestrator=orchestrator,
     )
     try:
         if args.command == "refresh":
@@ -454,7 +454,10 @@ def _serve(args: argparse.Namespace, miroir: Any, store: Any, secrets: Any) -> i
     store.migrate()
     orchestrator = _orchestrator(args, store, miroir)
     if orchestrator is None and args.duckdb is None:
-        print("Set MIROIR_PREFECT_POOL or pass --duckdb", file=sys.stderr)
+        print(
+            "Set deployment.work_pool in the configuration or pass --duckdb",
+            file=sys.stderr,
+        )
         return 2
     executor = orchestrator or SubprocessExecutor(
         [
@@ -479,9 +482,9 @@ def _serve(args: argparse.Namespace, miroir: Any, store: Any, secrets: Any) -> i
         args.config.resolve(),
         store,
         args.artifacts.resolve(),
-        executor,
-        secrets,
-        orchestrator,
+        executor=executor,
+        secrets=secrets,
+        orchestrator=orchestrator,
     )
     uvicorn.run(create_app(service, token), host=args.host, port=args.port)
     return 0

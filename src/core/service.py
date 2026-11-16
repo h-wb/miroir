@@ -40,6 +40,17 @@ class Executor(Protocol):
     def submit(self, operation_id: str) -> None: ...
 
 
+class Orchestrator(Executor, Protocol):
+    """The orchestrator seam (decision 013): an executor that also keeps its
+    deployments in step with the configuration and reports how runs ended."""
+
+    def plan(self, miroir: ResolvedMiroir) -> list[dict[str, Any]]: ...
+
+    def apply(self, miroir: ResolvedMiroir, changes: list[dict[str, Any]]) -> None: ...
+
+    def observe(self, miroir: ResolvedMiroir) -> list[dict[str, Any]]: ...
+
+
 @dataclass
 class InlineExecutor:
     """Runs the operation before returning. Failures are on the attempt record."""
@@ -87,7 +98,7 @@ class MiroirService:
     secrets: SecretStore | None = None
     # The Prefect adapter when an orchestrator is configured (decision 013). It is
     # then also the executor; without it, requests run as local subprocesses.
-    orchestrator: Any = None
+    orchestrator: Orchestrator | None = None
 
     def resolver(self) -> Callable[[ResolvedConnection], dict[str, str]]:
         return make_resolver(self.secrets)
@@ -852,11 +863,11 @@ class MiroirService:
 
     # ---- Orchestrator -------------------------------------------------------------
 
-    def _orchestrator(self) -> Any:
+    def _orchestrator(self) -> Orchestrator:
         if self.orchestrator is None:
             raise OperationError(
                 "No orchestrator configured: set deployment.work_pool in the"
-                " configuration, or MIROIR_PREFECT_POOL as a default"
+                " configuration"
             )
         return self.orchestrator
 

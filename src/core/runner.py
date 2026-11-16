@@ -12,8 +12,9 @@ import json
 import logging
 import os
 import subprocess
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +51,20 @@ class RunOutcome:
     load_ids: tuple[str, ...]
     # False when the load finished but its outcome could not be written.
     recorded: bool = True
+
+
+@dataclass(frozen=True)
+class Execution:
+    """Where and how operations run: the same for a sync and its child imports."""
+
+    store: MetadataStore
+    destination: Any
+    resolve_credentials: Callable[[ResolvedConnection], dict[str, str]]
+    transform: Callable[[AnalysisPlan], None] | None = None
+    # dlt's default working directory (~/.dlt/pipelines) unless one is given.
+    pipelines_dir: str | None = None
+    lock_wait: float = 0
+    artifact_root: Path | None = None
 
 
 class IngestionFailed(RuntimeError):
@@ -268,9 +283,28 @@ def execute_operation(
     The operation runs only against the connection configuration it was requested
     with: an edit saved in between blocks it instead of silently changing it.
     """
+    run = Execution(
+        store,
+        destination,
+        resolve_credentials,
+        transform,
+        pipelines_dir,
+        lock_wait,
+        artifact_root,
+    )
+    return _execute_operation(run, miroir, operation_id, backend_run_id)
+
+
+def _execute_operation(
+    run: Execution,
+    miroir: ResolvedMiroir,
+    operation_id: str,
+    backend_run_id: str | None = None,
+) -> RunOutcome:
     from src.core.artifacts import stored_copy_is_intact
     from src.integrations.sources import open_fetch, open_import
 
+    store = run.store
     operation = store.get_operation(operation_id)
     if operation.miroir_id != miroir.id:
         raise OperationError("Operation belongs to a different miroir")
@@ -283,7 +317,7 @@ def execute_operation(
     if operation.config_revision != connection.revision:
         reason = "Connection configuration changed since this operation was requested"
     elif operation.kind == "sync":
-        if connection.config.folder is not None and artifact_root is None:
+        if connection.config.folder is not None and run.artifact_root is None:
             reason = "No artifact storage configured for collecting the folder"
         elif connection.integration.fetch is not None:
             make_source = lambda credentials: open_fetch(connection, credentials)
@@ -316,36 +350,11 @@ def execute_operation(
             connection, input_format, path, options
         )
     if reason is not None:
-        attempt, _ = store.start_attempt(operation.id, "blocked")
-        store.update_attempt(attempt, error_type="Blocked", error_message=reason)
+        _block(store, operation, "Blocked", reason)
         raise OperationError(reason)
     if operation.kind == "sync" and connection.config.folder is not None:
-        assert artifact_root is not None  # checked above
-        return _sync_with_folder(
-            miroir,
-            operation,
-            connection,
-            make_source,
-            store=store,
-            destination=destination,
-            resolve_credentials=resolve_credentials,
-            transform=transform,
-            pipelines_dir=pipelines_dir,
-            lock_wait=lock_wait,
-            artifact_root=artifact_root,
-        )
-    return _run_locked(
-        store,
-        operation,
-        miroir,
-        connection,
-        make_source,
-        destination,
-        resolve_credentials,
-        transform,
-        pipelines_dir,
-        lock_wait,
-    )
+        return _sync_with_folder(run, miroir, operation, connection, make_source)
+    return _run_locked(run, miroir, operation, connection, make_source)
 
 
 def run_connection(
@@ -512,18 +521,11 @@ def prune_folder_artifacts(
 
 
 def _sync_with_folder(
+    run: Execution,
     miroir: ResolvedMiroir,
     operation: Operation,
     connection: ResolvedConnection,
     make_source: Callable[[dict[str, str]], Any] | None,
-    *,
-    store: MetadataStore,
-    destination: Any,
-    resolve_credentials: Callable[[ResolvedConnection], dict[str, str]],
-    transform: Callable[[AnalysisPlan], None] | None,
-    pipelines_dir: str | None,
-    lock_wait: float,
-    artifact_root: Path,
 ) -> RunOutcome:
     """Fetch (if the connector can), import the folder's new files, build once.
 
@@ -531,43 +533,23 @@ def _sync_with_folder(
     take the connection lock themselves, so the fetch releases it first. A scan
     that loads nothing records ingestion `not_run` and builds nothing.
     """
-    execution: dict[str, Any] = {
-        "store": store,
-        "destination": destination,
-        "resolve_credentials": resolve_credentials,
-        "pipelines_dir": pipelines_dir,
-        "lock_wait": lock_wait,
-    }
+    store = run.store
+    assert run.artifact_root is not None  # a sync without one is blocked earlier
+    # The fetch and the imports only load; the analysis is built once, below.
+    loading = replace(run, transform=None, artifact_root=None)
     load_ids: list[str] = []
-    try:
-        with store.connection_lock(connection.binding.pipeline_name, lock_wait):
-            attempt, number = store.start_attempt(operation.id, "running")
-            if make_source is not None:
-                # A failed fetch is recorded on this attempt and ends the sync.
-                fetched = _execute(
-                    store,
-                    operation,
-                    attempt,
-                    number,
-                    miroir,
-                    connection,
-                    make_source,
-                    destination,
-                    resolve_credentials,
-                    None,
-                    pipelines_dir,
-                )
-                load_ids += fetched.load_ids
-    except ConnectionBusy as error:
-        blocked, _ = store.start_attempt(operation.id, "blocked")
-        store.update_attempt(
-            blocked, error_type="ConnectionBusy", error_message=str(error)
-        )
-        raise
+    with _locked(run, operation, connection):
+        attempt, number = store.start_attempt(operation.id, "running")
+        if make_source is not None:
+            # A failed fetch is recorded on this attempt and ends the sync.
+            fetched = _execute(
+                loading, operation, attempt, number, miroir, connection, make_source
+            )
+            load_ids += fetched.load_ids
     failures: list[str] = []
     try:
         collected, rejected = collect_folder(
-            miroir, connection, store=store, artifact_root=artifact_root
+            miroir, connection, store=store, artifact_root=run.artifact_root
         )
     except (OSError, OperationError) as error:
         store.update_attempt(
@@ -586,13 +568,13 @@ def _sync_with_folder(
                 connection.config.id,
                 artifact["id"],
                 store=store,
-                origin=operation.origin,  # type: ignore[arg-type]
+                origin=operation.origin,
                 parent_operation_id=operation.id,
             )
         except AlreadyImported:
             continue
         try:
-            outcome = execute_operation(miroir, child.id, **execution)
+            outcome = _execute_operation(loading, miroir, child.id)
         except (IngestionFailed, OperationError) as error:
             failures.append(f"{artifact['original_name']}: {error}")
             continue
@@ -620,7 +602,7 @@ def _sync_with_folder(
     else:
         store.update_attempt(attempt, ingestion="succeeded", load_ids=load_ids)
     transformation, recorded = (
-        _transform(store, operation, attempt, miroir, connection, transform, [])
+        _transform(run, operation, attempt, miroir, connection, [])
         if load_ids
         else ("not_run", True)
     )
@@ -643,78 +625,84 @@ def _connection(miroir: ResolvedMiroir, connection_id: str) -> ResolvedConnectio
     raise OperationError("Unknown connection")
 
 
-def _run_locked(
-    store: MetadataStore,
-    operation: Operation,
-    miroir: ResolvedMiroir,
-    connection: ResolvedConnection,
-    make_source: Callable[[dict[str, str]], Any] | None,
-    destination: Any,
-    resolve_credentials: Callable[[ResolvedConnection], dict[str, str]],
-    transform: Callable[[AnalysisPlan], None] | None,
-    pipelines_dir: str | None,
-    lock_wait: float = 0,
-) -> RunOutcome:
+def _block(
+    store: MetadataStore, operation: Operation, error_type: str, message: str
+) -> None:
+    """Record an attempt that never ran."""
+    attempt, _ = store.start_attempt(operation.id, "blocked")
+    store.update_attempt(attempt, error_type=error_type, error_message=message)
+
+
+@contextmanager
+def _locked(
+    run: Execution, operation: Operation, connection: ResolvedConnection
+) -> Iterator[None]:
+    """Hold the connection's lock; a busy connection is a blocked attempt."""
     try:
-        with store.connection_lock(connection.binding.pipeline_name, lock_wait):
-            attempt, number = store.start_attempt(
-                operation.id, "not_run" if make_source is None else "running"
-            )
-            if make_source is None:
-                transformation, recorded = _transform(
-                    store, operation, attempt, miroir, connection, transform, []
-                )
-                return RunOutcome(
-                    operation.id, number, "not_run", transformation, (), recorded
-                )
-            return _execute(
-                store,
-                operation,
-                attempt,
-                number,
-                miroir,
-                connection,
-                make_source,
-                destination,
-                resolve_credentials,
-                transform,
-                pipelines_dir,
-            )
+        with run.store.connection_lock(connection.binding.pipeline_name, run.lock_wait):
+            yield
     except ConnectionBusy as error:
-        attempt, _ = store.start_attempt(operation.id, "blocked")
-        store.update_attempt(
-            attempt, error_type="ConnectionBusy", error_message=str(error)
-        )
+        _block(run.store, operation, "ConnectionBusy", str(error))
         raise
 
 
+def _record(store: MetadataStore, attempt: int, what: str, **values: Any) -> bool:
+    """Write an outcome of work that is already done: a metadata failure is
+    logged and reported as unrecorded, never raised."""
+    try:
+        store.update_attempt(attempt, **values)
+    except SQLAlchemyError:
+        log.exception("%s could not be recorded", what)
+        return False
+    return True
+
+
+def _run_locked(
+    run: Execution,
+    miroir: ResolvedMiroir,
+    operation: Operation,
+    connection: ResolvedConnection,
+    make_source: Callable[[dict[str, str]], Any] | None,
+) -> RunOutcome:
+    with _locked(run, operation, connection):
+        attempt, number = run.store.start_attempt(
+            operation.id, "not_run" if make_source is None else "running"
+        )
+        if make_source is None:
+            transformation, recorded = _transform(
+                run, operation, attempt, miroir, connection, []
+            )
+            return RunOutcome(
+                operation.id, number, "not_run", transformation, (), recorded
+            )
+        return _execute(
+            run, operation, attempt, number, miroir, connection, make_source
+        )
+
+
 def _execute(
-    store: MetadataStore,
+    run: Execution,
     operation: Operation,
     attempt: int,
     number: int,
     miroir: ResolvedMiroir,
     connection: ResolvedConnection,
     make_source: Callable[[dict[str, str]], Any],
-    destination: Any,
-    resolve_credentials: Callable[[ResolvedConnection], dict[str, str]],
-    transform: Callable[[AnalysisPlan], None] | None,
-    pipelines_dir: str | None,
 ) -> RunOutcome:
     import dlt
 
+    store = run.store
     secrets: list[str] = []
     try:
-        credentials = resolve_credentials(connection)
+        credentials = run.resolve_credentials(connection)
         secrets = list(credentials.values())
-        # dlt's default working directory (~/.dlt/pipelines) unless one is given
         options: dict[str, Any] = (
-            {"pipelines_dir": pipelines_dir} if pipelines_dir else {}
+            {"pipelines_dir": run.pipelines_dir} if run.pipelines_dir else {}
         )
         pipeline = dlt.pipeline(
             pipeline_name=connection.binding.pipeline_name,
             dataset_name=connection.binding.dataset_name,
-            destination=destination,
+            destination=run.destination,
             **options,
         )
         with make_source(credentials) as source:
@@ -732,15 +720,15 @@ def _execute(
         raise IngestionFailed(f"{error_type}: {message}") from None
 
     load_ids = tuple(info.loads_ids)
-    recorded = True
-    try:
-        store.update_attempt(attempt, ingestion="succeeded", load_ids=list(load_ids))
-    except SQLAlchemyError:
-        log.exception("Load %s succeeded but could not be recorded", load_ids)
-        recorded = False
-
+    recorded = _record(
+        store,
+        attempt,
+        f"Successful load {load_ids}",
+        ingestion="succeeded",
+        load_ids=list(load_ids),
+    )
     transformation, models_recorded = _transform(
-        store, operation, attempt, miroir, connection, transform, secrets
+        run, operation, attempt, miroir, connection, secrets
     )
     return RunOutcome(
         operation.id,
@@ -753,12 +741,11 @@ def _execute(
 
 
 def _transform(
-    store: MetadataStore,
+    run: Execution,
     operation: Operation,
     attempt: int,
     miroir: ResolvedMiroir,
     connection: ResolvedConnection,
-    transform: Callable[[AnalysisPlan], None] | None,
     secrets: list[str],
 ) -> tuple[str, bool]:
     """Build after a load: every analysis linking the connection, once each.
@@ -768,38 +755,33 @@ def _transform(
     attempt; the load attempt records a summary. A failed build never fails the
     load (decision 019).
     """
+    store = run.store
     if operation.kind == "models":
         analysis = find_analysis(miroir, str(operation.analysis_id))
-        return _build(store, attempt, analysis, transform, secrets)
+        return _build(run, attempt, analysis, secrets)
     analyses = analyses_linking(miroir, connection.config.id)
-    detail = None
+    skipped = None
     if not analyses:
-        transformation, detail = "skipped", "No analysis links this connection"
-    elif transform is None:
-        transformation, detail = "skipped", "no transform configured"
-    if detail is not None:
-        try:
-            store.update_attempt(
-                attempt, transformation=transformation, transformation_detail=detail
-            )
-        except SQLAlchemyError:
-            log.exception("Transformation outcome could not be recorded")
-            return transformation, False
-        return transformation, True
-    recorded = True
+        skipped = "No analysis links this connection"
+    elif run.transform is None:
+        skipped = "no transform configured"
+    if skipped is not None:
+        return "skipped", _record(
+            store,
+            attempt,
+            "Transformation outcome",
+            transformation="skipped",
+            transformation_detail=skipped,
+        )
+    recorded = _record(store, attempt, "Transformation start", transformation="running")
     outcomes = []
-    try:
-        store.update_attempt(attempt, transformation="running")
-    except SQLAlchemyError:
-        log.exception("Transformation start could not be recorded")
-        recorded = False
     for analysis in analyses:
         try:
             child = _new_operation(
                 store,
                 miroir,
                 connection,
-                operation.origin,  # type: ignore[arg-type]
+                operation.origin,
                 kind="models",
                 analysis_id=analysis.id,
                 parent_operation_id=operation.id,
@@ -813,56 +795,51 @@ def _transform(
             outcomes.append((analysis.id, "failed"))
             recorded = False
             continue
-        outcome, ok = _build(store, child_attempt, analysis, transform, secrets)
+        outcome, ok = _build(run, child_attempt, analysis, secrets)
         outcomes.append((analysis.id, outcome))
         recorded = recorded and ok
     transformation = (
         "succeeded" if all(o == "succeeded" for _, o in outcomes) else "failed"
     )
     summary = ", ".join(f"{analysis_id} {outcome}" for analysis_id, outcome in outcomes)
-    try:
-        store.update_attempt(
-            attempt,
-            transformation=transformation,
-            transformation_detail=f"Analyses: {summary}"[:200],
-        )
-    except SQLAlchemyError:
-        log.exception("Transformation outcome could not be recorded")
-        recorded = False
-    return transformation, recorded
+    ok = _record(
+        store,
+        attempt,
+        "Transformation outcome",
+        transformation=transformation,
+        transformation_detail=f"Analyses: {summary}"[:200],
+    )
+    return transformation, recorded and ok
 
 
 def _build(
-    store: MetadataStore,
+    run: Execution,
     attempt: int,
     analysis: ResolvedAnalysis,
-    transform: Callable[[AnalysisPlan], None] | None,
     secrets: list[str],
 ) -> tuple[str, bool]:
     """Run one analysis build and record it on `attempt`."""
     plan = analysis_plan(analysis)
     detail = plan.receipt
     recorded = True
-    if transform is None:
+    if run.transform is None:
         transformation, detail = "skipped", "no transform configured"
     else:
+        recorded = _record(
+            run.store, attempt, "Transformation start", transformation="running"
+        )
         try:
-            store.update_attempt(attempt, transformation="running")
-        except SQLAlchemyError:
-            log.exception("Transformation start could not be recorded")
-            recorded = False
-        try:
-            transform(plan)
+            run.transform(plan)
             transformation = "succeeded"
         except Exception as error:  # noqa: BLE001 - dbt must not fail the load
             transformation = "failed"
             detail = ": ".join(redact(error, secrets))[:200]
             log.warning("Analysis %s failed: %s", analysis.id, detail)
-    try:
-        store.update_attempt(
-            attempt, transformation=transformation, transformation_detail=detail
-        )
-    except SQLAlchemyError:
-        log.exception("Transformation outcome could not be recorded")
-        recorded = False
-    return transformation, recorded
+    ok = _record(
+        run.store,
+        attempt,
+        "Transformation outcome",
+        transformation=transformation,
+        transformation_detail=detail,
+    )
+    return transformation, recorded and ok

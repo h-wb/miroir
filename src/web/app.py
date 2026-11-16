@@ -379,7 +379,8 @@ def create_app(
             delivery_method=body.get("delivery_method"),
             resources=resource_selection(body.get("resources")),
         )
-        return {"id": connection_id, "check": service.check_connection(connection_id)}
+        check = await run_in_threadpool(service.check_connection, connection_id)
+        return {"id": connection_id, "check": check}
 
     @app.put("/api/connections/{connection_id}/settings")
     async def api_save_connection_settings(
@@ -391,7 +392,8 @@ def create_app(
         service.update_connection_settings(
             connection_id, settings, request.headers.get("if-match", "").strip('"')
         )
-        return {"saved": True, "check": service.check_connection(connection_id)}
+        check = await run_in_threadpool(service.check_connection, connection_id)
+        return {"saved": True, "check": check}
 
     @app.put("/api/connections/{connection_id}/resources")
     async def api_save_connection_resources(

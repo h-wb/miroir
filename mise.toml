@@ -90,7 +90,6 @@ secrets = [
   "PREFECT_API_AUTH_STRING",
   "MIROIR_METADATA__PASSWORD",
 ]
-env = { MIROIR_PREFECT_POOL = "miroir-k8s" }
 run = "pipelines-miroir --config miroir.json refresh"
 
 [tasks.prefect]

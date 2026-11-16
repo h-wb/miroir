@@ -3,33 +3,47 @@
 The miroir owns desired state (connections, schedules); Prefect owns execution.
 This adapter only translates: deployments from configuration (plan/apply),
 requests into flow runs (submit), and flow run states back into attempts (observe).
+
+It blocks, so callers run it off the event loop (the web routes that reach it are
+synchronous). On a loop Prefect's `to_deployment` and `run_deployment` would hand
+back coroutines instead of results.
 """
 
-import inspect
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import wraps
-from typing import Any
+from typing import Any, Literal, ParamSpec, TypedDict, TypeVar
 
-from src.core.config import ResolvedConnection, ResolvedMiroir
+from src.core.config import ResolvedMiroir
 from src.core.operations import MetadataStore, OperationError, OrchestratorUnavailable
+
+P = ParamSpec("P")
+R = TypeVar("R")
 
 FLOW_NAME = "sync-connection"
 # Prefect queues overlapping runs of one connection.
 CONCURRENCY_LIMIT = 1
+# The deployment attributes the miroir owns; a difference in any of them is drift.
+OWNED = (
+    "parameters",
+    "schedules",
+    "work_pool_name",
+    "job_variables",
+    "concurrency_limit",
+)
 UNAVAILABLE = (
     "Execution is unavailable; check the Prefect service and credentials,"
     " then try again."
 )
 
 
-def _readable_errors(function: Callable[..., Any]) -> Callable[..., Any]:
+def _readable_errors(function: Callable[P, R]) -> Callable[P, R]:
     """Prefect failures as product errors; an unreachable or refusing Prefect is
     OrchestratorUnavailable, so callers can ask to try again later."""
 
     @wraps(function)
-    def call(*args: Any, **kwargs: Any) -> Any:
+    def call(*args: P.args, **kwargs: P.kwargs) -> R:
         import httpx
         from prefect.deployments.runner import DeploymentApplyError
         from prefect.exceptions import ObjectNotFound
@@ -56,106 +70,81 @@ def _readable_errors(function: Callable[..., Any]) -> Callable[..., Any]:
     return call
 
 
-def _sync(value: Any) -> Any:
-    """Prefect methods return results in sync contexts and coroutines in async ones."""
-    if inspect.iscoroutine(value):
-        from prefect.utilities.asyncutils import run_coro_as_sync
-
-        return run_coro_as_sync(value)
-    return value
-
-
-@dataclass(frozen=True)
-class DeploymentSpec:
-    """What Prefect should have for one connection. Compared field by field."""
+class DeploymentSpec(TypedDict):
+    """One connection's deployment, in Prefect's own names: exactly the keyword
+    arguments `Flow.to_deployment` takes (decision 029)."""
 
     name: str
-    connection_id: str
     parameters: dict[str, Any]
-    cron: str | None
-    timezone: str | None
-    work_pool: str
-    image: str | None
+    schedules: list[Any]  # Prefect schedule models
+    work_pool_name: str
+    # Includes `image`, which is where Prefect keeps it.
     job_variables: dict[str, Any]
+    concurrency_limit: int
+    tags: list[str]
 
-    def comparable(self) -> dict[str, Any]:
-        return {
-            "parameters": self.parameters,
-            "schedule": (self.cron, self.timezone) if self.cron else None,
-            "work_pool": self.work_pool,
-            "image": self.image,
-            "job_variables": self.job_variables,
-            "concurrency_limit": CONCURRENCY_LIMIT,
-        }
+
+def deployment_name(miroir_id: str, connection_id: str) -> str:
+    return f"{miroir_id}-{connection_id}"
+
+
+def _owned(attributes: Any) -> dict[str, Any]:
+    """The owned attributes as JSON, in Prefect's serialization."""
+    return {
+        **{key: attributes[key] for key in OWNED},
+        "schedules": [
+            schedule.model_dump(mode="json") for schedule in attributes["schedules"]
+        ],
+    }
 
 
 @dataclass
 class PrefectOrchestrator:
     store: MetadataStore
-    # Fallback execution settings (decision 016): used only where the
-    # configuration's `deployment` section does not carry the field.
-    work_pool: str | None
     # Path of the miroir configuration where flow runs execute (worker or Job).
     config_path: str
-    image: str | None = None
-    # Extra job variables (e.g. `working_dir` for a process pool).
-    job_variables: dict[str, Any] = field(default_factory=dict)
 
     # ---- Deployments ------------------------------------------------------------
 
-    def _deployment(
-        self, miroir: ResolvedMiroir
-    ) -> tuple[str, str | None, dict[str, Any]]:
-        """Effective (work pool, image, job variables) for this miroir.
-
-        The configuration's deployment section is authoritative per field;
-        the constructor's environment-derived values fill what it omits.
-        """
-        declared = miroir.deployment
-        pool = (declared.work_pool if declared else None) or self.work_pool
-        if not pool:
-            raise OperationError(
-                "No work pool configured: set deployment.work_pool in the"
-                " configuration (or MIROIR_PREFECT_POOL as a default)"
-            )
-        image = declared.image if declared and declared.image else self.image
-        variables = (
-            declared.job_variables
-            if declared and declared.job_variables is not None
-            else self.job_variables
-        )
-        return pool, image, dict(variables)
-
-    def deployment_name(
-        self, miroir: ResolvedMiroir, connection: ResolvedConnection
-    ) -> str:
-        return f"{miroir.id}-{connection.config.id}"
-
     def desired(self, miroir: ResolvedMiroir) -> dict[str, DeploymentSpec]:
-        pool, image, job_variables = self._deployment(miroir)
-        specs = {}
+        from prefect.client.schemas.schedules import CronSchedule
+
+        declared = miroir.deployment
+        if declared is None:
+            raise OperationError(
+                "No work pool configured: set deployment.work_pool in the configuration"
+            )
+        job_variables = dict(declared.job_variables or {})
+        if declared.image:
+            job_variables["image"] = declared.image
+        specs: dict[str, DeploymentSpec] = {}
         for connection in miroir.connections:
             schedule = connection.config.schedule
-            name = self.deployment_name(miroir, connection)
-            specs[name] = DeploymentSpec(
-                name=name,
-                connection_id=connection.config.id,
-                parameters={
+            name = deployment_name(miroir.id, connection.config.id)
+            specs[name] = {
+                "name": name,
+                "parameters": {
                     "connection_id": connection.config.id,
                     "config_path": self.config_path,
                 },
-                cron=schedule.cron if schedule else None,
-                timezone=schedule.timezone if schedule else None,
-                work_pool=pool,
-                image=image,
-                job_variables=dict(job_variables),
-            )
+                "schedules": [
+                    CronSchedule(cron=schedule.cron, timezone=schedule.timezone)
+                ]
+                if schedule
+                else [],
+                "work_pool_name": declared.work_pool,
+                "job_variables": dict(job_variables),
+                "concurrency_limit": CONCURRENCY_LIMIT,
+                "tags": ["miroir", self._tag(miroir)],
+            }
         return specs
 
     def _tag(self, miroir: ResolvedMiroir) -> str:
         return f"miroir:{miroir.id}"
 
     def actual(self, miroir: ResolvedMiroir) -> dict[str, dict[str, Any]]:
+        """What Prefect has for this miroir: per deployment, its ID and the
+        owned attributes."""
         from prefect import get_client
         from prefect.client.schemas.filters import (
             DeploymentFilter,
@@ -163,7 +152,6 @@ class PrefectOrchestrator:
             FlowFilter,
             FlowFilterName,
         )
-        from prefect.client.schemas.schedules import CronSchedule
 
         with get_client(sync_client=True) as client:
             deployments = client.read_deployments(
@@ -174,26 +162,14 @@ class PrefectOrchestrator:
             )
         result = {}
         for deployment in deployments:
-            # Non-cron schedules are never ours, so any of them is drift.
-            schedules = [
-                (s.schedule.cron, s.schedule.timezone)
-                if isinstance(s.schedule, CronSchedule)
-                else s.schedule.model_dump(mode="json", exclude_none=True)
-                for s in deployment.schedules
-            ]
-            variables = dict(deployment.job_variables or {})
-            image = variables.pop("image", None)
             limit = deployment.global_concurrency_limit
             result[deployment.name] = {
                 "id": str(deployment.id),
-                "comparable": {
+                "attributes": {
                     "parameters": dict(deployment.parameters or {}),
-                    "schedule": schedules[0]
-                    if len(schedules) == 1
-                    else (schedules or None),
-                    "work_pool": deployment.work_pool_name,
-                    "image": image,
-                    "job_variables": variables,
+                    "schedules": [s.schedule for s in deployment.schedules],
+                    "work_pool_name": deployment.work_pool_name,
+                    "job_variables": dict(deployment.job_variables or {}),
                     "concurrency_limit": limit.limit if limit else None,
                 },
             }
@@ -205,18 +181,19 @@ class PrefectOrchestrator:
         desired, actual = self.desired(miroir), self.actual(miroir)
         changes: list[dict[str, Any]] = []
         for name, spec in sorted(desired.items()):
-            want = spec.comparable()
+            want = _owned(spec)
+            connection_id = spec["parameters"]["connection_id"]
             if name not in actual:
                 changes.append(
                     {
                         "action": "create",
                         "deployment": name,
-                        "connection_id": spec.connection_id,
+                        "connection_id": connection_id,
                         "set": want,
                     }
                 )
                 continue
-            have = actual[name]["comparable"]
+            have = _owned(actual[name]["attributes"])
             diff = {
                 key: {"have": have[key], "want": want[key]}
                 for key in want
@@ -227,7 +204,7 @@ class PrefectOrchestrator:
                     {
                         "action": "update",
                         "deployment": name,
-                        "connection_id": spec.connection_id,
+                        "connection_id": connection_id,
                         "changes": diff,
                     }
                 )
@@ -241,7 +218,7 @@ class PrefectOrchestrator:
     def apply(self, miroir: ResolvedMiroir, changes: list[dict[str, Any]]) -> None:
         """Perform a plan. Create and update are the same upsert in Prefect."""
         from prefect import get_client
-        from prefect.client.schemas.schedules import CronSchedule
+        from prefect.deployments.runner import RunnerDeployment
 
         from src.pipelines.miroir import sync_connection
 
@@ -253,21 +230,10 @@ class PrefectOrchestrator:
                 continue
             spec = desired[change["deployment"]]
             if change["action"] == "update":
-                self._drop_slugged_schedules(spec.name)
-            deployment = _sync(
-                sync_connection.to_deployment(
-                    name=spec.name,
-                    parameters=spec.parameters,
-                    schedules=[CronSchedule(cron=spec.cron, timezone=spec.timezone)]
-                    if spec.cron
-                    else [],
-                    work_pool_name=spec.work_pool,
-                    job_variables=spec.job_variables,
-                    concurrency_limit=CONCURRENCY_LIMIT,
-                    tags=["miroir", self._tag(miroir)],
-                )
-            )
-            _sync(deployment.apply(work_pool_name=spec.work_pool, image=spec.image))
+                self._drop_slugged_schedules(spec["name"])
+            deployment = sync_connection.to_deployment(**spec)
+            assert isinstance(deployment, RunnerDeployment)  # see the module docstring
+            deployment.apply()
 
     def _drop_slugged_schedules(self, name: str) -> None:
         """Prefect updates slugged schedules in place instead of replacing them
@@ -289,29 +255,31 @@ class PrefectOrchestrator:
         The operation ID is the idempotency key: resubmitting after a timeout or
         crash returns the existing flow run instead of starting another.
         """
+        from prefect.client.schemas.objects import FlowRun
         from prefect.deployments import run_deployment
         from prefect.exceptions import ObjectNotFound
 
         operation = self.store.get_operation(operation_id)
-        name = f"{FLOW_NAME}/{operation.miroir_id}-{operation.connection_id}"
+        name = "/".join(
+            (FLOW_NAME, deployment_name(operation.miroir_id, operation.connection_id))
+        )
         try:
-            flow_run = _sync(
-                run_deployment(
-                    name,
-                    parameters={
-                        "connection_id": operation.connection_id,
-                        "operation_id": operation.id,
-                        "config_path": self.config_path,
-                    },
-                    timeout=0,
-                    idempotency_key=operation.id,
-                )
+            flow_run = run_deployment(
+                name,
+                parameters={
+                    "connection_id": operation.connection_id,
+                    "operation_id": operation.id,
+                    "config_path": self.config_path,
+                },
+                timeout=0,
+                idempotency_key=operation.id,
             )
         except ObjectNotFound as error:
             raise OperationError(
                 f"Deployment {name} does not exist. Apply the deployments first"
                 " (Apply deployments in the interface, or `miroir:deploy`)."
             ) from error
+        assert isinstance(flow_run, FlowRun)  # see the module docstring
         self.store.bind_backend_run(operation.id, str(flow_run.id))
 
     @_readable_errors
@@ -330,6 +298,7 @@ class PrefectOrchestrator:
                     label = run.state.name if run.state else "unknown"
                 except ObjectNotFound:
                     state, label = StateType.CRASHED, "deleted"
+                outcome: Literal["cancelled", "lost"]
                 if state in (StateType.CANCELLED, StateType.CANCELLING):
                     outcome = "cancelled"
                 elif state in (
@@ -345,7 +314,7 @@ class PrefectOrchestrator:
                 recorded = self.store.close_unverified(
                     item["operation_id"],
                     item["attempt_id"],
-                    outcome,  # type: ignore[arg-type]
+                    outcome,
                     f"Prefect flow run ended as {label} without recording an outcome",
                 )
                 if recorded:
