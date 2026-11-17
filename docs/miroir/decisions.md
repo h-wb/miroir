@@ -838,3 +838,62 @@ would resume older legacy watermarks, causing safe merge re-reads, not deletion.
 The dlt HTTP client's retry predicate handles rate-limited 403 responses without
 retrying permission failures, retaining standard 429/server retries and Retry-After.
 Custom search pacing stays. No parallel extraction or credential-provider change.
+
+## 029 — The Prefect adapter describes deployments in Prefect's own attributes
+
+Status: accepted, 2026-11-16. Refines 013; supersedes 016's environment fallbacks.
+
+An audit of the execution path asked whether the orchestrator seam forces
+workarounds, and whether dlt offers a native Prefect runner to adopt instead.
+
+dlt (1.31) ships no Prefect integration. It has an Airflow helper, it detects that
+it runs inside a Prefect flow for its own telemetry, and `dlt.hub.run` declares
+jobs and triggers for dltHub's own runtime. Running dlt under Prefect is a
+`pipeline.run()` inside a `@flow`, which `sync_connection` already is. The runner
+(`src/core/runner.py`) imports nothing from Prefect and stays as it is.
+
+The adapter did carry a private vocabulary. One connection's deployment was
+written three ways: a `DeploymentSpec` with its own field names, a hand-built
+comparable form for it, and a second hand-built comparable form for what Prefect
+returned (cron as a tuple, `image` lifted out of the job variables). The spec is
+now the keyword arguments of `Flow.to_deployment`, by Prefect's names:
+`parameters`, `schedules`, `work_pool_name`, `job_variables` (which holds
+`image`, as Prefect stores it), `concurrency_limit`, `tags`. Apply is
+`sync_connection.to_deployment(**spec).apply()`. Plan compares the same owned
+attributes read from Prefect's response, serialized by Prefect's own models.
+
+The configuration keeps its words: `deployment.work_pool`, `deployment.image`,
+`deployment.job_variables`, and a connection's `schedule`. They already sit one
+step from Prefect's, a first-class `image` matches Prefect's own `deploy(image=)`,
+and one cron per connection is a product choice. Renaming them would cost a
+migration of every stored configuration for no gain. `desired()` is the only
+place that translates them.
+
+**The deployment section is the only source of execution settings.** Decision 016
+kept `MIROIR_PREFECT_POOL`, `MIROIR_IMAGE` and `MIROIR_PREFECT_JOB_VARIABLES` as
+fallbacks for omitted fields and as a second way to enable Prefect. No
+installation sets them any more (the cluster's server carries only
+`MIROIR_PREFECT_CONFIG_PATH`), and a second source is exactly the
+writer-dependent state 016 set out to remove. They are gone: a configuration with
+a `deployment` section runs through Prefect, one without runs locally.
+`MIROIR_PREFECT_CONFIG_PATH` stays, for the reason 016 gives.
+
+**The adapter blocks and runs off the event loop.** It wrapped Prefect's dual
+sync/async calls in a check that ran a returned coroutine to completion. Every
+web route that reaches the adapter is synchronous or already hands the call to a
+worker thread, so the check never fired; it is removed and the contract is stated
+in the module instead. The two JSON routes that still ran a connection check (a
+network call to the source) on the event loop now use a worker thread like their
+form twins.
+
+The seam is typed: `Orchestrator` in `src/core/service.py` is the three verbs
+plus `submit`, and the adapter's methods keep their signatures through the error
+wrapper. A second backend implements that protocol.
+
+Consequences: plan output uses Prefect's names (`schedules`, `work_pool_name`;
+an image change shows under `job_variables`). Nothing stored changes, and a
+converged installation still plans nothing.
+
+Kept on purpose: slugged schedules are removed before an update. Prefect refuses
+to replace them with unslugged ones, and giving ours a slug would not help,
+because Prefect then updates by slug and leaves a hand-added one in place.

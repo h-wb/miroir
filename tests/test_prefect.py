@@ -5,7 +5,6 @@ No worker runs: flow runs stay scheduled unless a test sets their state.
 
 import io
 import json
-import os
 import tempfile
 import unittest
 import uuid
@@ -23,6 +22,7 @@ from src.core.service import MiroirService
 from tests.test_miroir import example
 
 POOL = "test-pool"
+DEPLOYMENT = {"work_pool": POOL, "image": "ghcr.io/x/pipelines:abc"}
 
 
 def closed_api() -> str:
@@ -35,7 +35,7 @@ def closed_api() -> str:
     return f"http://127.0.0.1:{port}/api"
 
 
-def miroir(schedule=None, drop_health=False, deployment=None):
+def miroir(schedule=None, drop_health=False, deployment=DEPLOYMENT):
     config = example()
     if deployment:
         config["deployment"] = deployment
@@ -69,12 +69,7 @@ class PrefectAdapterTests(unittest.TestCase):
         self.store = MetadataStore(f"sqlite:///{Path(self.tmp.name) / 'meta.sqlite'}")
         self.addCleanup(self.store.engine.dispose)
         self.store.migrate()
-        self.orchestrator = PrefectOrchestrator(
-            self.store,
-            POOL,
-            "/miroir/miroir.json",
-            image="ghcr.io/x/pipelines:abc",
-        )
+        self.orchestrator = PrefectOrchestrator(self.store, "/miroir/miroir.json")
 
     def converge(self, ws):
         self.orchestrator.apply(ws, self.orchestrator.plan(ws))
@@ -88,21 +83,38 @@ class PrefectAdapterTests(unittest.TestCase):
             sorted((c["action"], c["deployment"]) for c in plan),
             [("create", "personal-health"), ("create", "personal-music")],
         )
+        music = next(c["set"] for c in plan if c["deployment"] == "personal-music")
+        self.assertEqual(
+            json.loads(json.dumps(music)),
+            {
+                "parameters": {
+                    "connection_id": "music",
+                    "config_path": "/miroir/miroir.json",
+                },
+                "schedules": [
+                    {"cron": "0 3 * * *", "timezone": "Europe/Paris", "day_or": True}
+                ],
+                "work_pool_name": POOL,
+                "job_variables": {"image": "ghcr.io/x/pipelines:abc"},
+                "concurrency_limit": 1,
+            },
+        )
         self.converge(ws)
         actual = self.orchestrator.actual(ws)
+        [schedule] = actual["personal-music"]["attributes"]["schedules"]
         self.assertEqual(
-            actual["personal-music"]["comparable"]["schedule"],
-            ("0 3 * * *", "Europe/Paris"),
+            (schedule.cron, schedule.timezone), ("0 3 * * *", "Europe/Paris")
         )
         self.assertEqual(
-            actual["personal-music"]["comparable"]["image"], "ghcr.io/x/pipelines:abc"
+            actual["personal-music"]["attributes"]["job_variables"],
+            {"image": "ghcr.io/x/pipelines:abc"},
         )
 
         # A schedule change in the miroir is an update...
         hourly = miroir(schedule={"cron": "0 * * * *", "timezone": "Europe/Paris"})
         [change] = self.orchestrator.plan(hourly)
         self.assertEqual(
-            (change["action"], list(change["changes"])), ("update", ["schedule"])
+            (change["action"], list(change["changes"])), ("update", ["schedules"])
         )
         self.converge(hourly)
 
@@ -138,8 +150,8 @@ class PrefectAdapterTests(unittest.TestCase):
         self.assertEqual(
             {name: sorted(changes) for name, changes in drift.items()},
             {
-                "personal-health": ["concurrency_limit", "schedule"],
-                "personal-music": ["schedule"],
+                "personal-health": ["concurrency_limit", "schedules"],
+                "personal-music": ["schedules"],
             },
         )
         self.assertEqual(
@@ -171,6 +183,7 @@ class PrefectAdapterTests(unittest.TestCase):
     ):
         raw = example()
         raw["id"] = "setup_scope"
+        raw["deployment"] = DEPLOYMENT
         orphan = json.loads(json.dumps(raw["connections"][1]))
         orphan["id"] = "orphan"
         raw["connections"].append(orphan)
@@ -189,11 +202,11 @@ class PrefectAdapterTests(unittest.TestCase):
         service.prepare_connection("health")
         actual = self.orchestrator.actual(service.miroir())
         self.assertEqual(
-            actual["setup_scope-health"]["comparable"]["image"],
+            actual["setup_scope-health"]["attributes"]["job_variables"]["image"],
             "ghcr.io/x/pipelines:new",
         )
         self.assertEqual(
-            actual["setup_scope-music"]["comparable"]["image"],
+            actual["setup_scope-music"]["attributes"]["job_variables"]["image"],
             "ghcr.io/x/pipelines:abc",
         )
         self.assertIn("setup_scope-orphan", actual)
@@ -278,12 +291,12 @@ class PrefectAdapterTests(unittest.TestCase):
     def test_a_deployment_prefect_rejects_on_create_is_a_readable_error(self):
         raw = example()
         raw["id"] = "rejected"
+        raw["deployment"] = {"work_pool": "missing-pool"}
         ws = parse_miroir(json.dumps(raw))
-        missing = PrefectOrchestrator(self.store, "missing-pool", "/miroir.json")
         with self.assertRaisesRegex(
             OperationError, 'Work pool "missing-pool" not found'
         ):
-            missing.apply(ws, missing.plan(ws))
+            self.orchestrator.apply(ws, self.orchestrator.plan(ws))
 
     def test_unreachable_or_refusing_prefect_is_unavailable(self):
         import httpx
@@ -331,7 +344,7 @@ class DeploymentSettingsTests(unittest.TestCase):
         self.addCleanup(self.store.engine.dispose)
         self.store.migrate()
 
-    def test_config_declared_settings_win_over_environment_fallbacks(self):
+    def test_the_deployment_section_maps_onto_prefect_attributes(self):
         declared = miroir(
             deployment={
                 "work_pool": "config-pool",
@@ -339,39 +352,25 @@ class DeploymentSettingsTests(unittest.TestCase):
                 "job_variables": {"namespace": "from-config"},
             }
         )
-        adapter = PrefectOrchestrator(
-            self.store,
-            "env-pool",
-            "/config.json",
-            image="ghcr.io/h-wb/pipelines:sha-env",
-            job_variables={"namespace": "env"},
-        )
+        adapter = PrefectOrchestrator(self.store, "/config.json")
         spec = next(iter(adapter.desired(declared).values()))
-        self.assertEqual(spec.work_pool, "config-pool")
-        self.assertEqual(spec.image, "ghcr.io/h-wb/pipelines:sha-config")
-        self.assertEqual(spec.job_variables, {"namespace": "from-config"})
-
-    def test_omitted_fields_fall_back_to_the_environment(self):
-        declared = miroir(deployment={"work_pool": "config-pool"})
-        adapter = PrefectOrchestrator(
-            self.store,
-            None,
-            "/config.json",
-            image="ghcr.io/h-wb/pipelines:sha-env",
-            job_variables={"namespace": "env"},
+        self.assertEqual(spec["work_pool_name"], "config-pool")
+        self.assertEqual(
+            spec["job_variables"],
+            {"namespace": "from-config", "image": "ghcr.io/h-wb/pipelines:sha-config"},
         )
-        spec = next(iter(adapter.desired(declared).values()))
-        self.assertEqual(spec.work_pool, "config-pool")
-        self.assertEqual(spec.image, "ghcr.io/h-wb/pipelines:sha-env")
-        self.assertEqual(spec.job_variables, {"namespace": "env"})
+        bare = miroir(deployment={"work_pool": "config-pool"})
+        self.assertEqual(
+            next(iter(adapter.desired(bare).values()))["job_variables"], {}
+        )
 
-    def test_no_pool_anywhere_is_a_clear_error(self):
-        adapter = PrefectOrchestrator(self.store, None, "/config.json")
+    def test_no_deployment_section_is_a_clear_error(self):
+        adapter = PrefectOrchestrator(self.store, "/config.json")
         with self.assertRaisesRegex(OperationError, "deployment.work_pool"):
-            adapter.desired(miroir())
+            adapter.desired(miroir(deployment=None))
 
     def test_deployment_settings_do_not_change_connection_revisions(self):
-        before = miroir()
+        before = miroir(deployment=None)
         after = miroir(
             deployment={"work_pool": "other-pool", "image": "ghcr.io/x:other"}
         )
@@ -385,10 +384,6 @@ class OrchestrationCliTests(unittest.TestCase):
     """The orchestrator commands as a person runs them: plain environment."""
 
     def setUp(self):
-        # A machine without Prefect configured must still get a clear refusal.
-        saved = os.environ.pop("MIROIR_PREFECT_POOL", None)
-        if saved is not None:
-            self.addCleanup(os.environ.__setitem__, "MIROIR_PREFECT_POOL", saved)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         root = Path(self.tmp.name)
@@ -414,14 +409,14 @@ class OrchestrationCliTests(unittest.TestCase):
         store = MetadataStore(self.metadata[1])
         self.addCleanup(store.engine.dispose)
         store.migrate()
+        config = json.loads(self.config.read_text())
+        config["deployment"] = {"work_pool": POOL}
+        self.config.write_text(json.dumps(config))
         ws = load_miroir(self.config)
         unverified = request_sync(ws, "music", store=store, origin="request")
         store.bind_backend_run(unverified.id, str(uuid.uuid4()))
         store.start_attempt(unverified.id, "running")
-        with (
-            patch.dict(os.environ, {"MIROIR_PREFECT_POOL": POOL}),
-            temporary_settings({PREFECT_API_URL: closed_api()}),
-        ):
+        with temporary_settings({PREFECT_API_URL: closed_api()}):
             for command, message in (
                 (["models", "nope"], "Unknown analysis"),
                 (["deployments", "plan"], "try again"),

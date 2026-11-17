@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 
 from dbt.cli.main import dbtRunner
-from prefect import flow, get_run_logger
+from prefect import flow
 from prefect.concurrency.sync import concurrency
 
 from src.core.analysis import AnalysisPlan
@@ -41,20 +41,6 @@ def build_models(select: str | None = None, *, variables: dict | None = None) ->
 
 def build_connection_models(plan: AnalysisPlan) -> None:
     build_models(plan.selector, variables=plan.variables)
-
-
-def refresh_models(source: str) -> None:
-    """Rebuild everything downstream of a freshly loaded source.
-
-    A dbt failure is logged, not raised: the load itself succeeded, and the
-    nightly `run_dbt` rebuilds everything anyway.
-    """
-    try:
-        build_models(f"source:{source}+")
-    except Exception as exc:  # noqa: BLE001 - legacy loads survive model failures
-        get_run_logger().warning(
-            "dbt refresh after the %s load failed: %s", source, exc
-        )
 
 
 @flow

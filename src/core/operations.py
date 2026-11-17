@@ -185,7 +185,7 @@ class Operation:
     connection_id: str
     integration: str
     kind: str
-    origin: str
+    origin: Origin
     pipeline_name: str
     dataset_name: str
     config_revision: str

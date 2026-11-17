@@ -676,7 +676,6 @@ class SubprocessExecutorTests(unittest.TestCase):
                     patch("src.web.app.create_app", lambda s, t: served.append(s)),
                     contextlib.redirect_stderr(io.StringIO()),
                 ):
-                    os.environ.pop("MIROIR_PREFECT_POOL", None)
                     code = main(
                         [
                             "--config",

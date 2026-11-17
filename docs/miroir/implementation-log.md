@@ -1599,3 +1599,61 @@ The full suite is green: 182 tests in 180s, including the real Prefect API harne
 and disposable Postgres/dbt scenarios (Postgres 17.11). No live configuration,
 warehouse or deployment was changed. The live GitHub connection will run the
 legacy→native seed on its first run after the next image rollout.
+
+## 2026-11-16 — Prefect adapter cleanup (decision 029)
+
+Audited the execution path for seam-induced workarounds. The runner has no
+Prefect imports and is unchanged. dlt 1.31 has no Prefect runner to adopt (checked
+in the installed package: an Airflow helper, flow detection for telemetry, and
+`dlt.hub.run` for dltHub's own runtime).
+
+`src/adapters/prefect.py`: `DeploymentSpec` is now a TypedDict of the keyword
+arguments `Flow.to_deployment` takes, so apply passes it straight through and
+`image` travels inside `job_variables`. `plan` compares the owned attributes of
+both sides in Prefect's own serialization, replacing the two hand-built comparable
+forms. One `deployment_name()` serves plan and submit. The error wrapper keeps
+each verb's signature. `src/core/service.py` gains the `Orchestrator` protocol and
+the service field is typed with it.
+
+The environment fallbacks are retired: `PrefectOrchestrator` takes only the store
+and the configuration path, and reads pool, image and job variables from the
+`deployment` section. The CLI enables Prefect from that section alone; help text,
+error messages, the README and the `miroir:refresh` mise task no longer name
+`MIROIR_PREFECT_POOL`, `MIROIR_IMAGE` or `MIROIR_PREFECT_JOB_VARIABLES`.
+
+The `_sync` coroutine check is removed. No web route reaches the adapter on the
+event loop, so it never ran a coroutine; the module docstring states the contract
+and two assertions narrow Prefect's union return types. `PUT
+/api/connections/{id}/settings` and `POST /api/connections` now run the
+connection check in a worker thread, as the form routes already did.
+
+Plan output keys follow Prefect: `schedules` (a list of schedule objects) and
+`work_pool_name`; an image change is reported under `job_variables`. Deployments
+in Prefect are untouched: a converged installation plans nothing after the change.
+
+Not changed, and why: the slugged-schedule removal (Prefect refuses the
+replacement, and slugging ours would leave hand-added schedules in place), and the
+configuration's own words (decision 029).
+
+Operator note: an environment that still sets `MIROIR_PREFECT_POOL` without a
+`deployment` section in its configuration would now run requests locally. The
+cluster's server sets only `MIROIR_PREFECT_CONFIG_PATH`.
+
+Runner tidy-up, no behaviour change. `src/core/runner.py` passed the same seven
+settings (store, destination, credential resolver, transform, dlt directory, lock
+wait, artifact root) by hand through five functions and rebuilt them as a dict
+for child imports. They are now one frozen `Execution` value; a folder sync
+derives its load-only variant with `replace`. The public functions keep their
+keyword arguments. Three repeated blocks became helpers: `_record` (write an
+outcome, log instead of raising when the metadata write fails; six copies),
+`_locked` (take the connection lock, record a busy connection as a blocked
+attempt; two copies) and `_block`. `Operation.origin` is typed as `Origin` and
+the adapter's observed outcome as a literal, which removes the three
+`type: ignore` comments on this path. The unused legacy `refresh_models` helper
+is deleted from `src/pipelines/transform.py` (its callers went with decision 025).
+
+Validation: ruff check, ruff format check, mypy and `git diff --check` pass. The
+full suite is green: 181 tests in 161s, including the real Prefect API harness
+(with a new assertion on the JSON shape of a planned deployment) and the
+disposable Postgres/dbt scenarios (Postgres 17.11). Not run against the live
+Prefect: the next `deployments plan` there should be empty.
