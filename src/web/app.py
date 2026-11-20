@@ -121,11 +121,14 @@ def create_app(
             raise Unauthorized
         # Cookies are SameSite=Strict; also refuse cross-origin form posts outright.
         origin = request.headers.get("origin")
-        if (
-            request.method != "GET"
-            and origin
-            and urlsplit(origin).netloc != request.url.netloc
-        ):
+        if request.method == "GET" or not origin:
+            return
+        if origin == "null":
+            # A browser hides the origin of a same-origin post when the page asked
+            # for no referrer. Its own Sec-Fetch-Site header still tells them apart.
+            if request.headers.get("sec-fetch-site") != "same-origin":
+                raise Unauthorized
+        elif urlsplit(origin).netloc != request.url.netloc:
             raise Unauthorized
 
     @app.middleware("http")

@@ -89,6 +89,43 @@ class WebFixture(unittest.TestCase):
 
 
 class WebTests(WebFixture):
+    def test_cookie_post_with_a_hidden_origin_needs_a_same_origin_fetch_site(self):
+        self.login()
+
+        def enable(**headers):
+            return self.client.post(
+                "/connections/health/setup",
+                data={"method": "webhook"},
+                headers=headers,
+                follow_redirects=False,
+            )
+
+        # Another site, or an origin the browser hid without vouching for it.
+        for headers in (
+            {"Origin": "https://elsewhere.example"},
+            {"Origin": "null"},
+            {"Origin": "null", "Sec-Fetch-Site": "cross-site"},
+            {"Origin": "null", "Sec-Fetch-Site": "same-site"},
+        ):
+            refused = enable(**headers)
+            self.assertEqual(refused.status_code, 303, headers)
+            self.assertEqual(refused.headers["location"], "/login", headers)
+        self.assertFalse(
+            self.service.connection_settings("health")["connection"]["delivery"][
+                "enabled"
+            ]
+        )
+
+        # The setup page's own form, as Firefox sends it.
+        shown = enable(**{"Origin": "null", "Sec-Fetch-Site": "same-origin"})
+        self.assertEqual(shown.status_code, 200)
+        self.assertEqual(shown.headers["referrer-policy"], "same-origin")
+        self.assertTrue(
+            self.service.connection_settings("health")["connection"]["delivery"][
+                "enabled"
+            ]
+        )
+
     def test_analysis_rebuild_and_settings_have_independent_history(self):
         url = "/api/analyses/health/models"
         self.assertEqual(self.client.post(url, headers=BEARER).status_code, 400)
