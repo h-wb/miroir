@@ -900,7 +900,7 @@ because Prefect then updates by slug and leaves a hand-added one in place.
 
 ## 030 — A local agent delivers device sources through the receiving URL
 
-Status: proposed, 2026-11-20. Builds on 017 and 021; answers the "clients as
+Status: accepted, 2026-11-20. Builds on 017 and 021; answers the "clients as
 producers" item of the product plan.
 
 Some sources exist only on a personal machine: a browser's history database, a
@@ -947,8 +947,8 @@ acknowledgement be specified when a real one is built:
 **The agent keeps delivery state only.** Its cursor says what was acknowledged, not
 what was loaded; load state stays with dlt. A lost or reset cursor sends records
 again, which is safe for a connector that merges on source keys, as the file
-connectors do. A first load of long history is an ordinary upload, and the agent
-starts from a configured cutoff.
+connectors do. The agent starts from a configured cutoff and sends a long history
+as several bounded batches, so the masking below applies to it too.
 
 **Collectors ship raw records, minus what must not leave the machine.** They copy
 the source's rows as they are, selecting columns and nothing more: no cleaning or

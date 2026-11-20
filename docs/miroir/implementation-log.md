@@ -1657,3 +1657,50 @@ full suite is green: 181 tests in 161s, including the real Prefect API harness
 (with a new assertion on the JSON shape of a planned deployment) and the
 disposable Postgres/dbt scenarios (Postgres 17.11). Not run against the live
 Prefect: the next `deployments plan` there should be empty.
+
+## 2026-11-20 — ScreenMemory connector and the local agent (decision 030)
+
+First implementation of decision 030, in two parts that share one file format.
+
+The `screenmemory` connector (`src/integrations/screenmemory/`) has no fetch and
+one format, `screenmemory_batch` version 1: gzip JSON Lines with a header, `frame`
+and `app_usage` records, and a trailer carrying the record counts. Validation
+streams the file, bounds it (512 MiB uncompressed, 2 MiB per line), and requires
+the trailer and its counts, so a truncated delivery is refused. Its error is fixed
+text; nothing read from the file reaches a message. Two merge resources, `frames`
+(key `image_path`) and `app_usage` (key `ts`, `bundle_id`), with declared columns
+so `text` and `withheld` exist even when a file holds only nulls. The connector
+recommends no analysis; the registry-wide test now accepts `None`.
+
+The agent (`src/agent/`) is standard library only, and a test fails if that
+changes. One pass delivers a pending batch or collects a new one into a spool and
+posts it to the connection's receiving URL; the cursor moves only on 200 or 201.
+State files are written to a temporary file, synced and renamed. Redirects are not
+followed, and a plain `http` URL is accepted for loopback only, so a token is never
+sent in clear or to another host. `collect --out` writes the batches to a folder
+without sending, for inspection.
+
+The ScreenMemory collector reads `text.sqlite` and `usage.sqlite` read-only, sends
+rows older than a settle window, and pages by whole seconds without splitting a
+second across batches. Before writing, it withholds whole frames (password-manager
+apps by bundle id, password-manager pages by a marker in the text) and masks spans
+by fixed rules: private key blocks, known token shapes, values assigned to secret
+names, long mixed random strings, and card numbers. Decision 030's sentence on
+history was amended: the agent sends a long history itself, in bounded batches, so
+the masking covers it.
+
+An independent review of the diff found defects that the first version's tests
+missed, all fixed with a test each: secret names with a prefix
+(`POSTGRES_PASSWORD=`) were not masked; fractional timestamps could lose a frame;
+undecodable text blocked the collector for good; a power loss could leave an empty
+batch that was then retried forever; a full page sharing one second lost the rest of
+that second; an empty marker withheld every frame.
+
+Validation: the full suite is green, 211 tests in 174s (30 new), with ruff check,
+ruff format check and mypy clean. The agent starts with site packages disabled.
+
+Not done: nothing is deployed and no connection exists. The collector has run only
+on invented fixtures, never on a real ScreenMemory folder, so the assumed table
+layout is unverified against the app. The web interface's setup for this connector
+was not exercised. There are no dbt models, and no scheduler definition for the
+machine.

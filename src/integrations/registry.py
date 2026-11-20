@@ -7,10 +7,18 @@ from src.integrations.bikeshare import DEFINITION as BIKESHARE
 from src.integrations.browser_history import DEFINITION as BROWSER_HISTORY
 from src.integrations.github import DEFINITION as GITHUB
 from src.integrations.listenbrainz import DEFINITION as LISTENBRAINZ
+from src.integrations.screenmemory import DEFINITION as SCREENMEMORY
 
 INTEGRATIONS = MappingProxyType(
     {
         i.name: i
-        for i in (LISTENBRAINZ, APPLE_HEALTH, GITHUB, BIKESHARE, BROWSER_HISTORY)
+        for i in (
+            LISTENBRAINZ,
+            APPLE_HEALTH,
+            GITHUB,
+            BIKESHARE,
+            BROWSER_HISTORY,
+            SCREENMEMORY,
+        )
     }
 )
