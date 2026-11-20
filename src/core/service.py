@@ -19,6 +19,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
+from src.core import media
 from src.core.config import (
     ResolvedAnalysis,
     ResolvedConnection,
@@ -99,6 +100,7 @@ class MiroirService:
     # The Prefect adapter when an orchestrator is configured (decision 013). It is
     # then also the executor; without it, requests run as local subprocesses.
     orchestrator: Orchestrator | None = None
+    object_store: media.ObjectStore | None = None
 
     def resolver(self) -> Callable[[ResolvedConnection], dict[str, str]]:
         return make_resolver(self.secrets)
@@ -113,6 +115,29 @@ class MiroirService:
             if connection.config.id == connection_id:
                 return connection
         raise OperationError("Unknown connection")
+
+    def request_media_uploads(
+        self, connection_id: str, kind: str, objects: object
+    ) -> list[dict[str, Any]]:
+        miroir = self.miroir()
+        connection = self._connection(miroir, connection_id)
+        return media.request_uploads(
+            miroir.media, self.object_store, connection, kind, objects
+        )
+
+    def confirm_media(
+        self, connection_id: str, kind: str, objects: object
+    ) -> list[dict[str, Any]]:
+        miroir = self.miroir()
+        connection = self._connection(miroir, connection_id)
+        return media.confirm_uploads(
+            miroir.media, self.object_store, connection, kind, objects
+        )
+
+    def media_view_url(self, connection_id: str, kind: str, key: str) -> str:
+        miroir = self.miroir()
+        connection = self._connection(miroir, connection_id)
+        return media.view_url(miroir.media, self.object_store, connection, kind, key)
 
     def _dashboards(
         self, miroir: ResolvedMiroir, analysis: ResolvedAnalysis

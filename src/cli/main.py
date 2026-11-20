@@ -12,10 +12,14 @@ import os
 import sys
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from src.core.config import ConfigurationError, load_miroir
 from src.integrations.registry import INTEGRATIONS
+
+if TYPE_CHECKING:
+    from src.core.config import ResolvedMiroir
+    from src.core.media import ObjectStore
 
 DEFAULT_METADATA = "sqlite:///.miroir/metadata.sqlite"
 DEFAULT_ARTIFACTS = ".miroir/artifacts"
@@ -246,6 +250,28 @@ def _orchestrator(args: argparse.Namespace, store: Any, miroir: Any) -> Any:
     )
 
 
+def _object_store(miroir: "ResolvedMiroir") -> "ObjectStore | None":
+    config = miroir.media
+    if config is None:
+        return None
+    access_key = os.environ.get("MIROIR_MEDIA_ACCESS_KEY_ID")
+    secret_key = os.environ.get("MIROIR_MEDIA_SECRET_ACCESS_KEY")
+    if not access_key or not secret_key:
+        raise ConfigurationError(
+            "Set MIROIR_MEDIA_ACCESS_KEY_ID and MIROIR_MEDIA_SECRET_ACCESS_KEY to serve media"
+        )
+    from src.adapters.s3 import S3ObjectStore
+
+    return S3ObjectStore(
+        config.endpoint,
+        config.link_endpoint or config.endpoint,
+        config.region,
+        config.bucket,
+        access_key,
+        secret_key,
+    )
+
+
 def _orchestrate(
     args: argparse.Namespace, miroir: Any, store: Any, secrets: Any
 ) -> int:
@@ -451,6 +477,11 @@ def _serve(args: argparse.Namespace, miroir: Any, store: Any, secrets: Any) -> i
     if len(token) < 16:
         print("Set MIROIR_API_TOKEN (16+ characters) to serve", file=sys.stderr)
         return 2
+    try:
+        object_store = _object_store(miroir)
+    except ConfigurationError as error:
+        print(error, file=sys.stderr)
+        return 2
     store.migrate()
     orchestrator = _orchestrator(args, store, miroir)
     if orchestrator is None and args.duckdb is None:
@@ -485,6 +516,7 @@ def _serve(args: argparse.Namespace, miroir: Any, store: Any, secrets: Any) -> i
         executor=executor,
         secrets=secrets,
         orchestrator=orchestrator,
+        object_store=object_store,
     )
     uvicorn.run(create_app(service, token), host=args.host, port=args.port)
     return 0

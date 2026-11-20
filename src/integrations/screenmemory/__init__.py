@@ -9,6 +9,7 @@ from src.core.models import StrictModel
 from src.integrations.contracts import (
     FileFormat,
     IntegrationDefinition,
+    MediaKind,
     ResourceDefinition,
 )
 from src.integrations.screenmemory.formats import FORMAT_ID, VERSION, validate_batch
@@ -53,4 +54,13 @@ DEFINITION = IntegrationDefinition(
         ),
     ),
     analysis=None,
+    media=(
+        MediaKind(
+            "screenshots",
+            "frames",
+            "image_path",
+            (".jpeg", ".jpg", ".png", ".heic"),
+            20 * 1024 * 1024,
+        ),
+    ),
 )

@@ -42,6 +42,10 @@ Miroir (decision 014); history keeps its own words.
   the server never imports it and it never imports `src/`. Its tests are in
   `agent/tests/`; `tests/test_agent_contract.py` ties a collector to its
   connector, and `tests/test_agent_package.py` runs the agent's suite.
+- Media (decision 033): files that rows point at. `src/core/media.py` signs
+  upload and view links through the `ObjectStore` protocol; `src/adapters/s3.py`
+  is the boto3 implementation; the agent's `media.py` uploads. No metadata
+  table: the bucket is the record.
 - `src/integrations/<name>/` — one package per connector: settings, credentials,
   check, resources, and inputs — a `fetch` and/or file `formats` with typed
   import options (decision 021) — plus its dlt source (`source.py`);

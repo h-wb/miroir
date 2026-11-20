@@ -63,6 +63,10 @@ class State:
         return self.directory / "status.json"
 
     @property
+    def media_cursor(self) -> Path:
+        return self.directory / "media_cursor.json"
+
+    @property
     def batch(self) -> Path:
         return self.directory / "spool" / "batch.jsonl.gz"
 

@@ -584,6 +584,47 @@ Collectors today: `screenmemory` ([what it sends and what it withholds](../sourc
 and `zen_history` ([browser history](../sources/browser-history.md#through-the-agent-decision-032)).
 The agent adds its collector's format to the receiving URL itself.
 
+### Media: files that rows point at
+
+Some rows point at a file, such as a screen frame at its screenshot. Miroir keeps
+those files in an S3-compatible bucket and never parses them (decision 033). It is
+off until the configuration has a `media` section:
+
+```json
+"media": {
+  "endpoint": "http://garage.storage.svc:3900",
+  "link_endpoint": "https://s3.example.org",
+  "region": "garage",
+  "bucket": "miroir-media",
+  "prefix": ""
+}
+```
+
+`endpoint` is what the server itself calls. `link_endpoint` is the address written
+into signed links, which devices and browsers must reach; it defaults to
+`endpoint`. `upload_ttl_seconds` (default 900) and `view_ttl_seconds` (default 300)
+set how long links last. The credentials come from the server's environment,
+`MIROIR_MEDIA_ACCESS_KEY_ID` and `MIROIR_MEDIA_SECRET_ACCESS_KEY`; the server
+refuses to start if the section is there and either is missing. The key needs read
+and write on that bucket and nothing else.
+
+An object is named `prefix / connection / kind / key`, where the key is the value
+the row carries (for `screenmemory`: kind `screenshots`, key `frames.image_path`).
+
+| Route | Who | What |
+|---|---|---|
+| `POST /api/connections/{id}/media/uploads` | the connection's delivery token | For a list of `{key, size}`: `present`, an upload link, or `rejected` |
+| `POST /api/connections/{id}/media/confirm` | the connection's delivery token | Whether each object is now `stored` |
+| `GET /media/{id}/{kind}/{key}` | a logged-in administrator | Redirects to a link valid for a few minutes |
+
+There is no table of uploads: the server asks the bucket. An archive that already
+exists can therefore be copied into the bucket under the right names with any S3
+tool, and its files are found present.
+
+To show a frame's screenshot in a dashboard, build the view address from the row:
+`https://<miroir>/media/<connection>/screenshots/<image_path>`. It works in a
+browser that is logged in to Miroir.
+
 ## Validate in an isolated environment
 
 Use a task-specific virtualenv so this does not change a shared worker environment:

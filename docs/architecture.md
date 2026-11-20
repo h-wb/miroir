@@ -52,11 +52,22 @@ server: the Health Auto Export app is one, and the agent is another, for sources
 that exist only on a device. The agent is therefore not a fourth transport. It
 is a client of one that already exists.
 
+## Media
+
+Some rows point at a file: a frame at its screenshot. Those files are media
+(decision 033). They are never parsed, so they are not artifacts and do not go
+through a connector's format. A connector declares which column holds the key;
+core signs upload and view links against an object store it reaches through the
+`ObjectStore` protocol; the S3 implementation is an adapter. A device uploads
+with the links and never holds a storage credential.
+
 ## Where a new thing goes
 
 - A new service with an API: a connector with a fetch.
 - A new export file: a file format on a connector.
 - A source that exists only on a device: a collector in `agent/`, and a file
   format on a connector for what it sends. A contract test ties the two.
-- A new way to schedule or run: an adapter.
+- Files that rows point at: a media kind on the connector, and a media function
+  on the collector.
+- A new way to schedule or run, or a new place to store: an adapter.
 - A new screen or command: `web` or `cli`, calling a core service.

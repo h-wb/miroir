@@ -80,6 +80,17 @@ class FileFormat:
 
 
 @dataclass(frozen=True)
+class MediaKind:
+    """Files that a resource's rows point at. Stored by core, never parsed."""
+
+    name: str
+    resource: str
+    column: str
+    extensions: tuple[str, ...]
+    max_bytes: int
+
+
+@dataclass(frozen=True)
 class IntegrationDefinition:
     name: str
     title: str
@@ -91,6 +102,7 @@ class IntegrationDefinition:
     analysis: str | None = None
     # Confirms settings and credentials without loading data; see checks.py.
     check: Callable[[Any, dict[str, str]], str] | None = None
+    media: tuple[MediaKind, ...] = ()
 
     @property
     def credential_names(self) -> tuple[str, ...]:

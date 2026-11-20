@@ -4,12 +4,13 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import stat
 import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from pydantic import (
     Field,
@@ -217,6 +218,46 @@ class Deployment(StrictModel):
     job_variables: dict[str, Any] | None = None
 
 
+class MediaConfig(StrictModel):
+    endpoint: str
+    link_endpoint: str | None = None
+    region: str = "garage"
+    bucket: str = Field(min_length=1)
+    prefix: str = ""
+    upload_ttl_seconds: int = Field(default=900, ge=60, le=3600)
+    view_ttl_seconds: int = Field(default=300, ge=30, le=3600)
+
+    @field_validator("endpoint", "link_endpoint")
+    @classmethod
+    def http_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            url = urlsplit(value)
+            if (
+                url.scheme in {"http", "https"}
+                and url.hostname
+                and not any(char.isspace() or ord(char) < 32 for char in value)
+                and (url.port is None or url.port > 0)
+            ):
+                return value
+        except ValueError:
+            pass
+        raise ValueError("expected an HTTP or HTTPS URL")
+
+    @field_validator("prefix")
+    @classmethod
+    def object_prefix(cls, value: str) -> str:
+        if (
+            not re.fullmatch(r"[A-Za-z0-9._/-]*", value)
+            or value.startswith("/")
+            or value.endswith("/")
+            or ".." in value.split("/")
+        ):
+            raise ValueError("invalid media prefix")
+        return value
+
+
 class MiroirConfig(StrictModel):
     schema_version: Literal[1]
     id: Identifier
@@ -227,6 +268,7 @@ class MiroirConfig(StrictModel):
     # Absent: execution settings come from the writer's environment (the
     # MIROIR_* defaults); present: they are authoritative here instead.
     deployment: Deployment | None = None
+    media: MediaConfig | None = None
 
     @field_validator("schema_version", mode="before")
     @classmethod
@@ -298,6 +340,7 @@ class ResolvedMiroir:
     # Declared execution settings (decision 016); None when the writer's
     # environment supplies them instead.
     deployment: Deployment | None = None
+    media: MediaConfig | None = None
 
 
 def _validation_error(error: ValidationError, prefix: str) -> ConfigurationError:
@@ -444,6 +487,11 @@ def parse_miroir(text: str) -> ResolvedMiroir:
         analyses,
         links=config.links,
         deployment=config.deployment,
+        media=(
+            config.media.model_copy(update={"link_endpoint": config.media.endpoint})
+            if config.media is not None and config.media.link_endpoint is None
+            else config.media
+        ),
     )
 
 

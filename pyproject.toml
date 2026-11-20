@@ -24,6 +24,7 @@ dependencies = [
     "cryptography>=42",
     "croniter>=2",
     "prefect-kubernetes>=0.6",
+    "boto3>=1.44.7",
 ]
 
 [project.scripts]
@@ -60,4 +61,7 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
 
+[[tool.mypy.overrides]]
+module = ["boto3.*", "botocore.*"]
+ignore_missing_imports = true
 

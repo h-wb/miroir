@@ -1759,3 +1759,40 @@ clean on both. A probe outside the suite confirmed the reused-id case end to end
 Not done: the collector has run only on invented databases, never on a real Zen
 profile. Nothing is deployed, and the existing snapshot task on the Mac is
 unchanged.
+
+## 2026-11-20 — Media in object storage (decision 033)
+
+Server. A connector can declare a media kind (`MediaKind`: name, resource, key
+column, extensions, size limit); `screenmemory` declares `screenshots` on
+`frames.image_path`. An optional `media` configuration section names the bucket.
+`src/core/media.py` holds the key rule, the object naming and three operations
+(plan uploads, confirm, view link) over an `ObjectStore` protocol;
+`src/adapters/s3.py` implements it with boto3, the only new dependency, built in
+the CLI and injected like the orchestrator. Three routes: two for devices,
+authenticated by the connection's delivery token, and a view redirect for a
+logged-in administrator. No metadata table and no schema change.
+
+Agent. A collector can expose a media function; `screenmemory` does, off by
+default. After the rows of a pass, the agent pages through frames up to the row
+cursor, skips those the row collector would withhold (one shared function), asks
+for links, PUTs each file and asks for confirmation, and moves its media cursor
+only when a whole page is settled. Signed links are never written anywhere.
+
+A contract test runs the real web application under uvicorn with a small local
+object store and the agent against it: one object per sent frame, under the
+expected name, none for the withheld frame, and nothing uploaded on a second pass.
+
+An independent review found no blocking defect. Four small ones were fixed with
+tests: a storage outage produced a bare 500 and could hold a worker for minutes
+(now short timeouts and a readable refusal); a corrupt media cursor hid the row
+status; the PUT ignored proxies while the other calls honoured them; the uploaded
+count included unconfirmed files.
+
+Validation: the server suite and the agent suite are green, with ruff and mypy
+clean on both.
+
+Not done: never run against a real Garage bucket or real screenshots, only
+against a stand-in store. Nothing is deployed: no bucket, key or configuration.
+Upload integrity is the size check and TLS, with no checksum. Media delivery is
+visible in the agent's status, not in Miroir. The timeline models and dashboard,
+and an attachments collector, are not started.

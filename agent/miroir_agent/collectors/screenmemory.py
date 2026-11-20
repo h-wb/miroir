@@ -4,6 +4,7 @@ import gzip
 import json
 import math
 import sqlite3
+import stat
 from collections import Counter
 from contextlib import closing
 from datetime import datetime, timezone
@@ -13,7 +14,7 @@ from urllib.parse import quote
 
 from ..masking import mask
 from ..state import atomic_path, outside_source
-from . import Collected
+from . import Collected, Cursor, MediaItem, MediaPage
 
 _DROP_BUNDLES = {
     "com.bitwarden.desktop",
@@ -107,6 +108,97 @@ def _valid_path(path: Any) -> bool:
     )
 
 
+def _withholding(
+    options: dict[str, Any], db: sqlite3.Connection, frames: list[tuple[Any, ...]]
+) -> tuple[set[int], tuple[str, ...]]:
+    drop_bundles = _DROP_BUNDLES.union(options.get("drop_bundle_ids", []))
+    markers = tuple(
+        marker.casefold()
+        for marker in _DROP_MARKERS.union(options.get("drop_markers", []))
+    )
+    stamps = [ts for ts, _, _ in frames if _valid_ts(ts)]
+    excluded = (
+        {
+            ts
+            for ts, bundle in db.execute(
+                f"SELECT * FROM ({_USAGE}) WHERE second BETWEEN ? AND ?",
+                (min(stamps), max(stamps)),
+            )
+            if bundle in drop_bundles
+        }
+        if stamps
+        else set()
+    )
+    return excluded, markers
+
+
+def _frame_text(value: Any) -> str:
+    if isinstance(value, bytes):
+        return _decode(value)
+    return str(value) if value is not None else ""
+
+
+def _withheld(
+    ts: int, text: str, excluded: set[int], markers: tuple[str, ...]
+) -> str | None:
+    if ts in excluded:
+        return "excluded_app"
+    if any(marker in text.casefold() for marker in markers):
+        return "marker"
+    return None
+
+
+def collect_media(
+    options: dict[str, Any], media_cursor: int, rows_cursor: Cursor, limit: int
+) -> MediaPage | None:
+    upper = rows_cursor["frames"]
+    if type(upper) is not int:
+        raise ValueError("Invalid frame cursor")
+    if media_cursor >= upper:
+        return None
+    data = Path(options["data_dir"]).expanduser()
+    try:
+        with closing(_open(data / "text.sqlite")) as text_db:
+            text_db.execute("BEGIN")
+            frames, cursor, more = _page(text_db, _FRAMES, limit, media_cursor, upper)
+        if not frames:
+            return None
+        with closing(_open(data / "usage.sqlite")) as usage_db:
+            excluded, markers = _withholding(options, usage_db, frames)
+        root = (
+            Path(options.get("media_dir", data / "screenshots")).expanduser().resolve()
+        )
+    except (sqlite3.Error, OSError, OverflowError, RuntimeError, ValueError):
+        raise ValueError(SOURCE_ERROR) from None
+    counts = {"examined": len(frames), "withheld": 0, "missing": 0, "invalid": 0}
+    items: list[MediaItem] = []
+    for ts, key, text in frames:
+        if not _valid_ts(ts) or not _valid_path(key):
+            counts["invalid"] += 1
+            continue
+        if _withheld(ts, _frame_text(text), excluded, markers):
+            counts["withheld"] += 1
+            continue
+        try:
+            path = (root / key).resolve()
+            if path == root or not path.is_relative_to(root):
+                counts["invalid"] += 1
+                continue
+        except (OSError, RuntimeError, ValueError):
+            counts["invalid"] += 1
+            continue
+        try:
+            info = path.stat()
+        except OSError:
+            counts["missing"] += 1
+            continue
+        if stat.S_ISREG(info.st_mode) and info.st_size > 0:
+            items.append(MediaItem(key, path, info.st_size))
+        else:
+            counts["missing"] += 1
+    return MediaPage(items, cursor, counts, more)
+
+
 def collect(
     options: dict[str, Any], cursor: dict[str, int] | None, out_path: Path, now: float
 ) -> Collected | None:
@@ -117,11 +209,6 @@ def collect(
     usage_cursor = cursor["app_usage"] if cursor is not None else cutoff
     upper = math.floor(now - options.get("settle_seconds", 300))
     limit = options.get("max_rows", 20000)
-    drop_bundles = _DROP_BUNDLES.union(options.get("drop_bundle_ids", []))
-    drop_markers = tuple(
-        marker.casefold()
-        for marker in _DROP_MARKERS.union(options.get("drop_markers", []))
-    )
     try:
         with (
             closing(_open(data / "text.sqlite")) as text_db,
@@ -137,19 +224,7 @@ def collect(
             apps, next_app, more_apps = _page(
                 usage_db, _USAGE, limit, usage_cursor, upper
             )
-            stamps = [ts for ts, _, _ in frames if _valid_ts(ts)]
-            excluded = (
-                {
-                    ts
-                    for ts, bundle in usage_db.execute(
-                        f"SELECT * FROM ({_USAGE}) WHERE second BETWEEN ? AND ?",
-                        (min(stamps), max(stamps)),
-                    )
-                    if bundle in drop_bundles
-                }
-                if stamps
-                else set()
-            )
+            excluded, markers = _withholding(options, usage_db, frames)
     except (sqlite3.Error, OverflowError, ValueError):
         raise ValueError(SOURCE_ERROR) from None
     if not frames and not apps:
@@ -183,17 +258,10 @@ def collect(
             if not _valid_ts(ts) or not _valid_path(image_path):
                 counts["skipped"] += 1
                 continue
-            if isinstance(image_text, bytes):
-                raw_text = _decode(image_text)
-            else:
-                raw_text = str(image_text) if image_text is not None else ""
+            raw_text = _frame_text(image_text)
             text: str | None = None
-            reason = None
+            reason = _withheld(ts, raw_text, excluded, markers)
             replacements = 0
-            if ts in excluded:
-                reason = "excluded_app"
-            elif any(marker in raw_text.casefold() for marker in drop_markers):
-                reason = "marker"
             if reason:
                 withheld[reason] += 1
             else:

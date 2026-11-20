@@ -35,7 +35,7 @@ miroir-agent status  --config agent.json
   about hourly.
 - `collect` writes the batches to a folder and sends nothing, to inspect what
   would leave the machine.
-- `status` shows each collector's position and last outcome.
+- `status` shows each collector's position and last outcome, for rows and media.
 
 None of them prints source content.
 
@@ -60,6 +60,17 @@ None of them prints source content.
 delivery token, read from the named environment variable; it can deliver to its
 own connection and nothing else.
 
+## Media
+
+A collector can also upload the files its rows point at. For `screenmemory`, set
+`"media": true` in its options (and `media_dir` if the screenshots are not in
+`<data_dir>/screenshots`). After the rows are delivered, the agent asks Miroir
+for upload links, sends each file with an HTTP PUT, and asks Miroir to confirm.
+It never uploads the file of a frame it withheld, never runs ahead of delivered
+rows, and holds no storage credential. `run --max-media-files N` bounds how many
+frames one pass examines (default 2000). The machine must reach the storage
+address Miroir signs links for, not only Miroir.
+
 ## Collectors
 
 | Collector | Source | What it sends and withholds |
@@ -77,6 +88,7 @@ own connection and nothing else.
 | `masking.py` | The fixed rules that mask secrets in text |
 | `state.py` | Saved position, the spool, status and the lock |
 | `deliver.py` | The HTTP POST |
+| `media.py` | Upload links, the PUT and the confirmation |
 
 ## Tests
 

@@ -1145,3 +1145,81 @@ Consequences:
 - An imported batch is read once per table. Batches are small; revisit if a
   source ever sends large ones.
 - The snapshot path through a watched folder keeps working and masks nothing.
+
+## 033 — Media: files that rows point at live in object storage
+
+Status: accepted, 2026-11-20. Refines 017 and 030.
+
+Some rows point at a file: a screen frame at its screenshot, later a message at
+its attachment. Decision 030 left those files out ("storing and moving the files
+is the installation's business"), which in practice meant a sync client. That
+has four problems. Sync is a mirror, so deleting on the device deletes the copy.
+It carries every file, including the screenshot of a frame whose text the
+collector withheld. It only covers a folder on one machine, and attachments live
+on others. And nothing but a path convention links a row to its file.
+
+**Media is its own thing, separate from artifacts.** An artifact is an input
+that gets parsed into rows. Media is never parsed, only referenced. A connector
+declares a media kind: a name, the resource whose rows carry the key, and the
+column that holds it. `screenmemory` declares `screenshots` on `frames.image_path`.
+
+**It lives in an S3-compatible bucket, named by what the row carries.** The
+object name is `prefix / connection / kind / key`, and the key is the value in
+the row. The join between a row and its file is that column, with no lookup
+table, and a folder copied into the bucket as it stands is already correctly
+named.
+
+**The server holds the only storage credentials.** A device asks for upload
+links for a list of keys and sizes; the server answers per object `present`,
+`upload` with a signed link, or `rejected`. The device sends each file with a
+plain HTTP PUT and asks the server to confirm. Both calls are authenticated by
+the connection's delivery token, whose scope grows from delivering files to
+delivering files and media for that one connection. A device therefore needs no
+storage library and no storage key, and can write only the objects the server
+signed.
+
+**Viewing goes through the server too.** `GET /media/{connection}/{kind}/{key}`,
+for a logged-in administrator, redirects to a link valid for a few minutes. The
+bucket stays private.
+
+**The bucket is the record.** The server asks the bucket whether an object
+exists and how large it is; there is no registry table. That avoids a metadata
+schema change, which would force server, worker and flow image to be released
+together, and it means objects placed by other means (a bulk copy of an existing
+archive) are simply found.
+
+**The agent uploads after the rows, never before.** Its media pass covers only
+frames whose rows were already acknowledged, uses the same rule as the row
+collector to skip withheld frames, and treats a signed link as a credential:
+never printed, logged or stored.
+
+**The storage library is behind a protocol.** Core defines `ObjectStore` (does
+it exist, sign an upload, sign a download); the boto3 implementation is an
+adapter, injected the way the orchestrator is.
+
+Considered and left out:
+
+- *A sync client, or a copy tool with its own key on each device.* No
+  acknowledgement, the bucket layout agreed silently between two configurations,
+  and a storage key on every machine. Garage keys grant read or write on a whole
+  bucket, and write includes delete, so a laptop's key could erase the archive.
+  A copy tool remains the right way to bring in an existing archive once.
+- *Uploading through the server.* One network path instead of two, but every
+  byte passes through the web process. Worth revisiting only if devices cannot
+  reach the bucket.
+- *Naming objects by their content hash.* It gives deduplication, but rows
+  already carry a unique path and an existing archive would have to be renamed.
+- *A registry table of uploads.* It would let Miroir show media delivery health
+  and load a media table into the warehouse. Left until something needs it.
+
+Consequences:
+
+- Integrity is the size check plus TLS. The upload is not bound to a checksum.
+- A device must reach `link_endpoint`, not only Miroir.
+- Miroir never deletes media. Expiry, if wanted, is a lifecycle rule on the bucket.
+- Whether media is arriving is visible in the agent's status, not in Miroir.
+- A view link works for a browser already logged in to Miroir, including from a
+  page on a sibling hostname, because the session cookie is same-site.
+
+Open: an attachments collector, the timeline models and their dashboard, and the
+deployment (bucket, key, configuration).

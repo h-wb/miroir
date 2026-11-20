@@ -107,13 +107,26 @@ def _options(name: str, raw: Any) -> dict[str, Any]:
             "max_rows",
             "drop_bundle_ids",
             "drop_markers",
+            "media",
+            "media_dir",
         },
     )
     max_rows = _integer(options, "max_rows", 20000, 1)
     if max_rows > 200000:
         raise ValueError("Invalid max_rows")
+    media = options.get("media", False)
+    if type(media) is not bool:
+        raise ValueError("Invalid media option")
+    data_dir = Path(_string(options, "data_dir")).expanduser()
+    media_dir = (
+        Path(_string(options, "media_dir")).expanduser()
+        if "media_dir" in options
+        else data_dir / "screenshots"
+    )
     return {
-        "data_dir": str(Path(_string(options, "data_dir")).expanduser()),
+        "data_dir": str(data_dir),
+        "media": media,
+        "media_dir": str(media_dir),
         "cutoff_ts": _integer(options, "cutoff_ts", 0, -(2**63)),
         "settle_seconds": _integer(options, "settle_seconds", 300, 0),
         "max_rows": max_rows,
@@ -156,14 +169,18 @@ def load_config(path: Path) -> Config:
         token_env = _string(item, "token_env")
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", token_env):
             raise ValueError("Invalid token environment variable name")
+        receive_url = _url(_string(item, "receive_url"))
+        options = _options(name, item.get("options", {}))
+        if options.get("media") and not urlsplit(receive_url).path.endswith("/receive"):
+            raise ValueError("Media requires a URL ending in /receive")
         collectors.append(
             CollectorConfig(
                 id_,
                 name,
-                _url(_string(item, "receive_url")),
+                receive_url,
                 token_env,
                 _integer(item, "timeout_seconds", 120, 1),
-                _options(name, item.get("options", {})),
+                options,
             )
         )
     return Config(state_dir, collectors)
