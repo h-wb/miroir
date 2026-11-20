@@ -302,7 +302,7 @@ def _execute_operation(
     backend_run_id: str | None = None,
 ) -> RunOutcome:
     from src.core.artifacts import stored_copy_is_intact
-    from src.integrations.sources import open_fetch, open_import
+    from src.core.sources import open_fetch, open_import
 
     store = run.store
     operation = store.get_operation(operation_id)

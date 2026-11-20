@@ -1015,3 +1015,80 @@ Consequences:
 First use: a ScreenMemory connector (OCR text and app-usage tables, both
 append-only and keyed by timestamp) with its collector. Browser history moves to
 the agent after it.
+
+## 031 — The agent is its own package; part boundaries are tested
+
+Status: accepted, 2026-11-20. Refines 030.
+
+Decision 030 put the agent in `src/agent/`, inside the server's one package. That
+left two things unclear. The agent could not be fetched or released on its own: it
+was importable only as `src.agent`, from a checkout of everything. And "each part
+has one job" was written in the repository map but checked nowhere, so one module
+had already drifted: `src/integrations/sources.py` opened a *connection's* inputs
+and imported core's configuration and operations, the only place where connectors
+reached into core.
+
+**The agent is a separate distribution in this repository.** It lives in `agent/`:
+distribution `miroir-agent`, import name `miroir_agent`, command `miroir-agent`, no
+dependencies, its own version and its own tests. A machine installs that folder
+alone (`uvx --from "git+…#subdirectory=agent" miroir-agent`), or runs it from a
+checkout with nothing installed.
+
+The server does not depend on it. There is no workspace and no path dependency, so
+the server's `pyproject.toml`, lock file and image are untouched, and neither side
+can import the other. Two tests in the server's suite hold them together:
+
+- `tests/test_agent_contract.py` collects a batch with the agent's collector and
+  checks the connector's validator and reader accept it. It is the only server
+  test that imports the agent.
+- `tests/test_agent_package.py` runs the agent's own suite in a subprocess with
+  site packages disabled, so the repository's one test command covers both and
+  proves the agent needs nothing installed.
+
+**Versions are independent; the file format carries compatibility.** Every batch
+names its format and version, and the connector refuses what it does not know. An
+agent and a server that disagree fail at delivery instead of loading wrong rows.
+
+**Part boundaries are a test.** `tests/test_boundaries.py` reads every import under
+`src/` and enforces:
+
+| Part | May import, besides itself |
+| --- | --- |
+| `integrations` | `src.core.models` only |
+| `analyses` | `src.core.models` only |
+| `core` | `integrations`, `analyses` |
+| `pipelines` | `core` |
+| `adapters` | `core`, `pipelines` |
+| `web` | `core`, `integrations` |
+| `cli` | `core`, `integrations`, `adapters`, `web` |
+
+Nothing under `src/` imports the agent. A connector's `formats.py` and
+`contracts.py` never import dlt at module level. A folder with no rule fails the
+test, so a new part has to state what it may use. `src/integrations/sources.py`
+moved to `src/core/sources.py`, unchanged, which is what made the first rule true.
+`docs/architecture.md` states each part's job beside these rules.
+
+**The agent is a sender, not a transport.** Data reaches Miroir by a fetch or as a
+delivered file, and a file arrives by upload, the receiving URL or a watched folder
+(decision 021). Those three transports belong to core. The agent pushes to the
+receiving URL, as Health Auto Export does; it adds a client, not a fourth way in.
+
+Considered and left out:
+
+- *A uv workspace, or the agent as a development dependency of the server.* Both
+  put the agent's path in the server's lock file, which the image build reads, for
+  the sake of one test's import. The contract test puts `agent/` on its own path
+  instead.
+- *A shared package for the file format, used by both sides.* It removes the
+  duplicated knowledge of the format, but gives the agent a dependency and a
+  second thing to release. The contract test and the versioned format do the same
+  job for now.
+
+Open:
+
+- The server's import name is still `src`, which is not a releasable package name
+  either. Renaming it touches every import, the image's commands and the Prefect
+  deployments' entry points, so it needs its own decision and a coordinated
+  release.
+- CI lints and type-checks `src tests scripts` by explicit paths. Covering `agent/`
+  needs a workflow change.

@@ -1704,3 +1704,32 @@ on invented fixtures, never on a real ScreenMemory folder, so the assumed table
 layout is unverified against the app. The web interface's setup for this connector
 was not exercised. There are no dbt models, and no scheduler definition for the
 machine.
+
+## 2026-11-20 — The agent as its own package; tested boundaries (decision 031)
+
+A restructuring with no behaviour change. `src/agent/` moved to `agent/miroir_agent/`
+as the distribution `miroir-agent` (no dependencies, command `miroir-agent`,
+`--version` added). Its 22 tests moved to `agent/tests/` and run with site packages
+disabled. The one test that ties a collector to its connector stayed with the
+server as `tests/test_agent_contract.py`, and `tests/test_agent_package.py` runs
+the agent's suite from the server's. All 23 earlier agent tests are accounted for.
+
+`src/integrations/sources.py` moved to `src/core/sources.py` unchanged. It was the
+only place connectors imported core beyond `src.core.models`.
+
+`tests/test_boundaries.py` reads every import under `src/` and enforces the table
+in decision 031. It was checked against four planted violations (a connector
+importing core's configuration, core importing the agent, a module-level dlt
+import in a `contracts.py`, a folder with no rule): it reported each with its file
+and line, and passed again once they were removed.
+
+`docs/architecture.md` is new: each part's job, the import rules, and the ways
+data gets in.
+
+Validation: the server's suite and the agent's suite are green, with ruff and mypy
+clean on both. The agent installs alone from its folder
+(`uvx --from ./agent miroir-agent --version` installs one package).
+
+Not done: CI still lints and type-checks `src tests scripts` only; covering
+`agent/` needs a workflow change, posted on the pull request for the owner to
+apply. Nothing is deployed.

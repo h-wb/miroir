@@ -12,12 +12,12 @@ from tempfile import TemporaryDirectory
 from threading import Thread
 from unittest.mock import patch
 
-from src.agent.cli import main
-from src.agent.collectors import COLLECTORS, Collected
-from src.agent.config import load_config
-from src.agent.deliver import deliver
-from src.agent.masking import mask
-from src.agent.state import State, write_json
+from miroir_agent.cli import main
+from miroir_agent.collectors import COLLECTORS, Collected
+from miroir_agent.config import load_config
+from miroir_agent.deliver import deliver
+from miroir_agent.masking import mask
+from miroir_agent.state import State, write_json
 
 
 class MaskingTests(unittest.TestCase):
@@ -63,7 +63,8 @@ class MaskingTests(unittest.TestCase):
                 self.assertEqual(mask(value), (value, {}))
 
     def test_standard_library_only(self) -> None:
-        for path in Path("src/agent").rglob("*.py"):
+        package = Path(__file__).resolve().parents[1] / "miroir_agent"
+        for path in package.rglob("*.py"):
             for node in ast.walk(ast.parse(path.read_text())):
                 if isinstance(node, ast.ImportFrom) and node.level == 0:
                     names = [node.module or ""]
@@ -74,8 +75,8 @@ class MaskingTests(unittest.TestCase):
                 for name in names:
                     self.assertTrue(
                         name.split(".")[0] in sys.stdlib_module_names
-                        or name == "src.agent"
-                        or name.startswith("src.agent."),
+                        or name == "miroir_agent"
+                        or name.startswith("miroir_agent."),
                         (path, name),
                     )
 
@@ -276,8 +277,8 @@ class AgentTests(unittest.TestCase):
             replace(source, destination)
 
         with (
-            patch("src.agent.state.os.fsync", side_effect=sync),
-            patch("src.agent.state.os.replace", side_effect=rename),
+            patch("miroir_agent.state.os.fsync", side_effect=sync),
+            patch("miroir_agent.state.os.replace", side_effect=rename),
         ):
             write_json(path, {"frames": 1})
         self.assertEqual(steps, ["file", "replace", "directory"])

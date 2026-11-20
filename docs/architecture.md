@@ -1,0 +1,62 @@
+# Architecture: parts and responsibilities
+
+Each part of Miroir has one job. The import rules below are enforced by
+`tests/test_boundaries.py`, so this page and the code cannot drift apart
+silently. Decision 031 records why.
+
+## The parts
+
+| Part | Its job | It must not |
+|---|---|---|
+| `src/integrations/` (connectors) | Know one source: what it can read (a fetch, file formats) and how to turn it into tables | Know how a file arrived, when anything runs, or where it is stored |
+| `src/analyses/` | Catalog of analysis packages (dbt models and dashboards) and the inputs they need | Load data |
+| `src/core/` | Configuration, receiving and storing files, opening a connection's inputs, running and recording loads, secrets | Know about HTTP, the command line or the scheduler |
+| `src/pipelines/` | The flow entry points the scheduler runs | Hold product logic; they call core |
+| `src/adapters/` | Talk to the scheduler (Prefect): plan and apply deployments, submit, observe | Decide what a load is |
+| `src/web/`, `src/cli/` | Transport and presentation; both call the same core services | Contain logic of their own |
+| `agent/` (`miroir-agent`) | On a personal machine: read a local source, withhold secrets, deliver to a receiving URL, remember what was acknowledged | Parse or load anything, or import any server code |
+
+## Who may import whom
+
+| Part | May import, besides itself |
+|---|---|
+| `integrations` | `src.core.models` only |
+| `analyses` | `src.core.models` only |
+| `core` | `integrations`, `analyses` |
+| `pipelines` | `core` |
+| `adapters` | `core`, `pipelines` |
+| `web` | `core`, `integrations` |
+| `cli` | `core`, `integrations`, `adapters`, `web` |
+
+Also: nothing under `src/` imports the agent, the agent imports only the Python
+standard library, and a connector's `formats.py` and `contracts.py` never import
+dlt at module level, so files can be validated without the loading stack.
+
+A new folder under `src/` fails the boundary test until it is given a rule.
+
+## How data gets in
+
+There are two ways, and a connector declares which it supports (decision 021):
+
+1. **Fetch.** Miroir pulls from a service's API with the connection's
+   credentials, on a schedule.
+2. **A delivered file.** Someone or something hands Miroir a file. It is
+   validated, stored as an artifact, then imported. A file reaches Miroir
+   through one of three transports, all owned by core:
+   - **upload**, by a person in the web interface;
+   - **the receiving URL**, when a program pushes it;
+   - **a watched folder**, when Miroir picks up a file something left there.
+
+Programs that push to the receiving URL are *senders*. They live outside the
+server: the Health Auto Export app is one, and the agent is another, for sources
+that exist only on a device. The agent is therefore not a fourth transport. It
+is a client of one that already exists.
+
+## Where a new thing goes
+
+- A new service with an API: a connector with a fetch.
+- A new export file: a file format on a connector.
+- A source that exists only on a device: a collector in `agent/`, and a file
+  format on a connector for what it sends. A contract test ties the two.
+- A new way to schedule or run: an adapter.
+- A new screen or command: `web` or `cli`, calling a core service.

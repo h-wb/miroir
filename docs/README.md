@@ -24,6 +24,9 @@ Roadmap: [Miroir implementation plan](product-plan.md).
 - **The warehouse keeps what services forget.** Merges never delete, so rows a
   service expires (GitHub's 90-day event feed, Firefox's history trimming) stay.
 
+Which part of the code does what, who may import whom, and the ways data gets
+in: [architecture](architecture.md).
+
 ## Sources
 
 Since 2026-11-11 every source loads through a Miroir connection bound to its
