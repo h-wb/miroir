@@ -1,9 +1,10 @@
+import gzip
 import io
 import json
 import os
 import sqlite3
 import unittest
-from contextlib import closing, redirect_stdout
+from contextlib import closing, redirect_stderr, redirect_stdout
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -15,8 +16,13 @@ from miroir_agent.cli import main
 from miroir_agent.collectors import MediaItem
 from miroir_agent.config import load_config
 from miroir_agent.media import _NoRedirect, _put, deliver_media
+from miroir_agent.state import State
+
+from .test_dates import local_zone
 
 TS = 1700000000
+START = "2023-11-14T22:13:20Z"
+END = "2023-11-14T22:13:23Z"
 KEY = "source-image.jpg"
 TEXT = "fixture screen text"
 
@@ -37,6 +43,9 @@ class MediaTests(unittest.TestCase):
         self.queries: list[str] = []
         self.mode = "upload"
         self.row_posts = 0
+        self.row_batches: list[list[dict]] = []
+        self.row_queries: list[str] = []
+        self.fail_row_post = 0
         fixture = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -52,6 +61,17 @@ class MediaTests(unittest.TestCase):
                     return
                 if url.path.endswith("/receive"):
                     fixture.row_posts += 1
+                    if fixture.row_posts == fixture.fail_row_post:
+                        self.send_response(500)
+                        self.end_headers()
+                        return
+                    fixture.row_batches.append(
+                        [
+                            json.loads(line)
+                            for line in gzip.decompress(body).splitlines()
+                        ]
+                    )
+                    fixture.row_queries.append(url.query)
                     result: dict = {}
                 else:
                     fixture.queries.append(url.query)
@@ -172,6 +192,187 @@ class MediaTests(unittest.TestCase):
     def cursor(self) -> int:
         return json.loads((self.state / "media_cursor.json").read_text())["ts"]
 
+    def resend(
+        self, *extra: str, end: str = END, token: str = "testing"
+    ) -> tuple[int, str]:
+        return self.run_agent(
+            "--collector",
+            "screen",
+            "--from",
+            START,
+            "--to",
+            end,
+            *extra,
+            command="resend",
+            token=token,
+        )
+
+    def test_since_covers_initial_rows_and_media(self) -> None:
+        self.configure(media=True, since=START)
+        self.source(
+            [(TS - 1, "old.jpg", TEXT), (TS, KEY, TEXT)], ((TS - 1, "old"), (TS, "new"))
+        )
+        for key in ("old.jpg", KEY):
+            (self.images / key).write_bytes(b"fixture")
+        self.assertEqual(self.run_agent()[0], 0)
+        self.assertEqual([row["ts"] for row in self.row_batches[0][1:-1]], [TS, TS])
+        self.assertEqual(self.plans, [[{"key": KEY, "size": 7}]])
+
+    def test_resend_pages_retry_and_preserves_state(self) -> None:
+        self.configure(since="2025-01-01", max_rows=1)
+        self.source(
+            [(TS + i, f"frame{i}.jpg", TEXT) for i in range(-1, 4)],
+            tuple((TS + i, "app") for i in range(-1, 4)),
+        )
+        state = State(self.state)
+        self.assertEqual(self.resend()[0], 0)
+        for path in (state.cursor, state.media_cursor, state.batch.parent):
+            self.assertFalse(path.exists())
+        state.batch.parent.mkdir()
+        saved = (state.cursor, state.media_cursor, state.batch, state.batch_cursor)
+        for i, path in enumerate(saved):
+            path.write_bytes(f"fixed fixture {i}".encode())
+        before = [path.read_bytes() for path in saved]
+        state.status.write_text(
+            json.dumps({"outcome": "failed", "media": {"outcome": "nothing_new"}})
+        )
+        self.assertEqual(self.resend()[0], 0)
+        sent = [batch[1:-1] for batch in self.row_batches]
+        self.assertEqual(sent[:3], sent[3:])
+        for kind in ("frame", "app_usage"):
+            self.assertEqual(
+                [row["ts"] for page in sent[:3] for row in page if row["type"] == kind],
+                [TS, TS + 1, TS + 2],
+            )
+        self.assertEqual(self.row_queries, ["format=screenmemory_batch"] * 6)
+        status = json.loads(state.status.read_text())
+        self.assertEqual(
+            (status["outcome"], status["media"]), ("failed", {"outcome": "nothing_new"})
+        )
+        result = status["resend"]
+        self.assertEqual(
+            (result["batches"], result["counts"]["frames"], result["window"]),
+            (3, 3, [TS, TS + 3]),
+        )
+        self.fail_row_post = 8
+        exit_code, output = self.resend()
+        self.assertEqual(exit_code, 1)
+        self.assertIn("screen failed", output)
+        result = json.loads(state.status.read_text())["resend"]
+        self.assertEqual(
+            (result["outcome"], result["batches"], result["counts"]["frames"]),
+            ("failed", 1, 1),
+        )
+        self.assertEqual(self.row_posts, 8)
+        self.assertEqual(self.row_batches[-1][1:-1], sent[0])
+        self.assertEqual([path.read_bytes() for path in saved], before)
+        self.assertEqual(
+            {path.name for path in state.directory.iterdir()},
+            {"lock", "cursor.json", "media_cursor.json", "spool", "status.json"},
+        )
+
+    def test_resend_bare_to_and_out_without_token(self) -> None:
+        midnight = 1700006400
+        self.configure(max_rows=1)
+        self.source([(ts, KEY, TEXT) for ts in (TS, midnight - 1, midnight)])
+        out = self.root / "output"
+        status = State(self.state).status
+        with local_zone("UTC0"):
+            code, output = self.resend("--out", str(out), end="2023-11-14", token="")
+            self.assertEqual(code, 0)
+            self.assertIn("screen collected ", output)
+            self.assertFalse(status.exists())
+            previous = b'{ "outcome": "delivered" }\n'
+            status.write_bytes(previous)
+            self.assertEqual(
+                self.resend("--out", str(out), end="2023-11-14", token="")[0], 0
+            )
+            self.assertEqual(status.read_bytes(), previous)
+            self.assertEqual(self.resend(end="2023-11-13")[0], 1)
+        self.assertEqual(self.row_posts, 0)
+        records = [
+            json.loads(gzip.decompress(path.read_bytes()).splitlines()[1])
+            for path in sorted(out.iterdir())
+        ]
+        self.assertEqual([row["ts"] for row in records], [TS, midnight - 1])
+        self.assertEqual(
+            self.resend("--max-batches", "1", end="2023-11-15T00:00:01Z")[0], 0
+        )
+        self.assertEqual(self.row_posts, 1)
+
+    def test_resend_media_window_and_saved_frames_bound(self) -> None:
+        self.configure(media=True)
+        self.source(
+            [
+                (TS - 1, "old.jpg", TEXT),
+                (TS, KEY, TEXT),
+                (TS + 1, "masked.jpg", "ABOUT:logins"),
+                (TS + 2, "unsaved.jpg", TEXT),
+                (TS + 3, "end.jpg", TEXT),
+            ]
+        )
+        for key in ("old.jpg", KEY, "masked.jpg", "unsaved.jpg", "end.jpg"):
+            (self.images / key).write_bytes(b"fixture")
+        self.state.mkdir(parents=True)
+        state = State(self.state)
+        state.cursor.write_text(json.dumps({"frames": TS + 1, "app_usage": TS}))
+        state.media_cursor.write_text("unreadable fixture")
+        code, output = self.resend("--media")
+        self.assertEqual(code, 0)
+        self.assertEqual(len(output.splitlines()), 1)
+        self.assertEqual(self.plans, [[{"key": KEY, "size": 7}]])
+        self.assertEqual(self.confirms, self.plans)
+        self.assertEqual(len(self.puts), 1)
+        self.assertEqual(state.media_cursor.read_text(), "unreadable fixture")
+        state.media_cursor.unlink()
+        state.cursor.write_text(json.dumps({"frames": TS + 3, "app_usage": TS}))
+        self.mode = "put_500"
+        self.assertEqual(self.resend("--media")[0], 1)
+        self.assertEqual(
+            self.plans[-1], [{"key": KEY, "size": 7}, {"key": "unsaved.jpg", "size": 7}]
+        )
+        _, status = self.run_agent(command="status")
+        self.assertIn('"resend":', status)
+        for value in (KEY, TEXT, self.signed_url):
+            self.assertNotIn(value, output + status)
+
+    def test_resend_rejects_media_modes_and_respects_lock(self) -> None:
+        with State(self.state).lock() as locked:
+            self.assertTrue(locked)
+            self.assertEqual(self.resend(), (0, "screen already_running {}\n"))
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+            self.resend("--media", "--out", str(self.root / "output"))
+        self.assertEqual(error.exception.code, 2)
+        self.configure(collector="zen_history")
+        self.assertEqual(self.resend("--media")[0], 1)
+        self.assertEqual(self.row_posts, 0)
+
+    def test_resend_rejects_media_when_not_enabled(self) -> None:
+        self.source()
+        self.state.mkdir(parents=True)
+        State(self.state).cursor.write_text(json.dumps({"frames": TS, "app_usage": TS}))
+        for options in ({}, {"media": False}):
+            with self.subTest(options=options):
+                self.configure(**options)
+                code, output = self.resend("--media")
+                self.assertEqual(code, 1)
+                self.assertIn("Media is not enabled", output)
+                self.assertEqual(self.row_posts, 0)
+                self.assertFalse(self.plans or self.puts or self.confirms)
+
+    def test_collect_only_checks_custom_media_dir_when_enabled(self) -> None:
+        self.source()
+        directory = self.root / "custom-media"
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled):
+                self.configure(media=enabled, media_dir=str(directory))
+                out = directory / str(enabled)
+                code, _ = self.run_agent(
+                    "--collector", "screen", "--out", str(out), command="collect"
+                )
+                self.assertEqual(code, int(enabled))
+                self.assertEqual((out / "batch-0001.jsonl.gz").exists(), not enabled)
+
     def test_delivers_and_filters_frames(self) -> None:
         self.configure(media=True)
         self.source(
@@ -243,7 +444,7 @@ class MediaTests(unittest.TestCase):
         self.assertFalse(self.puts or self.confirms)
 
     def test_failure_retries_same_page(self) -> None:
-        self.configure(media=True, cutoff_ts=TS - 1)
+        self.configure(media=True, since=START)
         self.source()
         file = self.images / KEY
         file.write_bytes(b"fixture")

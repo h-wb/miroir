@@ -247,7 +247,13 @@ class AgentTests(unittest.TestCase):
         return code, output.getvalue()
 
     def _fake(
-        self, options: dict, cursor: dict | None, out: Path, now: float
+        self,
+        options: dict,
+        cursor: dict | None,
+        out: Path,
+        now: float,
+        *,
+        window: tuple[int, int] | None = None,
     ) -> Collected:
         self.calls.append(cursor)
         step = (cursor or {}).get("frames", 0) + 1

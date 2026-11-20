@@ -4,13 +4,17 @@ import argparse
 import json
 import re
 import time
+from collections.abc import Callable
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from . import __version__
 from .collectors import COLLECTORS, Collected, Collector, Cursor, zen_history
 from .config import CollectorConfig, load_config
+from .dates import parse_date
 from .deliver import Delivery, deliver
 from .media import deliver_media, token_for
 from .state import State, outside_source, read_json, write_json
@@ -47,16 +51,21 @@ def _record(
         previous = read_json(state.status)
     except (ValueError, RecursionError):
         previous = None
-    if previous is not None and "media" in previous:
-        result["media"] = previous["media"]
+    for key in ("media", "resend"):
+        if previous is not None and key in previous:
+            result[key] = previous[key]
     write_json(state.status, result)
 
 
 def _collect(
-    config: CollectorConfig, cursor: Cursor | None, path: Path
+    config: CollectorConfig,
+    cursor: Cursor | None,
+    path: Path,
+    *,
+    window: tuple[int, int] | None = None,
 ) -> Collected | None:
     return COLLECTORS[config.collector].collect(
-        config.options, cursor, path, time.time()
+        config.options, cursor, path, time.time(), window=window
     )
 
 
@@ -64,7 +73,7 @@ def _require_outside_source(config: CollectorConfig, *paths: Path) -> None:
     if config.collector == "screenmemory":
         for path in paths:
             outside_source(path, Path(config.options["data_dir"]))
-            if config.options.get("media"):
+            if _media_collector(config) is not None:
                 outside_source(path, Path(config.options["media_dir"]))
     elif config.collector == "zen_history":
         zen_history.require_outside_source(config.options, *paths)
@@ -130,17 +139,15 @@ def _media_collector(config: CollectorConfig) -> Collector | None:
 def _media_cursor(config: CollectorConfig, state: State) -> int:
     value = read_json(state.media_cursor)
     if value is None:
-        return int(config.options.get("cutoff_ts", 0))
+        return int(config.options["since"]) - 1 if "since" in config.options else 0
     ts = value.get("ts")
     if type(ts) is not int:
         raise ValueError("Invalid media cursor")
     return ts
 
 
-def _run_media(
-    config: CollectorConfig, state: State, collector: Collector, maximum: int
-) -> tuple[str, dict[str, int]]:
-    counts = dict.fromkeys(
+def _media_counts() -> dict[str, int]:
+    return dict.fromkeys(
         (
             "examined",
             "uploaded",
@@ -152,27 +159,51 @@ def _run_media(
         ),
         0,
     )
-    outcome = "nothing_new"
+
+
+def _media_pages(
+    config: CollectorConfig,
+    collector: Collector,
+    cursor: int,
+    rows: Cursor | None,
+    counts: dict[str, int],
+    maximum: int | None = None,
+    save: Callable[[int], None] | None = None,
+) -> None:
     collect, kind = collector.media, collector.media_kind
     assert collect is not None and kind is not None
+    token = token_for(config)
+    while rows is not None and (maximum is None or counts["examined"] < maximum):
+        limit = 500 if maximum is None else min(500, maximum - counts["examined"])
+        page = collect(config.options, cursor, rows, limit)
+        if page is None:
+            break
+        for name, count in page.counts.items():
+            counts[name] += count
+        if page.items:
+            deliver_media(config, token, kind, page.items, counts)
+        cursor = page.cursor
+        if save is not None:
+            save(cursor)
+        if not page.more:
+            break
+
+
+def _run_media(
+    config: CollectorConfig, state: State, collector: Collector, maximum: int
+) -> tuple[str, dict[str, int]]:
+    counts = _media_counts()
     try:
-        token = token_for(config)
-        cursor = _media_cursor(config, state)
-        rows = _cursor(read_json(state.cursor), config.collector)
-        while rows is not None and counts["examined"] < maximum:
-            limit = min(500, maximum - counts["examined"])
-            page = collect(config.options, cursor, rows, limit)
-            if page is None:
-                break
-            for name, count in page.counts.items():
-                counts[name] += count
-            if page.items:
-                deliver_media(config, token, kind, page.items, counts)
-            cursor = page.cursor
-            write_json(state.media_cursor, {"ts": cursor})
-            outcome = "delivered"
-            if not page.more:
-                break
+        _media_pages(
+            config,
+            collector,
+            _media_cursor(config, state),
+            _cursor(read_json(state.cursor), config.collector),
+            counts,
+            maximum,
+            lambda cursor: write_json(state.media_cursor, {"ts": cursor}),
+        )
+        outcome = "delivered" if counts["examined"] else "nothing_new"
     except (OSError, ValueError, KeyError, RuntimeError, RecursionError):
         outcome = "failed"
     result = read_json(state.status) or {}
@@ -232,6 +263,108 @@ def _positive(value: str) -> int:
     return number
 
 
+def _resend_window(start: str, end: str | None) -> tuple[int, int]:
+    lower, _ = parse_date(start)
+    upper, through_day = (
+        (int(time.time()), False) if end is None else parse_date(end, through_day=True)
+    )
+    if upper < lower or (through_day and upper == lower):
+        raise ValueError("Resend end is before its start")
+    return lower, upper
+
+
+def _add_counts(total: dict[str, Any], counts: dict[str, Any]) -> None:
+    for key, value in counts.items():
+        if isinstance(value, dict):
+            _add_counts(total.setdefault(key, {}), value)
+        else:
+            total[key] = total.get(key, 0) + value
+
+
+def _resend(
+    config: CollectorConfig,
+    state: State,
+    window: tuple[int, int],
+    out: Path | None,
+    maximum: int | None,
+    media: Collector | None,
+) -> tuple[str, dict[str, Any]]:
+    _require_outside_source(config, state.directory, state.directory / "lock")
+    if out is None:
+        _require_outside_source(config, state.status)
+    with state.lock() as locked:
+        if not locked:
+            return "already_running", {}
+        counts: dict[str, Any] = {}
+        batches = 0
+        try:
+            if out is not None:
+                out = out.resolve()
+                _require_outside_source(config, out)
+                if out.is_relative_to(state.directory.parent.resolve()):
+                    raise ValueError("Resend output cannot be inside collector state")
+                out.mkdir(mode=0o700, parents=True, exist_ok=True)
+            directory = (
+                TemporaryDirectory(dir=state.directory)
+                if out is None
+                else nullcontext(str(out))
+            )
+            with directory as folder:
+                cursor = None
+                while maximum is None or batches < maximum:
+                    path = Path(folder) / f"batch-{batches + 1:04}.jsonl.gz"
+                    _require_outside_source(config, path)
+                    batch = _collect(config, cursor, path, window=window)
+                    if batch is None:
+                        break
+                    if out is None:
+                        if not deliver(config, path).acknowledged:
+                            raise ValueError("Resend delivery failed")
+                        path.unlink()
+                    batches += 1
+                    cursor, batch_counts, more = batch
+                    _add_counts(counts, batch_counts)
+                    if not more:
+                        break
+            media_counts = _media_counts()
+            if media is not None:
+                counts["media"] = media_counts
+                saved = _cursor(read_json(state.cursor), config.collector)
+                upper = saved.get("frames") if saved is not None else None
+                if saved is not None and type(upper) is not int:
+                    raise ValueError("Invalid frame cursor")
+                if upper is not None:
+                    _media_pages(
+                        config,
+                        media,
+                        window[0] - 1,
+                        {"frames": min(window[1] - 1, upper)},
+                        media_counts,
+                    )
+            outcome = (
+                "delivered" if batches or media_counts["examined"] else "nothing_new"
+            )
+            if out is not None and batches:
+                outcome = "collected"
+        except (OSError, ValueError, KeyError, RuntimeError, RecursionError):
+            outcome = "failed"
+        if out is not None:
+            return outcome, counts
+        try:
+            result = read_json(state.status) or {}
+        except (ValueError, RecursionError):
+            result = {}
+        result["resend"] = {
+            "time": datetime.now(timezone.utc).isoformat(),
+            "outcome": outcome,
+            "window": list(window),
+            "batches": batches,
+            "counts": counts,
+        }
+        write_json(state.status, result)
+        return outcome, counts
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="miroir-agent", description="Collect and deliver local data to Miroir."
@@ -242,13 +375,23 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     run = commands.add_parser("run", help="collect and deliver pending batches")
     preview = commands.add_parser("collect", help="write batches without delivery")
+    resend = commands.add_parser(
+        "resend", help="re-collect a date range without advancing cursors"
+    )
     status = commands.add_parser("status", help="show local delivery state")
-    for command in (run, preview, status):
+    for command in (run, preview, resend, status):
         command.add_argument("--config", required=True, type=Path)
     for command in (run, preview):
         command.add_argument("--collector", required=command is preview)
         command.add_argument("--max-batches", type=_positive, default=1)
     preview.add_argument("--out", required=True, type=Path)
+    resend.add_argument("--collector", required=True)
+    resend.add_argument("--from", dest="start", required=True)
+    resend.add_argument("--to", dest="end")
+    resend.add_argument("--max-batches", type=_positive)
+    resend_mode = resend.add_mutually_exclusive_group()
+    resend_mode.add_argument("--media", action="store_true")
+    resend_mode.add_argument("--out", type=Path)
     run.add_argument("--max-media-files", type=_positive, default=2000)
     args = parser.parse_args(argv)
     try:
@@ -261,6 +404,19 @@ def main(argv: list[str] | None = None) -> int:
         collectors = [item for item in collectors if item.id == selected]
         if not collectors:
             print("Collector not configured")
+            return 1
+    resend_media = None
+    if args.command == "resend":
+        item = collectors[0]
+        if args.media:
+            resend_media = _media_collector(item)
+            if resend_media is None:
+                print("Media is not enabled for this collector")
+                return 1
+        try:
+            window = _resend_window(args.start, args.end)
+        except ValueError as error:
+            print(error)
             return 1
     failed = False
     for item in collectors:
@@ -284,6 +440,10 @@ def main(argv: list[str] | None = None) -> int:
             if args.command == "run":
                 (outcome, counts), media = _run(
                     item, state, args.max_batches, args.max_media_files
+                )
+            elif args.command == "resend":
+                outcome, counts = _resend(
+                    item, state, window, args.out, args.max_batches, resend_media
                 )
             else:
                 outcome, counts = _preview(item, state, args.out, args.max_batches)
