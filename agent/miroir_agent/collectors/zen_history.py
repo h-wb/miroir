@@ -119,7 +119,11 @@ def _json(value: Any) -> str:
 
 
 def _pages(
-    db: sqlite3.Connection, cursor: Cursor, limit: int
+    db: sqlite3.Connection,
+    cursor: Cursor,
+    limit: int,
+    since: int | None,
+    window: tuple[int, int] | None,
 ) -> tuple[dict[str, list[Row]], Cursor, bool]:
     tables = {
         row[0]
@@ -136,20 +140,29 @@ def _pages(
     visit_date = cursor.get("visit_date", 0)
     if type(visit_date) is not int:
         raise ValueError(SOURCE_ERROR)
+    visit_filter = ""
+    visit_params: tuple[int, ...] = ()
+    if window is not None:
+        visit_filter = " AND visit_date >= ? AND visit_date < ?"
+        visit_params = (window[0] * 1_000_000, window[1] * 1_000_000)
+    elif since is not None:
+        visit_filter = " AND visit_date >= ?"
+        visit_params = (since * 1_000_000,)
     visits = _rows(
         db,
-        "SELECT * FROM moz_historyvisits WHERE id > ? ORDER BY id LIMIT ?",
-        (visit_id, limit),
+        f"SELECT * FROM moz_historyvisits WHERE id > ?{visit_filter} ORDER BY id LIMIT ?",
+        (visit_id, *visit_params, limit),
     )
     more_visits = len(visits) == limit
     if visits:
         next_cursor["visit_id"] = visits[-1]["id"]
-    if not more_visits:
+    if window is None and not more_visits:
         visits.extend(
             _rows(
                 db,
-                "SELECT * FROM moz_historyvisits WHERE id <= ? AND visit_date > ? ORDER BY id",
-                (visit_id, visit_date),
+                "SELECT * FROM moz_historyvisits WHERE id <= ? AND visit_date > ?"
+                f"{visit_filter} ORDER BY id",
+                (visit_id, visit_date, *visit_params),
             )
         )
     next_cursor["visit_date"] = max(
@@ -159,11 +172,18 @@ def _pages(
             default=visit_date,
         ),
     )
-    new_places = _rows(
-        db,
-        "SELECT * FROM moz_places WHERE id > ? ORDER BY id LIMIT ?",
-        (cursor["place_id"], limit),
-    )
+    new_places = []
+    if window is None:
+        place_filter = ""
+        place_params: tuple[int, ...] = ()
+        if since is not None and "last_visit_date" in _columns(db, "moz_places"):
+            place_filter = " AND (last_visit_date IS NULL OR last_visit_date >= ?)"
+            place_params = (since * 1_000_000,)
+        new_places = _rows(
+            db,
+            f"SELECT * FROM moz_places WHERE id > ?{place_filter} ORDER BY id LIMIT ?",
+            (cursor["place_id"], *place_params, limit),
+        )
     if new_places:
         next_cursor["place_id"] = new_places[-1]["id"]
     places = {row["id"]: row for row in new_places}
@@ -185,10 +205,19 @@ def _pages(
     if "moz_places_metadata" in tables and "updated_at" in _columns(
         db, "moz_places_metadata"
     ):
+        metadata_filter = ""
+        metadata_params: tuple[int, ...] = ()
+        if window is not None:
+            metadata_filter = " AND updated_at >= ? AND updated_at < ?"
+            metadata_params = (window[0] * 1000, window[1] * 1000)
+        elif since is not None:
+            metadata_filter = " AND updated_at >= ?"
+            metadata_params = (since * 1000,)
         metadata = _rows(
             db,
-            "SELECT * FROM moz_places_metadata WHERE updated_at > ? ORDER BY updated_at, id LIMIT ?",
-            (cursor["metadata_updated_at"], limit),
+            "SELECT * FROM moz_places_metadata WHERE updated_at > ?"
+            f"{metadata_filter} ORDER BY updated_at, id LIMIT ?",
+            (cursor["metadata_updated_at"], *metadata_params, limit),
         )
         if len(metadata) == limit:
             more = True
@@ -203,7 +232,7 @@ def _pages(
             next_cursor["metadata_updated_at"] = metadata[-1]["updated_at"]
             rows["moz_places_metadata"] = metadata
 
-    for name in ("origins", "bookmarks"):
+    for name in ("origins", "bookmarks") if window is None else ():
         table = "moz_" + name
         if table in tables:
             items = _rows(db, f"SELECT * FROM {table} ORDER BY id")
@@ -229,13 +258,24 @@ def _redact(table: str, row: Row, masked: Counter[str]) -> None:
 
 
 def collect(
-    options: dict[str, Any], cursor: Cursor | None, out_path: Path, now: float
+    options: dict[str, Any],
+    cursor: Cursor | None,
+    out_path: Path,
+    now: float,
+    *,
+    window: tuple[int, int] | None = None,
 ) -> Collected | None:
     try:
         source = _source(options)
     except (OSError, ValueError, RuntimeError):
         raise ValueError(SOURCE_ERROR) from None
     _guard(source, out_path)
+    since = options.get("since") if window is None else None
+    if cursor is None:
+        cursor = _INITIAL_CURSOR.copy()
+        start = window[0] if window is not None else since
+        if start is not None:
+            cursor["metadata_updated_at"] = start * 1000 - 1
     try:
         with _stable_copy(source) as target, closing(sqlite3.connect(target)) as db:
             db.text_factory = _decode
@@ -245,8 +285,10 @@ def collect(
                 raise ValueError(SOURCE_ERROR)
             rows, next_cursor, more = _pages(
                 db,
-                _INITIAL_CURSOR if cursor is None else cursor,
+                cursor,
                 options.get("max_rows", 20000),
+                since,
+                window,
             )
     except _ChangingSource:
         raise

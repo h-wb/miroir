@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 from .collectors import COLLECTORS
 from .collectors.zen_history import DEFAULT_PROFILES_DIR
+from .dates import parse_date
 
 
 @dataclass(frozen=True)
@@ -80,9 +81,19 @@ def _url(url: str) -> str:
     return url
 
 
+def _since(options: dict[str, Any]) -> dict[str, int]:
+    return (
+        {"since": parse_date(_string(options, "since"))[0]}
+        if "since" in options
+        else {}
+    )
+
+
 def _options(name: str, raw: Any) -> dict[str, Any]:
     if name == "zen_history":
-        options = _object(raw, {"places_path", "profiles_dir", "max_rows", "mask_urls"})
+        options = _object(
+            raw, {"places_path", "profiles_dir", "max_rows", "mask_urls", "since"}
+        )
         max_rows = _integer(options, "max_rows", 20000, 1)
         if max_rows > 200000:
             raise ValueError("Invalid max_rows")
@@ -95,14 +106,19 @@ def _options(name: str, raw: Any) -> dict[str, Any]:
             if key in options
         }
         paths.setdefault("profiles_dir", str(Path(DEFAULT_PROFILES_DIR).expanduser()))
-        return {**paths, "max_rows": max_rows, "mask_urls": mask_urls}
+        return {
+            **paths,
+            **_since(options),
+            "max_rows": max_rows,
+            "mask_urls": mask_urls,
+        }
     if name != "screenmemory":
         return _object(raw, set())
     options = _object(
         raw,
         {
             "data_dir",
-            "cutoff_ts",
+            "since",
             "settle_seconds",
             "max_rows",
             "drop_bundle_ids",
@@ -127,7 +143,7 @@ def _options(name: str, raw: Any) -> dict[str, Any]:
         "data_dir": str(data_dir),
         "media": media,
         "media_dir": str(media_dir),
-        "cutoff_ts": _integer(options, "cutoff_ts", 0, -(2**63)),
+        **_since(options),
         "settle_seconds": _integer(options, "settle_seconds", 300, 0),
         "max_rows": max_rows,
         "drop_bundle_ids": _strings(options, "drop_bundle_ids"),

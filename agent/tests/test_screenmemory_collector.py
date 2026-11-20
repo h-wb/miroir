@@ -84,6 +84,24 @@ class ScreenMemoryCollectorTests(unittest.TestCase):
         )
         self.assertIsNone(collect(self.options, batch.cursor, self.out, self.now))
 
+    def test_window_intersects_settle_bound(self) -> None:
+        self._source(
+            [(_TS + i, f"{i}.jpg", None) for i in range(-1, 4)],
+            [(_TS + i, "app.example") for i in range(-1, 4)],
+        )
+        batch = collect(
+            self.options,
+            {"frames": _TS - 2, "app_usage": _TS},
+            self.out,
+            _TS + 301,
+            window=(_TS, _TS + 3),
+        )
+        assert batch is not None
+        self.assertEqual(
+            [(row["type"], row["ts"]) for row in self._records()],
+            [("frame", _TS), ("frame", _TS + 1), ("app_usage", _TS + 1)],
+        )
+
     def test_fractional_timestamps_use_whole_seconds(self) -> None:
         self._source(
             [

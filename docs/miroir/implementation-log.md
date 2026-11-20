@@ -1796,3 +1796,25 @@ against a stand-in store. Nothing is deployed: no bucket, key or configuration.
 Upload integrity is the size check and TLS, with no checksum. Media delivery is
 visible in the agent's status, not in Miroir. The timeline models and dashboard,
 and an attachments collector, are not started.
+
+## 2026-11-20 — Start dates and re-sending a range (decision 034)
+
+Agent only. A `dates` module parses a local date or an instant with an offset.
+Both collectors take `since`; ScreenMemory's `cutoff_ts` is gone. Both `collect`
+functions take an optional window. A new `resend` command loops over a window with
+a paging cursor kept in memory and delivers each batch, never reading or writing
+the cursor, spool or media cursor; `--out` makes it a dry run and `--media` also
+uploads the range's files.
+
+A probe outside the suite confirmed that a bare date covers exactly one local day
+(the last second in, the next midnight out) and that `since` excludes earlier
+frames. It also showed a dry run reporting `delivered`, which the independent
+review found too, with three more: `resend --media` ignored a collector's
+`media: false`; the output-folder check had become stricter for normal runs; and
+browser `since` failed on a Places file without `last_visit_date`. All four are
+fixed with tests.
+
+Validation: the agent suite and the server suite are green, with ruff and mypy
+clean.
+
+Not done: never run on real data.

@@ -200,14 +200,27 @@ def collect_media(
 
 
 def collect(
-    options: dict[str, Any], cursor: dict[str, int] | None, out_path: Path, now: float
+    options: dict[str, Any],
+    cursor: Cursor | None,
+    out_path: Path,
+    now: float,
+    *,
+    window: tuple[int, int] | None = None,
 ) -> Collected | None:
     data = Path(options["data_dir"]).expanduser()
     outside_source(out_path, data)
-    cutoff = options.get("cutoff_ts", 0)
-    frame_cursor = cursor["frames"] if cursor is not None else cutoff
-    usage_cursor = cursor["app_usage"] if cursor is not None else cutoff
+    initial = options["since"] - 1 if "since" in options else 0
+    if window is not None:
+        initial = window[0] - 1
+    frame_cursor = cursor["frames"] if cursor is not None else initial
+    usage_cursor = cursor["app_usage"] if cursor is not None else initial
+    if type(frame_cursor) is not int or type(usage_cursor) is not int:
+        raise ValueError("Invalid ScreenMemory cursor")
     upper = math.floor(now - options.get("settle_seconds", 300))
+    if window is not None:
+        frame_cursor = max(initial, frame_cursor)
+        usage_cursor = max(initial, usage_cursor)
+        upper = min(upper, window[1] - 1)
     limit = options.get("max_rows", 20000)
     try:
         with (

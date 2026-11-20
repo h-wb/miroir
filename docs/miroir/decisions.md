@@ -1223,3 +1223,37 @@ Consequences:
 
 Open: an attachments collector, the timeline models and their dashboard, and the
 deployment (bucket, key, configuration).
+
+## 034 — A start date, and re-sending a range
+
+Status: accepted, 2026-11-20. Refines 030.
+
+Decision 030 gave the agent a cursor that only moves forward, and said a better
+masking rule "is applied by collecting again". There was no practical way to
+collect again: the only lever was deleting the cursor, which sends everything
+from the start. The start itself was a raw timestamp on one collector and missing
+on the other.
+
+**Every collector takes `since`.** A date is that day in the machine's local time
+zone; an instant must carry its UTC offset, so nothing depends on guessing a zone.
+It is where a collector starts when it has no saved cursor. Changing it later does
+not reach back past rows already sent.
+
+**`resend` collects a date range again without touching saved state.** It reads
+and writes neither the cursor, the spool nor the media cursor, holds the
+collector's lock while it runs, and delivers each batch directly. Collectors take
+a window for this; inside a window they send only what is dated in it. Because
+imports merge on source keys, sending a range twice changes nothing, and sending
+it after a rule change replaces the rows with their newly masked text.
+
+This gives three uses one mechanism: applying a better rule to old data,
+repairing a gap, and loading history out of order (recent first, older months
+when convenient).
+
+Limits:
+
+- `resend --media` uploads files that are missing in the range. It cannot remove
+  the file of a frame that a new rule now withholds; Miroir never deletes media.
+- Tables without a date are outside a window: browser origins and bookmarks are
+  not re-sent.
+- `resend --out` is a dry run: it writes the batches and records nothing.

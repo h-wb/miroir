@@ -155,6 +155,76 @@ class ZenHistoryTests(unittest.TestCase):
             [r["id"] for r in self.batch()[0]["moz_historyvisits"]], [1, *reused]
         )
 
+    def dated_source(self, *, last_visit_date: bool = False) -> None:
+        self.sql(
+            _REQUIRED
+            + _OPTIONAL
+            + """
+            INSERT INTO moz_places(id, url) VALUES
+                (1, 'old'), (2, 'unvisited'), (3, 'referenced'), (4, 'end');
+            INSERT INTO moz_historyvisits VALUES
+                (1, 1, 9999999), (2, 3, 10000000), (3, 4, 12000000), (4, 3, 11999999);
+            INSERT INTO moz_places_metadata VALUES (1, 9999), (2, 10000), (3, 12000), (4, 11999);
+            INSERT INTO moz_origins VALUES (1, 'example.org');
+            INSERT INTO moz_bookmarks VALUES (1, 'Bookmark');
+            """
+        )
+        if last_visit_date:
+            self.sql("""
+                ALTER TABLE moz_places ADD COLUMN last_visit_date INTEGER;
+                UPDATE moz_places SET last_visit_date = 9999999 WHERE id IN (1, 3);
+                UPDATE moz_places SET last_visit_date = 12000000 WHERE id = 4;
+            """)
+
+    def test_since(self) -> None:
+        self.dated_source(last_visit_date=True)
+        self.run_collect(since=10)
+        rows, _ = self.batch()
+        self.assertEqual(
+            {
+                table: sorted(row["id"] for row in items)
+                for table, items in rows.items()
+            },
+            {
+                "moz_places": [2, 3, 4],
+                "moz_historyvisits": [2, 3, 4],
+                "moz_places_metadata": [2, 3, 4],
+                "moz_origins": [1],
+                "moz_bookmarks": [1],
+            },
+        )
+
+    def test_since_without_last_visit_date(self) -> None:
+        self.dated_source()
+        self.run_collect(since=10)
+        rows, _ = self.batch()
+        self.assertEqual([row["id"] for row in rows["moz_places"]], [1, 2, 3, 4])
+        self.assertEqual([row["id"] for row in rows["moz_historyvisits"]], [2, 3, 4])
+
+    def test_window_pages_and_ignores_since(self) -> None:
+        self.dated_source()
+        cursor = None
+        for visit, metadata in ((2, 2), (4, 4)):
+            batch = collect(
+                self.options | {"since": 99, "max_rows": 1},
+                cursor,
+                self.out,
+                20,
+                window=(10, 12),
+            )
+            assert batch is not None
+            cursor = batch.cursor | {"visit_date": 0}
+            rows, _ = self.batch()
+            self.assertEqual(
+                {table: [row["id"] for row in items] for table, items in rows.items()},
+                {
+                    "moz_places": [3],
+                    "moz_historyvisits": [visit],
+                    "moz_places_metadata": [metadata],
+                },
+            )
+        self.assertIsNone(collect(self.options, cursor, self.out, 20, window=(10, 12)))
+
     def test_visit_and_place_pages_with_interaction_ties(self):
         self.sql(
             _REQUIRED

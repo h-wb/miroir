@@ -90,4 +90,5 @@ its app on the exact timestamp.
   only for frames after the media cursor. An existing archive is brought in by
   copying the `screenshots/` folder into the bucket under
   `<prefix>/<connection>/screenshots/`; the agent then finds those files present.
-- History before the configured `cutoff_ts` is not sent.
+- History before the collector's `since` is not sent by normal runs. Load it later
+  with `miroir-agent resend --from ... --to ...`, with `--media` for the screenshots.

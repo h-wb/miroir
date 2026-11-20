@@ -548,6 +548,7 @@ installs on its own; [its README](../../agent/README.md) covers installing it.
 ```bash
 miroir-agent run     --config agent.json [--collector ID] [--max-batches N]
 miroir-agent collect --config agent.json --collector ID --out DIR
+miroir-agent resend  --config agent.json --collector ID --from DATE [--to DATE]
 miroir-agent status  --config agent.json
 ```
 
@@ -555,8 +556,14 @@ miroir-agent status  --config agent.json
 the batch to a spool and deliver it. The cursor moves only after Miroir answers 200
 or 201; anything else leaves the batch in the spool for the next pass. `collect`
 writes the batches to a folder and sends nothing, to inspect what would leave the
-machine. `status` shows each collector's cursor and last outcome. None of them
-prints source content.
+machine. `resend` collects a date range again and delivers it without moving the
+saved position (decision 034): use it after improving a masking rule, to repair a
+gap, or to load older history later. `status` shows each collector's cursor and
+last outcome. None of them prints source content.
+
+A collector's optional `since` (a date, or an instant with a UTC offset) is where
+it starts when it has no saved position. Starting recent and re-sending older
+months later gets a connection live quickly.
 
 ```json
 {
@@ -567,7 +574,7 @@ prints source content.
       "collector": "screenmemory",
       "receive_url": "https://miroir.example/api/connections/screen_macbook/receive",
       "token_env": "MIROIR_TOKEN_SCREEN_MACBOOK",
-      "options": {"data_dir": "~/ScreenMemoryData", "cutoff_ts": 0}
+      "options": {"data_dir": "~/ScreenMemoryData", "since": "2025-01-01"}
     }
   ]
 }

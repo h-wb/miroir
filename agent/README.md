@@ -26,6 +26,8 @@ uvx --from "git+https://github.com/h-wb/pipelines@<ref>#subdirectory=agent" miro
 ```bash
 miroir-agent run     --config agent.json [--collector ID] [--max-batches N]
 miroir-agent collect --config agent.json --collector ID --out DIR
+miroir-agent resend  --config agent.json --collector ID --from DATE [--to DATE]
+                     [--media | --out DIR] [--max-batches N]
 miroir-agent status  --config agent.json
 ```
 
@@ -35,7 +37,13 @@ miroir-agent status  --config agent.json
   about hourly.
 - `collect` writes the batches to a folder and sends nothing, to inspect what
   would leave the machine.
-- `status` shows each collector's position and last outcome, for rows and media.
+- `resend` collects a date range again, using the current masking rules and
+  leaving the saved positions and spool unchanged. `--from` is inclusive;
+  `--to` includes the whole local day for a bare date, excludes an exact
+  instant, and defaults to now. `--out` writes batches instead of posting
+  them and needs no token. `--media` also sends ScreenMemory files in the
+  range, up to the saved frame cursor.
+- `status` shows each collector's position and the last row, media and resend outcomes.
 
 None of them prints source content.
 
@@ -50,7 +58,7 @@ None of them prints source content.
       "collector": "screenmemory",
       "receive_url": "https://miroir.example/api/connections/screen_macbook/receive",
       "token_env": "MIROIR_TOKEN_SCREEN_MACBOOK",
-      "options": {"data_dir": "~/ScreenMemoryData", "cutoff_ts": 0}
+      "options": {"data_dir": "~/ScreenMemoryData", "since": "2025-01-01"}
     }
   ]
 }
@@ -59,6 +67,11 @@ None of them prints source content.
 `receive_url` must be `https`. The token is the connection's receive-only
 delivery token, read from the named environment variable; it can deliver to its
 own connection and nothing else.
+
+Both collectors accept an optional `since`: use `YYYY-MM-DD` for local
+midnight or `YYYY-MM-DDTHH:MM:SS` with `Z` or a UTC offset for an exact instant.
+Omit it to start at the beginning. Zen origins and bookmarks are not filtered
+by `since` and are not included in a resend.
 
 ## Media
 
@@ -84,6 +97,7 @@ address Miroir signs links for, not only Miroir.
 |---|---|
 | `cli.py` | Commands and exit codes; the pass over collectors |
 | `config.py` | Load and validate the configuration |
+| `dates.py` | Parse local dates and offset-qualified instants |
 | `collectors/` | One module per source: read new rows, write one batch |
 | `masking.py` | The fixed rules that mask secrets in text |
 | `state.py` | Saved position, the spool, status and the lock |
