@@ -202,7 +202,9 @@ def connection_pages(service: MiroirService, page: Page) -> APIRouter:
             ),
         )
         response.headers["Cache-Control"] = "no-store"
-        response.headers["Referrer-Policy"] = "no-referrer"
+        # Not "no-referrer": that makes browsers post this page's forms with
+        # "Origin: null", which the login check cannot tell from another site.
+        response.headers["Referrer-Policy"] = "same-origin"
         return response
 
     @router.get("/connections/{connection_id}/setup", response_class=HTMLResponse)
