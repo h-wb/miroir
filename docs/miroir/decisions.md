@@ -950,11 +950,18 @@ again, which is safe for a connector that merges on source keys, as the file
 connectors do. A first load of long history is an ordinary upload, and the agent
 starts from a configured cutoff.
 
-**Collectors ship raw records.** They copy the source's rows as they are, selecting
-columns and nothing more: no cleaning, summarising or filtering. Interpretation
-belongs to the parser and the models, where it can be run again over history when
-it changes. Collectors open sources read-only and never write inside a source
-application's folder.
+**Collectors ship raw records, minus what must not leave the machine.** They copy
+the source's rows as they are, selecting columns and nothing more: no cleaning or
+summarising. Interpretation belongs to the parser and the models, where it can be
+run again over history when it changes. Collectors open sources read-only and
+never write inside a source application's folder.
+
+The one exception is safety. Text captured from a screen holds whatever was
+displayed, passwords and keys included, and a received artifact is kept and
+content-addressed, so a secret that reaches Miroir is hard to remove. A collector
+for such a source masks or drops secrets before it writes the file: by fixed
+rules, never by a model, and with a count of what it withheld in the file. The
+source keeps the original, so a better rule is applied by collecting again.
 
 **It lives in this repo but not in the server's package.** The agent and its
 collectors are a separate tree, `src/agent/`, that imports only the Python
@@ -999,6 +1006,9 @@ Consequences:
   moves to the agent.
 - Where Miroir is reachable only from the home network or a VPN, the spool is the
   normal case for a laptop, not an error path.
+- Masking by rule is incomplete: a password typed in plain view matches no
+  pattern. Screen text stays the most sensitive dataset in the warehouse and is
+  handled that way downstream.
 - A stolen machine's tokens can inject data into its own connections and do
   nothing else. Revoking them is per connection (decision 017).
 
