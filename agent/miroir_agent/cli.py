@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import __version__
 from .collectors import COLLECTORS, Collected
 from .config import CollectorConfig, load_config
 from .deliver import Delivery, deliver
@@ -129,7 +130,10 @@ def _positive(value: str) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Collect and deliver local data to Miroir."
+        prog="miroir-agent", description="Collect and deliver local data to Miroir."
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {__version__}"
     )
     commands = parser.add_subparsers(dest="command", required=True)
     run = commands.add_parser("run", help="collect and deliver pending batches")

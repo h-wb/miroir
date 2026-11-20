@@ -6,7 +6,7 @@ which app was in front. Collected on the Mac by the Miroir agent (decision 030).
 - **Status**: connector and collector built 2026-11-20; not deployed, no connection
   configured yet
 - **Code**: connector [`src/integrations/screenmemory/`](../../src/integrations/screenmemory/),
-  collector [`src/agent/collectors/screenmemory.py`](../../src/agent/collectors/screenmemory.py)
+  collector [`agent/miroir_agent/collectors/screenmemory.py`](../../agent/miroir_agent/collectors/screenmemory.py)
 - **Tables**: `frames`, `app_usage`, in the connection's dataset
 - **dbt**: none yet
 - **Dashboard**: none yet
@@ -65,7 +65,7 @@ screenshots themselves are not masked and are not sent.
 To see what a batch would contain before anything is sent:
 
 ```bash
-python -m src.agent collect --config agent.json --collector <id> --out /tmp/batches
+miroir-agent collect --config agent.json --collector <id> --out /tmp/batches
 ```
 
 ## Tables

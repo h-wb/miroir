@@ -537,15 +537,15 @@ Add each through a documented schema change when its operation is implemented.
 
 ### Sending device data with the local agent
 
-Some sources exist only on a personal machine. The agent in `src/agent/` (decision
-030) reads them there and posts what is new to a connection's receiving URL. It uses
-only the Python standard library, so it runs from a checkout of this repo with any
-Python 3.10 or later and no install step:
+Some sources exist only on a personal machine. The agent in `agent/` (the
+`miroir-agent` package, decisions 030 and 031) reads them there and posts what is
+new to a connection's receiving URL. It uses only the Python standard library and
+installs on its own; [its README](../../agent/README.md) covers installing it.
 
 ```bash
-python -m src.agent run     --config agent.json [--collector ID] [--max-batches N]
-python -m src.agent collect --config agent.json --collector ID --out DIR
-python -m src.agent status  --config agent.json
+miroir-agent run     --config agent.json [--collector ID] [--max-batches N]
+miroir-agent collect --config agent.json --collector ID --out DIR
+miroir-agent status  --config agent.json
 ```
 
 `run` is one pass: deliver a pending batch if there is one, otherwise collect, write

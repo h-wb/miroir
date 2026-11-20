@@ -20,7 +20,7 @@ import requests
 from requests.hooks import dispatch_hook
 
 from src.core.config import parse_miroir
-from src.integrations.sources import open_fetch, open_import
+from src.core.sources import open_fetch, open_import
 from tests.test_miroir import example
 
 

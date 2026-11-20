@@ -7,8 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from src.agent.collectors.screenmemory import SOURCE_ERROR, collect
-from src.integrations.screenmemory.formats import read_records, validate_batch
+from miroir_agent.collectors.screenmemory import SOURCE_ERROR, collect
 
 _TS = 1795132100
 
@@ -32,69 +31,10 @@ class ScreenMemoryCollectorTests(unittest.TestCase):
             db.execute("CREATE TABLE usage(timestamp, identifier)")
             db.executemany("INSERT INTO usage VALUES (?, ?)", apps)
 
-    def test_mask_exclude_and_connector_contract(self) -> None:
-        token = "gh" + "p_" + "a1B2" * 9
-        paths = [f"date/{i}.jpeg" for i in range(5)]
-        self._source(
-            [
-                (_TS + i, paths[i], text)
-                for i, text in enumerate(
-                    (
-                        "ordinary",
-                        token,
-                        "app fixture text",
-                        "ABOUT:logins",
-                        "too recent",
-                    )
-                )
-            ][:-1]
-            + [(_TS + 41, paths[4], "too recent")],
-            [
-                (_TS, "app.example.browser"),
-                (_TS + 2, "com.apple.Passwords"),
-                (_TS + 41, "app.example.new"),
-            ],
-        )
-        batch = collect(self.options, None, self.out, self.now)
-        assert batch is not None
-        validate_batch(self.out)
+    def _records(self) -> list[dict[str, Any]]:
         with gzip.open(self.out, "rt", encoding="utf-8") as gz:
-            raw = gz.read()
-        self.assertNotIn(token, raw)
-        self.assertNotIn("app fixture text", raw)
-        self.assertNotIn("ABOUT:logins", raw)
-        self.assertNotIn("too recent", raw)
-        lines = [json.loads(line) for line in raw.splitlines()]
-        records = list(read_records(self.out))
-        self.assertEqual(records, lines[1:-1])
-        frames = records[:4]
-        self.assertEqual([row["image_path"] for row in frames], paths[:4])
-        self.assertEqual(
-            [row["text"] for row in frames], ["ordinary", "[masked:token]", None, None]
-        )
-        self.assertEqual(
-            [row["withheld"] for row in frames], [None, None, "excluded_app", "marker"]
-        )
-        self.assertEqual([row["masked"] for row in frames], [0, 1, 0, 0])
-        self.assertEqual(
-            [row["bundle_id"] for row in records[4:]],
-            ["app.example.browser", "com.apple.Passwords"],
-        )
-        self.assertEqual(
-            lines[-1],
-            {
-                "type": "trailer",
-                "frames": 4,
-                "app_usage": 2,
-                "masked": {"token": 1},
-                "withheld": {"excluded_app": 1, "marker": 1},
-            },
-        )
-        self.assertEqual(batch.cursor, {"frames": _TS + 3, "app_usage": _TS + 2})
-        self.assertIsNone(
-            collect(self.options, batch.cursor, self.root / "second.gz", self.now)
-        )
-        self.assertFalse((self.root / "second.gz").exists())
+            lines = [json.loads(line) for line in gz]
+        return lines[1:-1]  # Skip the batch header and trailer.
 
     def test_paging_keeps_timestamp_group_together(self) -> None:
         self._source(
@@ -110,17 +50,17 @@ class ScreenMemoryCollectorTests(unittest.TestCase):
         assert first is not None
         self.assertTrue(first.more)
         self.assertEqual(first.cursor, {"frames": _TS + 1, "app_usage": 0})
-        records = list(read_records(self.out))
+        records = list(self._records())
         second = collect(self.options, first.cursor, self.out, self.now)
         assert second is not None
         self.assertTrue(second.more)
         self.assertEqual(second.cursor, {"frames": _TS + 2, "app_usage": 0})
-        records.extend(read_records(self.out))
+        records.extend(self._records())
         third = collect(self.options, second.cursor, self.out, self.now)
         assert third is not None
         self.assertFalse(third.more)
         self.assertEqual(third.cursor, {"frames": _TS + 3, "app_usage": 0})
-        records.extend(read_records(self.out))
+        records.extend(self._records())
         self.assertEqual(
             [row["image_path"] for row in records], [f"{i}.jpeg" for i in range(5)]
         )
@@ -138,7 +78,10 @@ class ScreenMemoryCollectorTests(unittest.TestCase):
         batch = collect(self.options, None, self.out, self.now)
         assert batch is not None
         self.assertEqual(batch.counts["skipped"], 3)
-        validate_batch(self.out)
+        self.assertEqual(
+            [row["image_path"] for row in self._records() if row["type"] == "frame"],
+            ["ok.jpeg"],
+        )
         self.assertIsNone(collect(self.options, batch.cursor, self.out, self.now))
 
     def test_fractional_timestamps_use_whole_seconds(self) -> None:
@@ -154,7 +97,7 @@ class ScreenMemoryCollectorTests(unittest.TestCase):
         batch = collect(self.options, None, self.out, now)
         assert batch is not None
         self.assertEqual(batch.cursor, {"frames": _TS, "app_usage": _TS})
-        records = list(read_records(self.out))
+        records = list(self._records())
         self.assertEqual([row["ts"] for row in records], [_TS] * 3)
         self.assertEqual(
             [row["image_path"] for row in records[:2]], ["a.jpeg", "b.jpeg"]
@@ -171,7 +114,7 @@ class ScreenMemoryCollectorTests(unittest.TestCase):
             )
         self.assertIsNotNone(collect(self.options, None, self.out, self.now))
         self.assertEqual(
-            [r["text"] for r in read_records(self.out)], ["blob \ufffd", "text \ufffd"]
+            [r["text"] for r in self._records()], ["blob \ufffd", "text \ufffd"]
         )
 
     def test_fetches_entire_second_when_page_is_full(self) -> None:
@@ -184,7 +127,7 @@ class ScreenMemoryCollectorTests(unittest.TestCase):
         assert batch is not None
         self.assertTrue(batch.more)
         self.assertEqual(batch.cursor, {"frames": _TS, "app_usage": _TS})
-        records = list(read_records(self.out))
+        records = list(self._records())
         self.assertEqual(
             [r["image_path"] for r in records[:3]], [f"{i}.jpeg" for i in range(3)]
         )
