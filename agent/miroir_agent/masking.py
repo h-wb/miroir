@@ -33,6 +33,30 @@ _LOWER = re.compile(r"[a-z]")
 _UPPER = re.compile(r"[A-Z]")
 _DIGIT = re.compile(r"[0-9]")
 _CARD = re.compile(r"[0-9]+(?:[ -][0-9]+)*")
+_AUTHORITY = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://([^/?#]*)")
+_SECRET_NAMES = {
+    "key",
+    "code",
+    "auth",
+    "sig",
+    "sid",
+    "otp",
+    "jwt",
+    "pwd",
+    "passwd",
+    "assertion",
+    "samlresponse",
+    "credential",
+}
+_SECRET_SUFFIXES = (
+    "token",
+    "secret",
+    "password",
+    "signature",
+    "apikey",
+    "accesskey",
+    "sessionid",
+)
 
 
 def _private_keys(text: str) -> Iterator[tuple[int, int]]:
@@ -129,3 +153,51 @@ def mask(text: str) -> tuple[str, dict[str, int]]:
             updated.append((part[offset:], False))
         parts = updated
     return "".join(part for part, _ in parts), dict(counts)
+
+
+def mask_tokens(text: str) -> tuple[str, dict[str, int]]:
+    parts: list[str] = []
+    offset = count = 0
+    for start, end in _matches(text, _TOKEN):
+        parts.extend((text[offset:start], "[masked:token]"))
+        offset = end
+        count += 1
+    parts.append(text[offset:])
+    return "".join(parts), {"token": count} if count else {}
+
+
+def mask_url(text: str) -> tuple[str, dict[str, int]]:
+    counts: Counter[str] = Counter()
+    if match := _AUTHORITY.match(text):
+        userinfo, at, _ = match[1].rpartition("@")
+        _, colon, password = userinfo.partition(":")
+        if at and colon and password:
+            end = match.start(1) + len(userinfo)
+            text = text[: end - len(password)] + "[masked:url_userinfo]" + text[end:]
+            counts["url_userinfo"] += 1
+
+    def redact(params: str) -> str:
+        parts = re.split(r"([&;])", params)
+        for i in range(0, len(parts), 2):
+            name, equals, value = parts[i].partition("=")
+            normal = name.lower().replace("-", "").replace("_", "")
+            if (
+                equals
+                and value
+                and (normal in _SECRET_NAMES or normal.endswith(_SECRET_SUFFIXES))
+            ):
+                parts[i] = name + "=[masked:url_param]"
+                counts["url_param"] += 1
+        return "".join(parts)
+
+    before_fragment, hash_, fragment = text.partition("#")
+    base, question, query = before_fragment.partition("?")
+    route, separator, fragment_query = fragment.partition("?")
+    if separator and "=" not in route:
+        fragment = route + separator + redact(fragment_query)
+    else:
+        fragment = redact(fragment)
+    text = base + question + redact(query) + hash_ + fragment
+    text, tokens = mask_tokens(text)
+    counts.update(tokens)
+    return text, dict(counts)

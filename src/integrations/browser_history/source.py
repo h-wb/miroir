@@ -8,7 +8,7 @@ from typing import Any
 import dlt
 from dlt.extract import DltResource
 
-from src.integrations.browser_history.formats import readonly
+from src.integrations.browser_history.formats import BATCH_TABLES, read_rows, readonly
 
 
 @dlt.source(name="browser_history")
@@ -59,4 +59,22 @@ def browser_snapshot_source(snapshot_path: str) -> list[DltResource]:
         zen_places_metadata,
         zen_origins,
         zen_bookmarks,
+    ]
+
+
+@dlt.source(name="browser_history")
+def browser_batch_source(path: Path) -> list[DltResource]:
+    def rows(table: str) -> Iterator[dict[str, Any]]:
+        for name, row in read_rows(path):
+            if name == table:
+                yield row
+
+    return [
+        dlt.resource(
+            rows(table),
+            name="zen_" + table.removeprefix("moz_"),
+            write_disposition="merge",
+            primary_key="id",
+        )
+        for table in BATCH_TABLES
     ]

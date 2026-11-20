@@ -65,6 +65,7 @@ own connection and nothing else.
 | Collector | Source | What it sends and withholds |
 |---|---|---|
 | `screenmemory` | ScreenMemory's `text.sqlite` and `usage.sqlite` | [docs/sources/screenmemory.md](../docs/sources/screenmemory.md) |
+| `zen_history` | Zen or Firefox `places.sqlite` (read from a copy) | [docs/sources/browser-history.md](../docs/sources/browser-history.md) |
 
 ## Layout
 

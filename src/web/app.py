@@ -329,6 +329,7 @@ def create_app(
                 # Received files take the format's default import options.
                 import_now=True,
                 origin="webhook",
+                input_format=request.query_params.get("format"),
             )
         finally:
             path.unlink(missing_ok=True)

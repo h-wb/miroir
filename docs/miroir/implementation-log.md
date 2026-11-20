@@ -1733,3 +1733,29 @@ clean on both. The agent installs alone from its folder
 Not done: CI still lints and type-checks `src tests scripts` only; covering
 `agent/` needs a workflow change, posted on the pull request for the owner to
 apply. Nothing is deployed.
+
+## 2026-11-20 — Browser history through the agent (decision 032)
+
+The `browser_history` connector gained a second format, `firefox_places_batch`,
+loading into the same `zen_*` tables as snapshots: a test imports a snapshot and
+then a batch into one connection and checks the merge. The receiving URL now
+passes `?format=` to the same service call the upload route uses.
+
+The agent gained a `zen_history` collector. It copies `places.sqlite` and its WAL,
+never opening the live file, and sends new visits, the pages they touch, updated
+page interactions, and origins and bookmarks when their digest changes. Two
+masking functions were added for addresses and titles. Delivery now sets each
+collector's format on the receiving URL.
+
+An independent review found two flaws in the design as first specified, both
+fixed with tests: visits were lost when the browser reused the ids of cleared
+history, and a copy taken across a checkpoint could pass the integrity check while
+missing rows. It also found that a plain receiving URL would have been refused
+forever, which is why the agent now names the format.
+
+Validation: the server suite and the agent suite are green, with ruff and mypy
+clean on both. A probe outside the suite confirmed the reused-id case end to end.
+
+Not done: the collector has run only on invented databases, never on a real Zen
+profile. Nothing is deployed, and the existing snapshot task on the Mac is
+unchanged.

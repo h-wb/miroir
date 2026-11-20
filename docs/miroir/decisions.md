@@ -1092,3 +1092,56 @@ Open:
   release.
 - CI lints and type-checks `src tests scripts` by explicit paths. Covering `agent/`
   needs a workflow change.
+
+## 032 — The receiving URL takes a format; browser history gains incremental batches
+
+Status: accepted, 2026-11-20. Refines 017, 021 and 030.
+
+Decision 030 expected browser history to move to the agent as full snapshots, once
+received files had the retention that folder files have. Building it showed a
+better fit: the agent keeps a cursor, so it can send only what is new. Small
+batches need no retention rule, and what leaves the machine can be masked row by
+row, which a database snapshot does not allow without rewriting it.
+
+**`browser_history` has a second format, `firefox_places_batch`.** Gzip JSON
+Lines: a header, `row` records naming their Places table, and a trailer with the
+row count per table. It loads through the same dlt source and resource names as
+the snapshot format, so both feed the same `zen_*` tables and a connection can
+take either. The snapshot format stays first and unchanged.
+
+**The receiving URL takes `?format=<id>`.** It used the connector's first format
+only, which was enough while each connector had one. The upload route already
+took the parameter; receiving now does too. No parameter keeps the old behaviour,
+and an unknown id is refused before anything is stored. The delivery token's
+scope is unchanged.
+
+**The agent names the format itself.** Each collector declares the format it
+writes, and delivery sets the parameter on the configured URL. Someone
+configuring a machine gives the connection's plain receiving URL and cannot get
+this wrong.
+
+**The cursor has to survive reused ids.** Places tables use integer keys without
+`AUTOINCREMENT`, so clearing recent history frees the newest ids and the next
+visits take them. A cursor on the id alone would skip those visits for good. The
+collector therefore also takes any visit whose time is later than every visit
+sent so far. The first design missed this; a review caught it.
+
+**It reads a copy, and checks the copy is one moment in time.** The browser holds
+an exclusive lock, so the collector copies the database and its WAL. Two files
+copied in turn can straddle a checkpoint and still pass an integrity check, so it
+compares both files' size and modification time before and after, and retries.
+
+**Addresses are masked on the machine** by default: a password in the address,
+the values of secret-named query and fragment parameters, and known token shapes.
+Path segments are left alone, since a document's id is what makes a history row
+useful. This is narrower than the screen-text rules of decision 030 on purpose.
+
+Consequences:
+
+- Received-file retention is no longer a precondition for browser history. It is
+  still missing for any future source that can only send snapshots.
+- A page that changes without a new visit (a title, a recalculated score) is not
+  sent again until it is visited.
+- An imported batch is read once per table. Batches are small; revisit if a
+  source ever sends large ones.
+- The snapshot path through a watched folder keeps working and masks nothing.

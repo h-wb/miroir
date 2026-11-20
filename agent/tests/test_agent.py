@@ -2,25 +2,65 @@ import ast
 import io
 import json
 import os
+import sqlite3
 import stat
 import sys
 import unittest
-from contextlib import redirect_stdout
+from contextlib import closing, redirect_stdout
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Thread
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 from miroir_agent.cli import main
 from miroir_agent.collectors import COLLECTORS, Collected
 from miroir_agent.config import load_config
 from miroir_agent.deliver import deliver
-from miroir_agent.masking import mask
+from miroir_agent.masking import mask, mask_tokens, mask_url
 from miroir_agent.state import State, write_json
 
 
 class MaskingTests(unittest.TestCase):
+    def test_mask_tokens_skips_assignments_and_long_random_strings(self) -> None:
+        token = "gh" + "p_" + "a1B2" * 9
+        opaque = "aA91bX87zD0" * 4
+        self.assertEqual(
+            mask_tokens(f"password={opaque} {token}"),
+            (
+                f"password={opaque} [masked:token]",
+                {"token": 1},
+            ),
+        )
+        self.assertEqual(mask_tokens(opaque), (opaque, {}))
+
+    def test_mask_url_preserves_encoding_and_masks_by_parameter_name(self) -> None:
+        token = "gh" + "p_" + "a1B2" * 9
+        url = (
+            "https://reader:p%40ss@[::1]/a%2Fb?q=a+b&SAMLResponse=x&client-Signature=y#/route?access_key=z&other="
+            + token
+        )
+        self.assertEqual(
+            mask_url(url),
+            (
+                (
+                    "https://reader:[masked:url_userinfo]@[::1]/a%2Fb?q=a+b&SAMLResponse=[masked:url_param]"
+                    "&client-Signature=[masked:url_param]#/route?access_key=[masked:url_param]&other=[masked:token]"
+                ),
+                {"url_userinfo": 1, "url_param": 3, "token": 1},
+            ),
+        )
+        self.assertEqual(
+            mask_url("https://example.org/#token=a?b"),
+            (
+                "https://example.org/#token=[masked:url_param]",
+                {"url_param": 1},
+            ),
+        )
+        public = "https://reader@example.org/a%2Fb?q=a+b#anchor"
+        self.assertEqual(mask_url(public), (public, {}))
+
     def test_prefixed_assignments(self) -> None:
         for prefix, value in (
             ("POSTGRES_PASSWORD=", "S3cret" + "pass9"),
@@ -144,7 +184,11 @@ class MaskingTests(unittest.TestCase):
 class _Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         self.server.posts.append(
-            (self.headers, self.rfile.read(int(self.headers["Content-Length"])))
+            (
+                self.path,
+                self.headers,
+                self.rfile.read(int(self.headers["Content-Length"])),
+            )
         )
         self.send_response(self.server.response_code)
         self.send_header("Location", "/elsewhere")
@@ -258,6 +302,46 @@ class AgentTests(unittest.TestCase):
                 ):
                     load_config(self.path)
 
+    def test_zen_delivery_retries_and_persists_digest_cursor(self) -> None:
+        profile = self.root / "profile"
+        profile.mkdir()
+        source = profile / "places.sqlite"
+        with closing(sqlite3.connect(source)) as db, db:
+            db.executescript("""
+                CREATE TABLE moz_places(id INTEGER PRIMARY KEY, url TEXT);
+                CREATE TABLE moz_historyvisits(id INTEGER PRIMARY KEY, place_id INTEGER, visit_date INTEGER);
+                CREATE TABLE moz_origins(id INTEGER PRIMARY KEY, host TEXT);
+                INSERT INTO moz_places VALUES (1, 'https://example.org/');
+                INSERT INTO moz_origins VALUES (1, 'example.org');
+            """)
+        self.item.update(collector="zen_history", options={"places_path": str(source)})
+        self.path.write_text(json.dumps(self.raw))
+
+        self.server.response_code = 503
+        self.assertEqual(self._cli("run")[0], 1)
+        self.assertTrue(self.state.pending)
+        self.assertFalse(self.state.cursor.exists())
+        self.server.response_code = 201
+        self.assertEqual(self._cli("run")[0], 0)
+        self.assertFalse(self.state.pending)
+        cursor = json.loads(self.state.cursor.read_text())
+        self.assertRegex(cursor["origins_digest"], r"^[0-9a-f]{64}$")
+        self.assertEqual(self._cli("status")[0], 0)
+        code, output = self._cli("run")
+        self.assertEqual(code, 0)
+        self.assertIn("nothing_new", output)
+        self.assertEqual(len(self.server.posts), 2)
+        self.assertEqual(self.server.posts[0][2], self.server.posts[1][2])
+        for path, _, _ in self.server.posts:
+            self.assertEqual(
+                parse_qs(urlsplit(path).query), {"format": ["firefox_places_batch"]}
+            )
+
+        self.raw["state_dir"] = str(profile / "state")
+        self.path.write_text(json.dumps(self.raw))
+        self.assertEqual(self._cli("run")[0], 1)
+        self.assertFalse((profile / "state").exists())
+
     def test_atomic_write_syncs_file_then_directory(self) -> None:
         path = self.root / "atomic.json"
         replace = os.replace
@@ -284,6 +368,10 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(steps, ["file", "replace", "directory"])
 
     def test_delivery(self) -> None:
+        self.item["receive_url"] += (
+            "?format=wrong&filter=a%2Fb&f%6Frmat=also-wrong&filter="
+        )
+        self.path.write_text(json.dumps(self.raw))
         config = load_config(self.path).collectors[0]
         body = self.root / "batch.gz"
         body.write_bytes(b"batch body")
@@ -294,13 +382,20 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(observed.acknowledged, code == 201)
         self.assertEqual(len(self.server.posts), 3)
         self.assertFalse(self.server.gets)
-        for headers, contents in self.server.posts:
+        for path, headers, contents in self.server.posts:
+            self.assertEqual(
+                urlsplit(path).query, "filter=a%2Fb&filter=&format=screenmemory_batch"
+            )
             self.assertEqual(headers["Authorization"], f"Bearer {self.token}")
             self.assertEqual(headers["Content-Type"], "application/gzip")
             self.assertEqual(contents, body.read_bytes())
+        self.assertEqual(config.receive_url, self.item["receive_url"])
 
     def test_retry_lock_limit_and_status(self) -> None:
-        with patch.dict(COLLECTORS, {"screenmemory": self._fake}):
+        with patch.dict(
+            COLLECTORS,
+            {"screenmemory": COLLECTORS["screenmemory"]._replace(collect=self._fake)},
+        ):
             self.state.batch.parent.mkdir(parents=True)
             self.state.batch.write_bytes(b"incomplete batch")
             self.server.response_code = 500
@@ -320,7 +415,7 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(self._cli("run")[0], 0)
             self.assertEqual(self.calls, [None])
             self.assertEqual(
-                [body for _, body in self.server.posts], [pending, pending]
+                [body for _, _, body in self.server.posts], [pending, pending]
             )
             self.assertFalse(self.state.pending)
             self.assertEqual(json.loads(self.state.cursor.read_text()), {"frames": 1})
@@ -337,7 +432,10 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(status["status"]["artifact_id"], "artifact-one")
 
     def test_missing_token_preserves_pending_batch(self) -> None:
-        with patch.dict(COLLECTORS, {"screenmemory": self._fake}):
+        with patch.dict(
+            COLLECTORS,
+            {"screenmemory": COLLECTORS["screenmemory"]._replace(collect=self._fake)},
+        ):
             del os.environ["MIROIR_TEST_TOKEN"]
             self.assertEqual(self._cli("run")[0], 1)
             self.assertTrue(self.state.pending)
@@ -355,7 +453,10 @@ class AgentTests(unittest.TestCase):
             p: p.read_bytes() for p in self.state.directory.rglob("*") if p.is_file()
         }
         out = self.root / "out"
-        with patch.dict(COLLECTORS, {"screenmemory": self._fake}):
+        with patch.dict(
+            COLLECTORS,
+            {"screenmemory": COLLECTORS["screenmemory"]._replace(collect=self._fake)},
+        ):
             del os.environ["MIROIR_TEST_TOKEN"]
             self.assertEqual(
                 self._cli(
