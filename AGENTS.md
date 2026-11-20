@@ -33,6 +33,10 @@ Miroir (decision 014); history keeps its own words.
   implements the same three verbs.
 - `src/pipelines/miroir.py` — the Prefect flow `sync_connection` (one
   deployment per connection), and `transform.py` (dbt build).
+- `src/agent/` — the local agent for device-only sources (decision 030):
+  collectors, masking, spool and delivery to a connection's receiving URL.
+  **Standard library only**; it must never import the rest of `src/` (a test
+  enforces it), so a laptop runs it without dlt, dbt or Prefect.
 - `src/integrations/<name>/` — one package per connector: settings, credentials,
   check, resources, and inputs — a `fetch` and/or file `formats` with typed
   import options (decision 021) — plus its dlt source (`source.py`);

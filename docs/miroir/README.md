@@ -97,7 +97,8 @@ ListenBrainz, GitHub (personal access token for the configured login; the token'
 account is checked), and Bike Share Toronto (mobile-app member ID and authorization
 token) fetch. Apple Health reads Health Auto Export JSON (option `role`:
 `ongoing`/`historical`); browser history reads Firefox/Zen Places snapshots, plain or
-gzip. Native Apple Health XML is not supported. Each connector package under
+gzip; ScreenMemory reads the batches the local agent sends (see below). Native
+Apple Health XML is not supported. Each connector package under
 `src/integrations/<name>/` owns its settings, credentials, check, resources, inputs,
 and dlt sources; the registry only lists them. The legacy `src/sources/` and per-source
 flows were retired after the 2026-11-11 cutovers.
@@ -533,6 +534,50 @@ within a miroir. The first design assumes one warehouse per miroir.
 Configurable destinations, machine-local overlays, and stored immutable revision
 snapshots remain outside this schema. Unsupported fields fail validation rather than being ignored.
 Add each through a documented schema change when its operation is implemented.
+
+### Sending device data with the local agent
+
+Some sources exist only on a personal machine. The agent in `src/agent/` (decision
+030) reads them there and posts what is new to a connection's receiving URL. It uses
+only the Python standard library, so it runs from a checkout of this repo with any
+Python 3.10 or later and no install step:
+
+```bash
+python -m src.agent run     --config agent.json [--collector ID] [--max-batches N]
+python -m src.agent collect --config agent.json --collector ID --out DIR
+python -m src.agent status  --config agent.json
+```
+
+`run` is one pass: deliver a pending batch if there is one, otherwise collect, write
+the batch to a spool and deliver it. The cursor moves only after Miroir answers 200
+or 201; anything else leaves the batch in the spool for the next pass. `collect`
+writes the batches to a folder and sends nothing, to inspect what would leave the
+machine. `status` shows each collector's cursor and last outcome. None of them
+prints source content.
+
+```json
+{
+  "state_dir": "~/Library/Application Support/miroir-agent",
+  "collectors": [
+    {
+      "id": "screen_macbook",
+      "collector": "screenmemory",
+      "receive_url": "https://miroir.example/api/connections/screen_macbook/receive",
+      "token_env": "MIROIR_TOKEN_SCREEN_MACBOOK",
+      "options": {"data_dir": "~/ScreenMemoryData", "cutoff_ts": 0}
+    }
+  ]
+}
+```
+
+To set one up: add the connection in Miroir (one per machine and source), create its
+delivery token under **Settings → Data delivery**, put the token in the environment
+variable the configuration names, and have the operating system's scheduler start
+`run` about hourly. `receive_url` must be `https`. The token can only deliver to
+its own connection. Each delivery requests an import, so a first pass over a long
+history is best started by hand with a larger `--max-batches`.
+
+Collectors today: `screenmemory` ([what it sends and what it withholds](../sources/screenmemory.md)).
 
 ## Validate in an isolated environment
 

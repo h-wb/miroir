@@ -51,9 +51,10 @@ def places(path: Path) -> Path:
 
 
 class ConnectorContractTests(unittest.TestCase):
-    def test_every_integration_recommends_a_cataloged_analysis(self):
+    def test_integration_analysis_is_none_or_cataloged(self):
         for definition in INTEGRATIONS.values():
-            self.assertIn(definition.analysis, PACKAGES, definition.name)
+            if definition.analysis is not None:
+                self.assertIn(definition.analysis, PACKAGES, definition.name)
             self.assertTrue(definition.fetch or definition.formats)
 
     def test_resource_selection_is_validated_and_applied(self):
