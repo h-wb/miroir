@@ -28,9 +28,14 @@ class Config:
     collectors: list[CollectorConfig]
 
 
-def _object(value: Any, allowed: set[str]) -> dict[str, Any]:
-    if not isinstance(value, dict) or value.keys() - allowed:
-        raise ValueError("Invalid agent configuration object")
+def _object(value: Any, allowed: set[str], where: str) -> dict[str, Any]:
+    # Key names come from the configuration file, not from a source, so naming
+    # them is safe; values are never echoed.
+    if not isinstance(value, dict):
+        raise ValueError(f"{where}: expected an object")  # noqa: TRY004
+    unknown = sorted(str(key)[:40] for key in value.keys() - allowed)
+    if unknown:
+        raise ValueError(f"{where}: unknown key {', '.join(unknown[:5])}")
     return value
 
 
@@ -92,7 +97,9 @@ def _since(options: dict[str, Any]) -> dict[str, int]:
 def _options(name: str, raw: Any) -> dict[str, Any]:
     if name == "zen_history":
         options = _object(
-            raw, {"places_path", "profiles_dir", "max_rows", "mask_urls", "since"}
+            raw,
+            {"places_path", "profiles_dir", "max_rows", "mask_urls", "since"},
+            "options",
         )
         max_rows = _integer(options, "max_rows", 20000, 1)
         if max_rows > 200000:
@@ -113,7 +120,7 @@ def _options(name: str, raw: Any) -> dict[str, Any]:
             "mask_urls": mask_urls,
         }
     if name != "screenmemory":
-        return _object(raw, set())
+        return _object(raw, set(), "options")
     options = _object(
         raw,
         {
@@ -126,6 +133,7 @@ def _options(name: str, raw: Any) -> dict[str, Any]:
             "media",
             "media_dir",
         },
+        "options",
     )
     max_rows = _integer(options, "max_rows", 20000, 1)
     if max_rows > 200000:
@@ -155,8 +163,8 @@ def load_config(path: Path) -> Config:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, RecursionError):
-        raise ValueError("Cannot read agent configuration") from None
-    obj = _object(raw, {"state_dir", "collectors"})
+        raise ValueError("cannot read the file, or it is not valid JSON") from None
+    obj = _object(raw, {"state_dir", "collectors"}, "top level")
     state_dir = Path(_string(obj, "state_dir")).expanduser()
     items = obj.get("collectors")
     if type(items) is not list:
@@ -174,6 +182,7 @@ def load_config(path: Path) -> Config:
                 "timeout_seconds",
                 "options",
             },
+            "collector",
         )
         id_ = _string(item, "id")
         if not re.fullmatch(r"[a-z][a-z0-9_]{0,23}", id_) or id_ in ids:

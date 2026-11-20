@@ -396,7 +396,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         config = load_config(args.config)
-    except (OSError, ValueError, RuntimeError):
+    except ValueError as error:
+        # Configuration messages are fixed text plus key names, never values.
+        print(f"Invalid agent configuration: {error}")
+        return 1
+    except (OSError, RuntimeError):
         print("Invalid agent configuration")
         return 1
     collectors = config.collectors
