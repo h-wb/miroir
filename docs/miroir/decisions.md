@@ -897,3 +897,111 @@ converged installation still plans nothing.
 Kept on purpose: slugged schedules are removed before an update. Prefect refuses
 to replace them with unslugged ones, and giving ours a slug would not help,
 because Prefect then updates by slug and leaves a hand-added one in place.
+
+## 030 — A local agent delivers device sources through the receiving URL
+
+Status: proposed, 2026-11-20. Builds on 017 and 021; answers the "clients as
+producers" item of the product plan.
+
+Some sources exist only on a personal machine: a browser's history database, a
+screen recorder's text and app-usage tables, a messages archive. Today one of them
+(browser history) is collected by a scheduled task kept in the machine's own
+configuration repo. The task copies the tables the connector reads into a file in
+a synced folder, and the sync client carries it to a watched folder. That works
+for one source and has three costs as sources are added:
+
+- The contract is split. The task names the tables the connector reads, in another
+  repo, so a change to either side needs a matching change to the other and
+  nothing checks it.
+- Nothing is acknowledged. A stopped task, a paused sync client and a quiet source
+  look the same until someone notices stale data.
+- Every run sends a full snapshot. With no record of what arrived, the task cannot
+  send only what is new.
+
+**Miroir ships a small agent for these sources.** It runs on the machine, reads
+each enabled local source, and delivers what is new to that connection's receiving
+URL (decision 017). It is one more sender to a transport that exists: the file it
+sends is registered, validated, deduplicated and imported like an upload. No new
+server endpoint is needed.
+
+The product plan asks that a client's transport, identity, batching and delivery
+acknowledgement be specified when a real one is built:
+
+- **Transport.** HTTPS `POST` of one file to `/api/connections/{id}/receive`. The
+  agent never writes to artifact storage or to a server folder.
+- **Identity.** One connection per source instance, so a second machine is a second
+  connection, as a second account already is. The agent holds each connection's
+  receive-only token and nothing else: it cannot read data, history or
+  configuration. It reads tokens from its environment and has no secret store.
+- **Batching.** A collector returns the records newer than a cursor as one file, in
+  a format its connector declares, together with the next cursor. Delivery runs
+  about hourly: each receipt requests an import, and with Prefect configured each
+  import is a flow run in its own job (decision 012). A collector may still send a
+  full snapshot when that is simpler; the merge handles the overlap.
+- **Acknowledgement.** A 2xx receipt is the acknowledgement. Only then does the
+  agent advance that collector's cursor and delete the file. Anything else leaves
+  the file in a local spool, retried on the next run, so a machine that cannot
+  reach Miroir loses nothing. The connection's last-received time is the machine's
+  delivery health.
+
+**The agent keeps delivery state only.** Its cursor says what was acknowledged, not
+what was loaded; load state stays with dlt. A lost or reset cursor sends records
+again, which is safe for a connector that merges on source keys, as the file
+connectors do. A first load of long history is an ordinary upload, and the agent
+starts from a configured cutoff.
+
+**Collectors ship raw records.** They copy the source's rows as they are, selecting
+columns and nothing more: no cleaning, summarising or filtering. Interpretation
+belongs to the parser and the models, where it can be run again over history when
+it changes. Collectors open sources read-only and never write inside a source
+application's folder.
+
+**It lives in this repo but not in the server's package.** The agent and its
+collectors are a separate tree, `src/agent/`, that imports only the Python
+standard library, so a laptop does not install dlt, dbt or Prefect to send a file.
+Collectors cannot sit inside the connector packages: importing a connector imports
+its settings models. A test links the two halves instead: each collector's output
+on a fixture must pass its connector's format validator and parser. A second test
+fails if anything under `src/agent/` imports outside the standard library. How the
+agent is installed on a machine is left to the first implementation; with nothing
+to build, a pinned checkout is enough.
+
+**The machine's configuration stays outside.** Which collectors are enabled, the
+receiving URLs, the schedule and where tokens come from belong to whatever
+configures the machine. The agent runs one pass and exits; the operating system's
+scheduler starts it.
+
+Not in scope, on purpose:
+
+- Media that Miroir never parses (screenshots, attachments). Records carry a
+  relative path; storing and moving the files is the installation's business.
+- Live events. A feed that must arrive within seconds needs a path that does not
+  start a flow run per delivery, and is a separate decision.
+- Remote control. The server never sends the agent instructions.
+
+Alternatives considered:
+
+- *Keep per-source tasks and a synced folder.* Fine for one source; the costs above
+  grow with each one. The watched folder stays supported, and a collector's file
+  can still be dropped into one by hand.
+- *The agent writes into the synced folder.* Offline queueing comes for free, but
+  each batch is then stored three times and delivery is still unacknowledged.
+- *The server pulls from the machine.* A laptop sleeps and roams, and the server
+  would hold a credential into it.
+- *Run the existing CLI on the machine.* Its `submit` registers into local artifact
+  storage, not a remote Miroir, and it brings the whole dependency set.
+
+Consequences:
+
+- Received artifacts are kept (decision 021). Hourly incremental batches are small,
+  but full snapshots would accumulate. Received files need the per-connection
+  retention that folder files have (`keep_last`) before a full-snapshot source
+  moves to the agent.
+- Where Miroir is reachable only from the home network or a VPN, the spool is the
+  normal case for a laptop, not an error path.
+- A stolen machine's tokens can inject data into its own connections and do
+  nothing else. Revoking them is per connection (decision 017).
+
+First use: a ScreenMemory connector (OCR text and app-usage tables, both
+append-only and keyed by timestamp) with its collector. Browser history moves to
+the agent after it.
