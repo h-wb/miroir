@@ -1818,3 +1818,28 @@ Validation: the agent suite and the server suite are green, with ruff and mypy
 clean.
 
 Not done: never run on real data.
+
+## 2026-11-20 — Media uploads in small groups (first real run)
+
+The first real media run uploaded one page of 499 screenshots and failed on the
+second, reporting only `failed`. The agent asked for links for a whole page (up
+to 500 files) and then sent them one by one; the links last 15 minutes and the
+run measured about 2.6 seconds per file, so a page needs about 21 minutes. The
+server side could not confirm the cause: Miroir logs no requests, and the
+storage logs were out of reach. Page 1 succeeding at the same pace does not fit
+the expiry explanation, so the cause of that one failure is not proven.
+
+The design flaw is real either way. The agent now asks for links for 25 files at
+a time, sends those four in parallel, confirms them, and moves on, so a link is
+used within seconds. Files confirmed before a later failure stay counted. A
+failure carries a step (`collect`, `links`, `put`, `confirm`), a reason from a
+fixed list and the HTTP status, in the status file and the printed line, with no
+link or key.
+
+An independent review found no blocking defect and four misleading reasons (a
+local file problem reported as a network error, a size change blamed on the
+server's reply, a bad link reply attributed to the PUT, and failures before any
+request carrying no reason), fixed with tests.
+
+Validation: the agent suite (71 tests) and the contract tests are green, with
+ruff and mypy clean. Not yet run against the real bucket.

@@ -4,18 +4,21 @@ import json
 import os
 import sqlite3
 import unittest
+from collections.abc import Callable
 from contextlib import closing, redirect_stderr, redirect_stdout
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from socket import socket
 from tempfile import TemporaryDirectory
-from threading import Thread
+from threading import Event, Lock, Thread
+from time import sleep
 from unittest.mock import patch
 from urllib.parse import urlsplit
 
 from miroir_agent.cli import main
-from miroir_agent.collectors import MediaItem
+from miroir_agent.collectors import COLLECTORS, MediaItem
 from miroir_agent.config import load_config
-from miroir_agent.media import _NoRedirect, _put, deliver_media
+from miroir_agent.media import MediaFailure, _NoRedirect, _put, deliver_media
 from miroir_agent.state import State
 
 from .test_dates import local_zone
@@ -25,6 +28,7 @@ START = "2023-11-14T22:13:20Z"
 END = "2023-11-14T22:13:23Z"
 KEY = "source-image.jpg"
 TEXT = "fixture screen text"
+PRIVATE = "private-link"
 
 
 class MediaTests(unittest.TestCase):
@@ -41,6 +45,13 @@ class MediaTests(unittest.TestCase):
         self.confirms: list[list[dict]] = []
         self.puts: list[tuple[str, str, bytes, str | None]] = []
         self.queries: list[str] = []
+        self.media_requests: list[str] = []
+        self.stored: set[str] = set()
+        self.active_puts = 0
+        self.peak_puts = 0
+        self.put_lock = Lock()
+        self.release_timeout = Event()
+        self.addCleanup(self.release_timeout.set)
         self.mode = "upload"
         self.row_posts = 0
         self.row_batches: list[list[dict]] = []
@@ -77,12 +88,24 @@ class MediaTests(unittest.TestCase):
                     fixture.queries.append(url.query)
                     items = json.loads(body)["objects"]
                     if url.path.endswith("/uploads"):
+                        fixture.media_requests.append("uploads")
                         fixture.plans.append(items)
+                        if fixture.mode == "timeout":
+                            fixture.release_timeout.wait(3)
+                            return
+                        if fixture.mode == "bad_json":
+                            self.send_response(200)
+                            self.end_headers()
+                            self.wfile.write(TEXT.encode())
+                            return
                         result = {
                             "objects": [fixture.plan(item["key"]) for item in items]
                         }
                     else:
+                        fixture.media_requests.append("confirm")
                         fixture.confirms.append(items)
+                        if fixture.mode != "missing":
+                            fixture.stored.update(item["key"] for item in items)
                         result = {
                             "objects": [
                                 {
@@ -99,6 +122,20 @@ class MediaTests(unittest.TestCase):
                 self.wfile.write(json.dumps(result).encode())
 
             def do_PUT(self) -> None:
+                with fixture.put_lock:
+                    fixture.active_puts += 1
+                    fixture.peak_puts = max(fixture.peak_puts, fixture.active_puts)
+                try:
+                    status = self.put_body()
+                finally:
+                    with fixture.put_lock:
+                        fixture.active_puts -= 1
+                self.send_response(status)
+                if status == 307:
+                    self.send_header("Location", fixture.signed_url)
+                self.end_headers()
+
+            def put_body(self) -> int:
                 body = self.rfile.read(int(self.headers["Content-Length"]))
                 fixture.puts.append(
                     (
@@ -109,19 +146,20 @@ class MediaTests(unittest.TestCase):
                     )
                 )
                 status = {"put_500": 500, "redirect": 307}.get(fixture.mode, 201)
-                self.send_response(status)
-                if status == 307:
-                    self.send_header("Location", fixture.signed_url)
-                self.end_headers()
+                if fixture.mode in {"grouped", "fail_second_group"}:
+                    sleep(0.03)
+                if fixture.mode == "fail_second_group" and len(fixture.plans) == 2:
+                    return 403 if body == b"frame-25.jpg" else 500
+                return status
 
-        self.server = HTTPServer(("127.0.0.1", 0), Handler)
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.addCleanup(self.server.server_close)
         thread = Thread(target=self.server.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(thread.join)
         self.addCleanup(self.server.shutdown)
         self.url = f"http://127.0.0.1:{self.server.server_port}"
-        self.signed_url = self.url + "/put?fixture=private-link"
+        self.signed_url = self.url + "/put?fixture=" + PRIVATE
         self.configure()
 
     def plan(self, key: str) -> dict[str, str]:
@@ -131,6 +169,8 @@ class MediaTests(unittest.TestCase):
             if key == KEY:
                 return {"key": key, "status": "present"}
             return {"key": key, "status": "rejected", "reason": "bad_type"}
+        if self.mode in {"grouped", "fail_second_group"} and key in self.stored:
+            return {"key": key, "status": "present"}
         return {
             "key": key,
             "status": "upload",
@@ -145,6 +185,7 @@ class MediaTests(unittest.TestCase):
         *,
         path: str = "/receive?format=old",
         collector: str = "screenmemory",
+        timeout_seconds: int = 10,
         **options: object,
     ) -> None:
         self.config.write_text(
@@ -157,6 +198,7 @@ class MediaTests(unittest.TestCase):
                             "collector": collector,
                             "token_env": "TEST_TOKEN",
                             "receive_url": self.url + path,
+                            "timeout_seconds": timeout_seconds,
                             "options": {"data_dir": str(self.data), **options}
                             if collector == "screenmemory"
                             else options,
@@ -191,6 +233,29 @@ class MediaTests(unittest.TestCase):
 
     def cursor(self) -> int:
         return json.loads((self.state / "media_cursor.json").read_text())["ts"]
+
+    def assert_failure(
+        self,
+        output: str,
+        step: str,
+        reason: str,
+        status: int | None = None,
+        *,
+        key: str = "media",
+    ) -> dict:
+        raw = (self.state / "status.json").read_text()
+        result = json.loads(raw)[key]
+        self.assertEqual(result["outcome"], "failed")
+        self.assertEqual(
+            (result["step"], result["reason"], result["http_status"]),
+            (step, reason, status),
+        )
+        self.assertIn(
+            f"failed step={step} reason={reason} http_status={status} ", output
+        )
+        for secret in (self.url, self.signed_url, PRIVATE, KEY, TEXT, str(self.images)):
+            self.assertNotIn(secret, output + raw)
+        return result
 
     def resend(
         self, *extra: str, end: str = END, token: str = "testing"
@@ -327,7 +392,9 @@ class MediaTests(unittest.TestCase):
         state.media_cursor.unlink()
         state.cursor.write_text(json.dumps({"frames": TS + 3, "app_usage": TS}))
         self.mode = "put_500"
-        self.assertEqual(self.resend("--media")[0], 1)
+        code, failure_output = self.resend("--media")
+        self.assertEqual(code, 1)
+        self.assert_failure(failure_output, "put", "http", 500, key="resend")
         self.assertEqual(
             self.plans[-1], [{"key": KEY, "size": 7}, {"key": "unsaved.jpg", "size": 7}]
         )
@@ -402,7 +469,7 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(self.plans, [expected])
         self.assertEqual(self.confirms, [expected])
         self.assertEqual(self.queries, ["", ""])
-        self.assertEqual(
+        self.assertCountEqual(
             self.puts,
             [
                 ("/put?fixture=private-link", "image/test", body, None)
@@ -448,19 +515,26 @@ class MediaTests(unittest.TestCase):
         self.source()
         file = self.images / KEY
         file.write_bytes(b"fixture")
-        for mode in ("put_500", "missing", "redirect", "non_loopback", "wrong_key"):
+        failures = {
+            "put_500": ("put", "http", 500),
+            "missing": ("confirm", "not_stored", None),
+            "redirect": ("put", "link", None),
+            "non_loopback": ("put", "link", None),
+            "wrong_key": ("links", "reply", None),
+            "bad_json": ("links", "reply", None),
+        }
+        for mode, (step, reason, status) in failures.items():
             with self.subTest(mode=mode):
                 self.mode = mode
                 before = len(self.puts)
                 code, output = self.run_agent()
                 self.assertEqual(code, 1)
-                self.assertIn("media failed", output)
-                self.assertEqual(self.media_status()["outcome"], "failed")
+                self.assert_failure(output, step, reason, status)
                 self.assertEqual(self.media_status()["counts"]["uploaded"], 0)
                 self.assertFalse((self.state / "media_cursor.json").exists())
                 self.assertEqual(
                     len(self.puts) - before,
-                    int(mode not in {"non_loopback", "wrong_key"}),
+                    int(mode in {"put_500", "missing", "redirect"}),
                 )
         self.mode = "redirect"
         with self.assertRaisesRegex(ValueError, "^Media delivery failed$"):
@@ -474,7 +548,78 @@ class MediaTests(unittest.TestCase):
         self.mode = "upload"
         self.assertEqual(self.run_agent()[0], 0)
         self.assertEqual(self.cursor(), TS)
-        self.assertEqual(self.plans, [[{"key": KEY, "size": 7}]] * 7)
+        self.assertEqual(self.plans, [[{"key": KEY, "size": 7}]] * 8)
+
+    def group_source(self) -> list[bytes]:
+        self.configure(media=True)
+        keys = [f"frame-{i:02}.jpg" for i in range(60)]
+        self.source([(TS + i, key, TEXT) for i, key in enumerate(keys)])
+        bodies = [key.encode() for key in keys]
+        for key, body in zip(keys, bodies):
+            (self.images / key).write_bytes(body)
+        return bodies
+
+    def test_upload_groups_and_put_concurrency(self) -> None:
+        bodies = self.group_source()
+        self.mode = "grouped"
+        self.assertEqual(self.run_agent()[0], 0)
+        self.assertEqual([len(plan) for plan in self.plans], [25, 25, 10])
+        self.assertEqual(self.confirms, self.plans)
+        self.assertEqual(self.media_requests, ["uploads", "confirm"] * 3)
+        self.assertCountEqual([body for _, _, body, _ in self.puts], bodies)
+        self.assertGreater(self.peak_puts, 1)
+        self.assertLessEqual(self.peak_puts, 4)
+        self.assertEqual(self.media_status()["counts"]["uploaded"], 60)
+        self.assertEqual(self.cursor(), TS + 59)
+
+    def test_later_group_failure_keeps_counts_and_retries_page(self) -> None:
+        bodies = self.group_source()
+        self.state.mkdir(parents=True)
+        State(self.state).media_cursor.write_text(json.dumps({"ts": TS - 1}))
+        self.mode = "fail_second_group"
+        code, output = self.run_agent()
+        self.assertEqual(code, 1)
+        result = self.assert_failure(output, "put", "http", 403)
+        self.assertNotIn(
+            "frame-25.jpg", output + (self.state / "status.json").read_text()
+        )
+        self.assertEqual(result["counts"]["uploaded"], 25)
+        self.assertEqual(self.cursor(), TS - 1)
+        self.assertEqual(self.media_requests, ["uploads", "confirm", "uploads"])
+        self.assertCountEqual([body for _, _, body, _ in self.puts], bodies[:50])
+
+        self.mode = "grouped"
+        self.puts.clear()
+        self.assertEqual(self.run_agent()[0], 0)
+        self.assertCountEqual([body for _, _, body, _ in self.puts], bodies[25:])
+        self.assertEqual(self.media_status()["counts"]["present"], 25)
+        self.assertEqual(self.media_status()["counts"]["uploaded"], 35)
+        self.assertEqual(self.cursor(), TS + 59)
+
+    def test_link_request_timeout(self) -> None:
+        self.configure(media=True, timeout_seconds=1)
+        self.source()
+        (self.images / KEY).write_bytes(b"fixture")
+        self.mode = "timeout"
+        try:
+            code, output = self.run_agent()
+        finally:
+            self.release_timeout.set()
+        self.assertEqual(code, 1)
+        self.assert_failure(output, "links", "timeout")
+
+    def test_refused_connection(self) -> None:
+        self.source()
+        (self.images / KEY).write_bytes(b"fixture")
+        self.assertEqual(self.run_agent()[0], 0)
+        # Reserve a port without listening so the connection is refused.
+        with socket() as endpoint:
+            endpoint.bind(("127.0.0.1", 0))
+            self.url = f"http://127.0.0.1:{endpoint.getsockname()[1]}"
+            self.configure(media=True)
+            code, output = self.run_agent()
+        self.assertEqual(code, 1)
+        self.assert_failure(output, "links", "network")
 
     def test_status_preserves_rows_when_media_cursor_is_corrupt(self) -> None:
         self.configure(media=True)
@@ -494,6 +639,117 @@ class MediaTests(unittest.TestCase):
                 "media_cursor": "unreadable",
             },
         )
+
+    def test_run_reports_corrupt_media_cursor(self) -> None:
+        self.configure(media=True)
+        self.source()
+        self.state.mkdir(parents=True)
+        cursor = State(self.state).media_cursor
+        cursor.write_text(TEXT)
+        code, output = self.run_agent()
+        self.assertEqual(code, 1)
+        self.assert_failure(output, "collect", "state")
+        self.assertEqual(cursor.read_text(), TEXT)
+        self.assertFalse(self.media_requests)
+
+    def test_resend_reports_corrupt_saved_row_cursor(self) -> None:
+        self.configure(media=True)
+        self.source()
+        self.state.mkdir(parents=True)
+        State(self.state).cursor.write_text(TEXT)
+        code, output = self.resend("--media")
+        self.assertEqual(code, 1)
+        self.assert_failure(output, "collect", "state", key="resend")
+        self.assertFalse(self.media_requests)
+
+    def test_run_and_resend_report_media_source_errors(self) -> None:
+        self.configure(media=True)
+        self.source()
+        collector = COLLECTORS["screenmemory"]
+        for error in (OSError, sqlite3.OperationalError):
+            with (
+                self.subTest(error=error),
+                patch.dict(
+                    COLLECTORS,
+                    screenmemory=collector._replace(media=self.failing_media(error)),
+                ),
+            ):
+                for key, run in (("media", self.run_agent), ("resend", self.resend)):
+                    code, output = run(*(["--media"] if key == "resend" else []))
+                    self.assertEqual(code, 1)
+                    self.assert_failure(output, "collect", "source", key=key)
+                self.assertFalse(self.media_requests)
+
+    def failing_media(self, error: type[Exception]) -> Callable[..., None]:
+        def collect(*args: object) -> None:
+            raise error(TEXT)
+
+        return collect
+
+    def test_upload_reply_rejects_invalid_content_type(self) -> None:
+        self.configure(media=True)
+        self.source()
+        (self.images / KEY).write_bytes(b"fixture")
+        for fields in ({}, {"content_type": 42}, {"content_type": "\n" + TEXT}):
+            with (
+                self.subTest(fields=fields),
+                patch.object(
+                    self,
+                    "plan",
+                    return_value={
+                        "key": KEY,
+                        "status": "upload",
+                        "url": self.signed_url,
+                        **fields,
+                    },
+                ),
+            ):
+                code, output = self.run_agent()
+                self.assertEqual(code, 1)
+                self.assert_failure(output, "links", "reply")
+                self.assertFalse(self.puts or self.confirms)
+
+    def test_put_reports_missing_file_and_changed_size(self) -> None:
+        file = self.images / KEY
+        for exists in (False, True):
+            with self.subTest(exists=exists):
+                if exists:
+                    file.write_bytes(b"changed")
+                with self.assertRaises(MediaFailure) as failure:
+                    _put(MediaItem(KEY, file, 1), self.signed_url, "image/test", 10)
+                self.assertEqual(
+                    (failure.exception.step, failure.exception.reason), ("put", "file")
+                )
+                self.assertIsNone(failure.exception.http_status)
+        self.assertFalse(self.puts)
+
+    def test_put_distinguishes_read_failure_from_network_failure(self) -> None:
+        file = self.images / KEY
+        file.write_bytes(b"x")
+        with file.open("rb") as body:
+            with (
+                patch.object(Path, "open", return_value=body),
+                patch.object(body, "read", side_effect=OSError(TEXT)),
+                patch("miroir_agent.media.build_opener") as opener,
+                self.assertRaises(MediaFailure) as failure,
+            ):
+                opener.return_value.open.side_effect = lambda req, **kwargs: (
+                    req.data.read(1)
+                )
+                _put(MediaItem(KEY, file, 1), self.signed_url, "image/test", 10)
+            self.assertEqual(
+                (failure.exception.step, failure.exception.reason), ("put", "file")
+            )
+            self.assertIsNone(failure.exception.http_status)
+
+        with patch("miroir_agent.media.build_opener") as opener:
+            opener.return_value.open.side_effect = OSError(TEXT)
+            with self.assertRaises(MediaFailure) as failure:
+                _put(MediaItem(KEY, file, 1), self.signed_url, "image/test", 10)
+            self.assertEqual(
+                (failure.exception.step, failure.exception.reason), ("put", "network")
+            )
+            self.assertIsNone(failure.exception.http_status)
 
     def test_put_uses_default_proxy_handling_without_redirects(self) -> None:
         file = self.images / KEY
@@ -556,8 +812,12 @@ class MediaTests(unittest.TestCase):
             )[0],
             0,
         )
-        self.assertEqual(self.run_agent(token="")[0], 1)
-        self.assertEqual(self.media_status()["outcome"], "failed")
+        code, output = self.run_agent(token="")
+        self.assertEqual(code, 1)
+        self.assert_failure(output, "links", "token")
+        code, output = self.resend("--media", token="")
+        self.assertEqual(code, 1)
+        self.assert_failure(output, "links", "token", key="resend")
         self.assertFalse(self.row_posts or self.plans or self.puts)
 
     def test_disabled_by_default(self) -> None:
