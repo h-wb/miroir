@@ -75,7 +75,5 @@ class DateTests(unittest.TestCase):
                 for value in ("bad input", 1700000000):
                     with self.assertRaises(ValueError):
                         _options(name, options | {"since": value})
-                with self.assertRaisesRegex(
-                    ValueError, "Invalid agent configuration object"
-                ):
+                with self.assertRaisesRegex(ValueError, "options: unknown key"):
                     _options(name, options | {"cutoff" + "_ts": 0})

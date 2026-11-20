@@ -483,3 +483,63 @@ class AgentTests(unittest.TestCase):
             {p: p.read_bytes() for p in self.state.directory.rglob("*") if p.is_file()},
         )
         self.assertFalse(self.server.posts)
+
+
+class ConfigurationMessageTests(unittest.TestCase):
+    def run_status(self, document: object) -> str:
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "agent.json"
+            path.write_text(
+                document if isinstance(document, str) else json.dumps(document)
+            )
+            output = io.StringIO()
+            with redirect_stdout(output):
+                code = main(["status", "--config", str(path)])
+            self.assertEqual(code, 1)
+            return output.getvalue()
+
+    def collector(self, **changes: object) -> dict[str, object]:
+        base: dict[str, object] = {
+            "id": "screen",
+            "collector": "screenmemory",
+            "receive_url": "https://miroir.example/api/connections/screen/receive",
+            "token_env": "MIROIR_TOKEN",
+            "options": {"data_dir": "/nowhere"},
+        }
+        return base | changes
+
+    def test_the_message_says_what_is_wrong_and_never_echoes_a_value(self):
+        cases = {
+            "collector: unknown key media": {
+                "state_dir": "/tmp/x",
+                "collectors": [self.collector(media=True)],
+            },
+            "options: unknown key cutoff": {
+                "state_dir": "/tmp/x",
+                "collectors": [
+                    self.collector(options={"data_dir": "/nowhere", "cutoff": 0})
+                ],
+            },
+            "top level: unknown key collector": {
+                "state_dir": "/tmp/x",
+                "collector": [],
+                "collectors": [],
+            },
+            "Invalid media option": {
+                "state_dir": "/tmp/x",
+                "collectors": [
+                    self.collector(options={"data_dir": "/nowhere", "media": "true"})
+                ],
+            },
+            "Invalid receiving URL": {
+                "state_dir": "/tmp/x",
+                "collectors": [self.collector(receive_url="ftp://private-host/x")],
+            },
+            "not valid JSON": '{"state_dir": "/tmp/x", "collectors": [',
+        }
+        for expected, document in cases.items():
+            output = self.run_status(document)
+            self.assertIn("Invalid agent configuration: ", output, expected)
+            self.assertIn(expected, output)
+            self.assertNotIn("private-host", output)
+            self.assertNotIn("/nowhere", output)
