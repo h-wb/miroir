@@ -8,8 +8,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO
 from urllib.error import HTTPError
+from urllib.parse import unquote_plus, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from .collectors import COLLECTORS
 from .config import CollectorConfig
 
 
@@ -54,6 +56,17 @@ def _receipt(response: http.client.HTTPResponse, token: str) -> dict[str, str | 
     return receipt
 
 
+def _receive_url(config: CollectorConfig) -> str:
+    url = urlsplit(config.receive_url)
+    params = [
+        part
+        for part in url.query.split("&")
+        if part and unquote_plus(part.partition("=")[0]) != "format"
+    ]
+    params.append(f"format={COLLECTORS[config.collector].format_id}")
+    return url._replace(query="&".join(params)).geturl()
+
+
 def deliver(config: CollectorConfig, path: Path) -> Delivery:
     token = os.environ.get(config.token_env, "")
     if not re.fullmatch(r"[A-Za-z0-9._~+/=-]+", token):
@@ -61,7 +74,7 @@ def deliver(config: CollectorConfig, path: Path) -> Delivery:
     try:
         with path.open("rb") as body:
             request = Request(
-                config.receive_url,
+                _receive_url(config),
                 data=body,
                 method="POST",
                 headers={

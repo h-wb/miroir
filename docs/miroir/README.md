@@ -97,7 +97,8 @@ ListenBrainz, GitHub (personal access token for the configured login; the token'
 account is checked), and Bike Share Toronto (mobile-app member ID and authorization
 token) fetch. Apple Health reads Health Auto Export JSON (option `role`:
 `ongoing`/`historical`); browser history reads Firefox/Zen Places snapshots, plain or
-gzip; ScreenMemory reads the batches the local agent sends (see below). Native
+gzip, or the incremental batches the local agent sends; ScreenMemory reads the
+agent's batches too (see below). Native
 Apple Health XML is not supported. Each connector package under
 `src/integrations/<name>/` owns its settings, credentials, check, resources, inputs,
 and dlt sources; the registry only lists them. The legacy `src/sources/` and per-source
@@ -464,7 +465,9 @@ Authorization: Bearer <connection-delivery-token>
 ```
 
 The body is the raw JSON export. No query parameters or multipart wrapping are
-needed. This endpoint always receives ongoing data and requests an import. Its
+needed; `?format=<id>` picks one of the connector's formats when it has several,
+and without it the first is used (decision 032). This endpoint always receives
+ongoing data and requests an import. Its
 response contains `artifact_id`, `new`, and `operation_id` (or `already_imported`
 for an export already loaded with the current parser and options). A 201/200
 acknowledges receipt and submission, not completion of ingestion. Files and
@@ -577,7 +580,9 @@ variable the configuration names, and have the operating system's scheduler star
 its own connection. Each delivery requests an import, so a first pass over a long
 history is best started by hand with a larger `--max-batches`.
 
-Collectors today: `screenmemory` ([what it sends and what it withholds](../sources/screenmemory.md)).
+Collectors today: `screenmemory` ([what it sends and what it withholds](../sources/screenmemory.md))
+and `zen_history` ([browser history](../sources/browser-history.md#through-the-agent-decision-032)).
+The agent adds its collector's format to the receiving URL itself.
 
 ## Validate in an isolated environment
 

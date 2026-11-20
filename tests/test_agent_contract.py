@@ -9,9 +9,44 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import patch
 
+from src.integrations.browser_history.formats import read_rows
+from src.integrations.browser_history.formats import (
+    validate_batch as validate_zen_batch,
+)
 from src.integrations.screenmemory.formats import read_records, validate_batch
+from tests.test_browser_history_batch import snapshot
 
 _TS = 1795132100
+
+
+class ZenHistoryContractTests(unittest.TestCase):
+    def test_collected_batch_matches_connector_format(self):
+        agent = Path(__file__).resolve().parents[1] / "agent"
+        with patch.object(sys, "path", [str(agent), *sys.path]):
+            from miroir_agent.collectors.zen_history import collect
+
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            profile = root / "profile"
+            profile.mkdir()
+            source = snapshot(profile / "places.sqlite")
+            out = root / "batch.jsonl.gz"
+            self.assertIsNotNone(collect({"places_path": str(source)}, None, out, _TS))
+            validate_zen_batch(out)
+            with gzip.open(out, "rt", encoding="utf-8") as file:
+                document = [json.loads(line) for line in file]
+            rows = list(read_rows(out))
+            self.assertEqual(
+                rows, [(item["table"], item["row"]) for item in document[1:-1]]
+            )
+            self.assertEqual(
+                [(table, row["id"]) for table, row in rows],
+                [
+                    ("moz_places", 1),
+                    ("moz_places", 2),
+                    ("moz_historyvisits", 1),
+                ],
+            )
 
 
 class ScreenMemoryContractTests(unittest.TestCase):

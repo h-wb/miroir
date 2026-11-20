@@ -5,6 +5,7 @@ files, except one test that drives the real subprocess executor. HTTP calls to
 ListenBrainz are intercepted.
 """
 
+import gzip
 import hashlib
 import json
 import os
@@ -23,6 +24,7 @@ from src.core.runner import execute_operation
 from src.core.service import InlineExecutor, MiroirService, SubprocessExecutor
 from src.web.app import SESSION_COOKIE, create_app
 from tests.test_artifacts import export
+from tests.test_browser_history_batch import FORMAT, batch, compress, record, snapshot
 from tests.test_miroir import example
 from tests.test_operations import listens_response
 
@@ -241,6 +243,53 @@ class WebTests(WebFixture):
         response = self.client.post("/api/connections/new_health/sync", headers=BEARER)
         self.assertEqual(response.status_code, 400)
         self.assertIn("Nothing to sync", response.json()["error"])
+
+    def test_receive_selects_browser_batch_format_and_defaults_to_snapshot(self):
+        created = self.client.post(
+            "/api/connections",
+            headers=BEARER,
+            json={"integration": "browser_history", "id": "browser", "settings": {}},
+        )
+        self.assertEqual(created.status_code, 201)
+        headers = self.delivery_headers("browser")
+        url = "/api/connections/browser/receive"
+        content = compress(
+            batch(record("moz_places", id=3, url="https://example.org/three"))
+        )
+        response = self.client.post(
+            url + "?format=unknown", content=content, headers=headers
+        )
+        upload = self.client.post(
+            "/api/connections/browser/artifacts?format=unknown",
+            content=content,
+            headers=BEARER,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), upload.json())
+        self.assertEqual(self.service.artifacts("browser"), [])
+        self.assertFalse(any(p.is_file() for p in (self.root / "artifacts").rglob("*")))
+
+        response = self.client.post(url, content=content, headers=headers)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("SQLite snapshot", response.json()["error"])
+        response = self.client.post(
+            url + "?format=" + FORMAT, content=content, headers=headers
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(self.service.artifacts("browser")[0]["input_format"], FORMAT)
+        self.assertEqual(
+            self.service.connection("browser")["status"]["last_attempt"]["ingestion"],
+            "succeeded",
+        )
+        sqlite_path = snapshot(self.root / "places.sqlite")
+        response = self.client.post(
+            url, content=gzip.compress(sqlite_path.read_bytes()), headers=headers
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            {a["input_format"] for a in self.service.artifacts("browser")},
+            {FORMAT, "firefox_places_snapshot"},
+        )
 
     def test_receive_token_is_scoped_and_imports_duplicate_once(self):
         headers = self.delivery_headers()

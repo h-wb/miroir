@@ -1,4 +1,4 @@
-"""Firefox/Zen Places snapshots, however they are delivered."""
+"""Firefox/Zen Places snapshots and incremental history batches."""
 
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -6,6 +6,11 @@ from pathlib import Path
 from typing import Any
 
 from src.core.models import StrictModel
+from src.integrations.browser_history.formats import (
+    BATCH_FORMAT,
+    BATCH_VERSION,
+    validate_batch,
+)
 from src.integrations.contracts import (
     FileFormat,
     IntegrationDefinition,
@@ -43,6 +48,15 @@ def open_snapshot_source(
         yield browser_snapshot_source(snapshot_path=str(sqlite_path))
 
 
+@contextmanager
+def open_batch_source(
+    settings: Any, path: str, options: dict[str, Any]
+) -> Iterator[Any]:
+    from src.integrations.browser_history.source import browser_batch_source
+
+    yield browser_batch_source(path=Path(path))
+
+
 DEFINITION = IntegrationDefinition(
     name="browser_history",
     title="Browser history (Firefox / Zen)",
@@ -74,6 +88,21 @@ DEFINITION = IntegrationDefinition(
             open=open_snapshot_source,
             default_pattern="*.sqlite.gz",
             received_name="browser-snapshot.sqlite",
+        ),
+        FileFormat(
+            id=BATCH_FORMAT,
+            version=BATCH_VERSION,
+            label="Firefox / Zen history batch (Miroir agent)",
+            accept=".jsonl.gz,.gz,application/gzip",
+            content_type="application/gzip",
+            sender_instructions="Send one gzip JSON Lines batch as the raw HTTP body "
+            "with ?format=firefox_places_batch on the receiving URL.",
+            help="Batches merge pages, visits and other history from the local agent.",
+            validate=validate_batch,
+            open=open_batch_source,
+            default_pattern="*.jsonl.gz",
+            sender="Miroir agent",
+            received_name="browser-history-batch.jsonl.gz",
         ),
     ),
     analysis="browser",

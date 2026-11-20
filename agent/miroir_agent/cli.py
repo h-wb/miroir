@@ -2,22 +2,32 @@
 
 import argparse
 import json
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .collectors import COLLECTORS, Collected
+from .collectors import COLLECTORS, Collected, Cursor, zen_history
 from .config import CollectorConfig, load_config
 from .deliver import Delivery, deliver
 from .state import State, outside_source, read_json, write_json
 
 
-def _cursor(value: Any) -> dict[str, int] | None:
+def _cursor(value: Any, collector: str) -> Cursor | None:
     if value is None:
         return None
-    if not isinstance(value, dict) or not all(type(v) is int for v in value.values()):
+    if not isinstance(value, dict) or not all(
+        type(v) is int
+        or (
+            collector == "zen_history"
+            and k in {"origins_digest", "bookmarks_digest"}
+            and isinstance(v, str)
+            and (not v or re.fullmatch(r"[0-9a-f]{64}", v))
+        )
+        for k, v in value.items()
+    ):
         raise ValueError("Invalid cursor")
     return value
 
@@ -36,15 +46,19 @@ def _record(
 
 
 def _collect(
-    config: CollectorConfig, cursor: dict[str, int] | None, path: Path
+    config: CollectorConfig, cursor: Cursor | None, path: Path
 ) -> Collected | None:
-    return COLLECTORS[config.collector](config.options, cursor, path, time.time())
+    return COLLECTORS[config.collector].collect(
+        config.options, cursor, path, time.time()
+    )
 
 
 def _require_outside_source(config: CollectorConfig, *paths: Path) -> None:
     if config.collector == "screenmemory":
         for path in paths:
             outside_source(path, Path(config.options["data_dir"]))
+    elif config.collector == "zen_history":
+        zen_history.require_outside_source(config.options, *paths)
 
 
 def _run(
@@ -65,7 +79,8 @@ def _run(
                     pending = read_json(state.batch_cursor)
                     if (
                         pending is None
-                        or (cursor := _cursor(pending.get("cursor"))) is None
+                        or (cursor := _cursor(pending.get("cursor"), config.collector))
+                        is None
                     ):
                         raise ValueError("Invalid pending cursor")
                     counts = pending["counts"]
@@ -73,7 +88,9 @@ def _run(
                 else:
                     state.batch.parent.mkdir(mode=0o700, exist_ok=True)
                     batch = _collect(
-                        config, _cursor(read_json(state.cursor)), state.batch
+                        config,
+                        _cursor(read_json(state.cursor), config.collector),
+                        state.batch,
                     )
                     if batch is None:
                         outcome = "delivered" if i else "nothing_new"
@@ -108,7 +125,7 @@ def _preview(
     out = out.resolve()
     if out.is_relative_to(state_dir):
         raise ValueError("Preview output cannot be inside collector state")
-    cursor = _cursor(read_json(state.cursor))
+    cursor = _cursor(read_json(state.cursor), config.collector)
     out.mkdir(mode=0o700, parents=True, exist_ok=True)
     counts: dict[str, Any] = {}
     for i in range(1, maximum + 1):
@@ -163,7 +180,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             if args.command == "status":
                 result = {
-                    "cursor": _cursor(read_json(state.cursor)),
+                    "cursor": _cursor(read_json(state.cursor), item.collector),
                     "pending": state.pending,
                     "status": read_json(state.status),
                 }

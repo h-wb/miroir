@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .collectors import COLLECTORS
+from .collectors.zen_history import DEFAULT_PROFILES_DIR
 
 
 @dataclass(frozen=True)
@@ -80,6 +81,21 @@ def _url(url: str) -> str:
 
 
 def _options(name: str, raw: Any) -> dict[str, Any]:
+    if name == "zen_history":
+        options = _object(raw, {"places_path", "profiles_dir", "max_rows", "mask_urls"})
+        max_rows = _integer(options, "max_rows", 20000, 1)
+        if max_rows > 200000:
+            raise ValueError("Invalid max_rows")
+        mask_urls = options.get("mask_urls", True)
+        if type(mask_urls) is not bool:
+            raise ValueError("Invalid mask_urls")
+        paths: dict[str, str] = {
+            key: str(Path(_string(options, key)).expanduser())
+            for key in ("places_path", "profiles_dir")
+            if key in options
+        }
+        paths.setdefault("profiles_dir", str(Path(DEFAULT_PROFILES_DIR).expanduser()))
+        return {**paths, "max_rows": max_rows, "mask_urls": mask_urls}
     if name != "screenmemory":
         return _object(raw, set())
     options = _object(
