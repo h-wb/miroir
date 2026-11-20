@@ -20,8 +20,8 @@ reads its text on the Mac. In its data folder:
   (relative to `screenshots/`), `imagetext`.
 - `usage.sqlite`, table `usage`: `timestamp`, `identifier` (the front app's bundle
   id). Its `name` column is unusable.
-- `screenshots/`: the image files. Miroir never reads them; `frames.image_path`
-  points at them.
+- `screenshots/`: the image files. Miroir never parses them; `frames.image_path`
+  points at them, and the agent can upload them as media (decision 033).
 
 ScreenMemory documents none of this, so a new version can change it. The collector
 checks the tables and columns it needs and fails with a fixed message if they are
@@ -59,8 +59,12 @@ output.
   - `card`: card numbers that pass their check digit.
 
 The rules go by shape. A password typed as an ordinary word, or a short code, is not
-caught, so treat these tables as the most sensitive data in the warehouse. The
-screenshots themselves are not masked and are not sent.
+caught, so treat these tables as the most sensitive data in the warehouse.
+
+Screenshots cannot be masked. With `media` on, the agent uploads the image of
+each frame it sent, and never the image of a frame it withheld. A screenshot can
+still show a secret that the text rules masked, so the bucket is private and a
+file is only reachable through a logged-in view link.
 
 To see what a batch would contain before anything is sent:
 
@@ -82,5 +86,8 @@ its app on the exact timestamp.
 
 - No dbt models: sessions, hours per app and a cleaned text for summaries are the
   next step.
-- The image files stay where ScreenMemory writes them.
+- Screenshots are uploaded only when the collector's `media` option is true, and
+  only for frames after the media cursor. An existing archive is brought in by
+  copying the `screenshots/` folder into the bucket under
+  `<prefix>/<connection>/screenshots/`; the agent then finds those files present.
 - History before the configured `cutoff_ts` is not sent.

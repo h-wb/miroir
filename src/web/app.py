@@ -8,6 +8,7 @@ receive-only bearer tokens rather than the administrator token.
 
 import hashlib
 import hmac
+import json
 import os
 import re
 import tempfile
@@ -31,6 +32,10 @@ SESSION_COOKIE = "miroir_session"
 DEFAULT_MAX_UPLOAD = 512 * 1024 * 1024
 CHUNK = 1024 * 1024
 MULTIPART_SLACK = 1024 * 1024  # form fields and part headers around the file
+MAX_MEDIA_BODY = 1024 * 1024
+MEDIA_POST_PATH = re.compile(
+    r"/api/connections/[a-z][a-z0-9_]{0,23}/media/(uploads|confirm)"
+)
 # Query parameters of the upload API that are not import options.
 UPLOAD_PARAMETERS = {"import", "name", "format"}
 
@@ -127,6 +132,8 @@ def create_app(
     async def limit_body(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
+        if request.method == "POST" and MEDIA_POST_PATH.fullmatch(request.url.path):
+            return await call_next(request)
         # A multipart upload is spooled to disk before its handler can check it.
         declared = request.headers.get("content-length", "")
         if declared.isdigit() and int(declared) > max_upload_bytes + MULTIPART_SLACK:
@@ -140,9 +147,12 @@ def create_app(
     ) -> Response:
         if request.url.path in ("/login", "/healthz"):
             return await call_next(request)
-        # This route authenticates its connection-scoped bearer before reading bytes.
-        if request.method == "POST" and re.fullmatch(
-            r"/api/connections/[a-z][a-z0-9_]{0,23}/receive", request.url.path
+        # These routes authenticate their connection-scoped bearer before reading bytes.
+        if request.method == "POST" and (
+            re.fullmatch(
+                r"/api/connections/[a-z][a-z0-9_]{0,23}/receive", request.url.path
+            )
+            or MEDIA_POST_PATH.fullmatch(request.url.path)
         ):
             return await call_next(request)
         try:
@@ -314,11 +324,14 @@ def create_app(
         )
         return JSONResponse(result, status_code=201 if result["new"] else 200)
 
-    @app.post("/api/connections/{connection_id}/receive")
-    async def receive(request: Request, connection_id: str) -> JSONResponse:
+    def delivery_authorized(request: Request, connection_id: str) -> bool:
         header = request.headers.get("authorization", "")
         bearer = header[7:].strip() if header.lower().startswith("bearer ") else ""
-        if not service.verify_delivery_token(connection_id, bearer):
+        return service.verify_delivery_token(connection_id, bearer)
+
+    @app.post("/api/connections/{connection_id}/receive")
+    async def receive(request: Request, connection_id: str) -> JSONResponse:
+        if not delivery_authorized(request, connection_id):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         path = await save_stream(request.stream(), staging)
         try:
@@ -339,6 +352,53 @@ def create_app(
             if field in result:
                 receipt[field] = result[field]
         return JSONResponse(receipt, status_code=201 if result["new"] else 200)
+
+    async def deliver_media(
+        request: Request,
+        connection_id: str,
+        operation: Callable[[str, str, object], list[dict[str, Any]]],
+    ) -> Response:
+        if not delivery_authorized(request, connection_id):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        body = bytearray()
+        async for chunk in request.stream():
+            if len(body) + len(chunk) > MAX_MEDIA_BODY:
+                raise UploadTooLarge(f"Media request exceeds {MAX_MEDIA_BODY} bytes")
+            body.extend(chunk)
+        try:
+            payload = json.loads(body)
+        except (ValueError, RecursionError):
+            raise OperationError("The request body must be valid JSON") from None
+        if (
+            not isinstance(payload, dict)
+            or payload.keys() != {"kind", "objects"}
+            or not isinstance(payload["kind"], str)
+        ):
+            raise OperationError("The media request must contain a kind and objects")
+        results = await run_in_threadpool(
+            operation, connection_id, payload["kind"], payload["objects"]
+        )
+        return Response(json.dumps({"objects": results}), media_type="application/json")
+
+    @app.post("/api/connections/{connection_id}/media/uploads")
+    async def media_uploads(request: Request, connection_id: str) -> Response:
+        return await deliver_media(
+            request, connection_id, service.request_media_uploads
+        )
+
+    @app.post("/api/connections/{connection_id}/media/confirm")
+    async def media_confirm(request: Request, connection_id: str) -> Response:
+        return await deliver_media(request, connection_id, service.confirm_media)
+
+    @app.get("/media/{connection_id}/{kind}/{key:path}")
+    def media_view(connection_id: str, kind: str, key: str) -> Response:
+        try:
+            url = service.media_view_url(connection_id, kind, key)
+        except OperationError:
+            return Response(status_code=404)
+        return RedirectResponse(
+            url, status_code=302, headers={"Cache-Control": "private, no-store"}
+        )
 
     @app.post("/api/connections/{connection_id}/delivery-token", status_code=201)
     def create_delivery_token(connection_id: str) -> JSONResponse:

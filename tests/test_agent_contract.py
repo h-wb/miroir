@@ -1,19 +1,30 @@
 import gzip
 import json
+import os
+import socket
 import sqlite3
 import sys
+import time
 import unittest
-from contextlib import closing
+from contextlib import closing, redirect_stdout
+from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Thread
 from typing import Any
 from unittest.mock import patch
 
+import uvicorn
+
+from src.core.operations import MetadataStore
+from src.core.service import InlineExecutor, MiroirService
 from src.integrations.browser_history.formats import read_rows
 from src.integrations.browser_history.formats import (
     validate_batch as validate_zen_batch,
 )
 from src.integrations.screenmemory.formats import read_records, validate_batch
+from src.web.app import create_app
+from tests.fakes import ServedObjectStore
 from tests.test_browser_history_batch import snapshot
 
 _TS = 1795132100
@@ -67,6 +78,106 @@ class ScreenMemoryContractTests(unittest.TestCase):
         with closing(sqlite3.connect(self.data / "usage.sqlite")) as db, db:
             db.execute("CREATE TABLE usage(timestamp, identifier)")
             db.executemany("INSERT INTO usage VALUES (?, ?)", apps)
+
+    def test_uploads_media_to_real_app(self) -> None:
+        agent = Path(__file__).resolve().parents[1] / "agent"
+        with patch.object(sys, "path", [str(agent), *sys.path]):
+            from miroir_agent.cli import main
+
+        self._source(
+            [
+                (_TS, "a.jpg", "ordinary"),
+                (_TS + 1, "b.jpeg", "ordinary"),
+                (_TS + 2, "withheld.jpg", "ABOUT:logins"),
+            ],
+            [],
+        )
+        images = self.data / "screenshots"
+        images.mkdir()
+        for name, body in [
+            ("a.jpg", b"abc"),
+            ("b.jpeg", b"defg"),
+            ("withheld.jpg", b"abcde"),
+        ]:
+            (images / name).write_bytes(body)
+
+        config = self.root / "miroir.json"
+        config.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "id": "test",
+                    "media": {"endpoint": "https://objects.test", "bucket": "media"},
+                    "connections": [
+                        {"id": "screen", "integration": "screenmemory", "settings": {}}
+                    ],
+                }
+            )
+        )
+        metadata = MetadataStore(f"sqlite:///{self.root / 'meta.sqlite'}")
+        self.addCleanup(metadata.engine.dispose)
+        metadata.migrate()
+        objects = ServedObjectStore()
+        self.addCleanup(objects.close)
+        service = MiroirService(
+            config,
+            metadata,
+            self.root / "artifacts",
+            InlineExecutor(lambda _: None),
+            object_store=objects,
+        )
+        token = service.create_delivery_token("screen")
+        listener = socket.socket()
+        self.addCleanup(listener.close)
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+        server = uvicorn.Server(
+            uvicorn.Config(create_app(service, "unused" * 3), log_level="critical")
+        )
+        thread = Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
+
+        def stop() -> None:
+            server.should_exit = True
+            thread.join(5)
+
+        thread.start()
+        self.addCleanup(stop)
+        deadline = time.monotonic() + 5
+        while not server.started and thread.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(server.started)
+
+        config = self.root / "agent.json"
+        config.write_text(
+            json.dumps(
+                {
+                    "state_dir": str(self.root / "state"),
+                    "collectors": [
+                        {
+                            "id": "screen",
+                            "collector": "screenmemory",
+                            "token_env": "TEST_TOKEN",
+                            "receive_url": f"http://127.0.0.1:{port}/api/connections/screen/receive",
+                            "options": {
+                                **self.options,
+                                "media": True,
+                                "settle_seconds": 0,
+                            },
+                        }
+                    ],
+                }
+            )
+        )
+        expected = {"screen/screenshots/a.jpg": 3, "screen/screenshots/b.jpeg": 4}
+        with patch.dict(os.environ, TEST_TOKEN=token), redirect_stdout(StringIO()):
+            self.assertEqual(main(["run", "--config", str(config)]), 0)
+            self.assertEqual(objects.objects, expected)
+            self.assertEqual(
+                objects.content_types, dict.fromkeys(expected, "image/jpeg")
+            )
+            self.assertEqual(objects.put_count, 2)
+            self.assertEqual(main(["run", "--config", str(config)]), 0)
+            self.assertEqual(objects.put_count, 2)
 
     def test_mask_exclude_and_connector_contract(self) -> None:
         agent = Path(__file__).resolve().parents[1] / "agent"
