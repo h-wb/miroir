@@ -81,7 +81,10 @@ A collector can also upload the files its rows point at. For `screenmemory`, set
 for upload links, sends each file with an HTTP PUT, and asks Miroir to confirm.
 It never uploads the file of a frame it withheld, never runs ahead of delivered
 rows, and holds no storage credential. `run --max-media-files N` bounds how many
-frames one pass examines (default 2000). The machine must reach the storage
+frames one pass examines (default 2000). Links are requested for 25 files at a
+time and used at once, four uploads in parallel, so a link never outlives its
+use. A failure names the step (`collect`, `links`, `put`, `confirm`), a reason
+and the HTTP status, in the printed line and in `status`. The machine must reach the storage
 address Miroir signs links for, not only Miroir.
 
 ## Collectors

@@ -16,8 +16,10 @@ from .collectors import COLLECTORS, Collected, Collector, Cursor, zen_history
 from .config import CollectorConfig, load_config
 from .dates import parse_date
 from .deliver import Delivery, deliver
-from .media import deliver_media, token_for
+from .media import MediaFailure, deliver_media, token_for
 from .state import State, outside_source, read_json, write_json
+
+MediaResult = tuple[str, dict[str, int], MediaFailure | None]
 
 
 def _cursor(value: Any, collector: str) -> Cursor | None:
@@ -146,6 +148,13 @@ def _media_cursor(config: CollectorConfig, state: State) -> int:
     return ts
 
 
+def _media_rows(config: CollectorConfig, state: State) -> Cursor | None:
+    saved = _cursor(read_json(state.cursor), config.collector)
+    if saved is not None and type(saved.get("frames")) is not int:
+        raise ValueError("Invalid frame cursor")
+    return saved
+
+
 def _media_counts() -> dict[str, int]:
     return dict.fromkeys(
         (
@@ -159,6 +168,23 @@ def _media_counts() -> dict[str, int]:
         ),
         0,
     )
+
+
+def _media_failure_fields(error: MediaFailure | None) -> dict[str, str | int | None]:
+    if error is None:
+        return {}
+    return {
+        "step": error.step,
+        "reason": error.reason,
+        "http_status": error.http_status,
+    }
+
+
+def _print_outcome(
+    label: str, outcome: str, counts: dict[str, Any], error: MediaFailure | None = None
+) -> None:
+    details = "".join(f" {k}={v}" for k, v in _media_failure_fields(error).items())
+    print(f"{label} {outcome}{details} {json.dumps(counts)}")
 
 
 def _media_pages(
@@ -175,7 +201,10 @@ def _media_pages(
     token = token_for(config)
     while rows is not None and (maximum is None or counts["examined"] < maximum):
         limit = 500 if maximum is None else min(500, maximum - counts["examined"])
-        page = collect(config.options, cursor, rows, limit)
+        try:
+            page = collect(config.options, cursor, rows, limit)
+        except Exception:  # noqa: BLE001 - collector errors must not expose source data
+            raise MediaFailure("collect", "source") from None
         if page is None:
             break
         for name, count in page.counts.items():
@@ -191,34 +220,40 @@ def _media_pages(
 
 def _run_media(
     config: CollectorConfig, state: State, collector: Collector, maximum: int
-) -> tuple[str, dict[str, int]]:
+) -> MediaResult:
     counts = _media_counts()
+    failure = None
     try:
         _media_pages(
             config,
             collector,
             _media_cursor(config, state),
-            _cursor(read_json(state.cursor), config.collector),
+            _media_rows(config, state),
             counts,
             maximum,
             lambda cursor: write_json(state.media_cursor, {"ts": cursor}),
         )
         outcome = "delivered" if counts["examined"] else "nothing_new"
+    except MediaFailure as error:
+        failure = error
+        outcome = "failed"
     except (OSError, ValueError, KeyError, RuntimeError, RecursionError):
+        failure = MediaFailure("collect", "state")
         outcome = "failed"
     result = read_json(state.status) or {}
     result["media"] = {
         "time": datetime.now(timezone.utc).isoformat(),
         "outcome": outcome,
         "counts": counts,
+        **_media_failure_fields(failure),
     }
     write_json(state.status, result)
-    return outcome, counts
+    return outcome, counts, failure
 
 
 def _run(
     config: CollectorConfig, state: State, maximum: int, max_media_files: int
-) -> tuple[tuple[str, dict[str, Any]], tuple[str, dict[str, int]] | None]:
+) -> tuple[tuple[str, dict[str, Any]], MediaResult | None]:
     _require_outside_source(
         config, state.directory, state.directory / "lock", state.batch.parent
     )
@@ -228,6 +263,7 @@ def _run(
             return ("already_running", {}), (
                 "already_running",
                 {},
+                None,
             ) if collector else None
         rows = _run_rows(config, state, maximum)
         return rows, _run_media(
@@ -288,16 +324,21 @@ def _resend(
     out: Path | None,
     maximum: int | None,
     media: Collector | None,
-) -> tuple[str, dict[str, Any]]:
+) -> tuple[str, dict[str, Any], MediaFailure | None]:
     _require_outside_source(config, state.directory, state.directory / "lock")
     if out is None:
         _require_outside_source(config, state.status)
     with state.lock() as locked:
         if not locked:
-            return "already_running", {}
+            return "already_running", {}, None
         counts: dict[str, Any] = {}
+        failure = None
+        media_counts = _media_counts()
         batches = 0
         try:
+            if media is not None:
+                counts["media"] = media_counts
+                token_for(config)
             if out is not None:
                 out = out.resolve()
                 _require_outside_source(config, out)
@@ -314,7 +355,12 @@ def _resend(
                 while maximum is None or batches < maximum:
                     path = Path(folder) / f"batch-{batches + 1:04}.jsonl.gz"
                     _require_outside_source(config, path)
-                    batch = _collect(config, cursor, path, window=window)
+                    try:
+                        batch = _collect(config, cursor, path, window=window)
+                    except Exception:
+                        if media is not None:
+                            raise MediaFailure("collect", "source") from None
+                        raise
                     if batch is None:
                         break
                     if out is None:
@@ -326,14 +372,10 @@ def _resend(
                     _add_counts(counts, batch_counts)
                     if not more:
                         break
-            media_counts = _media_counts()
             if media is not None:
-                counts["media"] = media_counts
-                saved = _cursor(read_json(state.cursor), config.collector)
+                saved = _media_rows(config, state)
                 upper = saved.get("frames") if saved is not None else None
-                if saved is not None and type(upper) is not int:
-                    raise ValueError("Invalid frame cursor")
-                if upper is not None:
+                if type(upper) is int:
                     _media_pages(
                         config,
                         media,
@@ -346,10 +388,15 @@ def _resend(
             )
             if out is not None and batches:
                 outcome = "collected"
+        except MediaFailure as error:
+            failure = error
+            outcome = "failed"
         except (OSError, ValueError, KeyError, RuntimeError, RecursionError):
             outcome = "failed"
+            if media is not None:
+                failure = MediaFailure("collect", "state")
         if out is not None:
-            return outcome, counts
+            return outcome, counts, failure
         try:
             result = read_json(state.status) or {}
         except (ValueError, RecursionError):
@@ -360,9 +407,10 @@ def _resend(
             "window": list(window),
             "batches": batches,
             "counts": counts,
+            **_media_failure_fields(failure),
         }
         write_json(state.status, result)
-        return outcome, counts
+        return outcome, counts, failure
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -426,6 +474,7 @@ def main(argv: list[str] | None = None) -> int:
     for item in collectors:
         state = State(config.state_dir / item.id)
         media = None
+        resend_failure = None
         try:
             if args.command == "status":
                 result: dict[str, Any] = {
@@ -446,7 +495,7 @@ def main(argv: list[str] | None = None) -> int:
                     item, state, args.max_batches, args.max_media_files
                 )
             elif args.command == "resend":
-                outcome, counts = _resend(
+                outcome, counts, resend_failure = _resend(
                     item, state, window, args.out, args.max_batches, resend_media
                 )
             else:
@@ -454,11 +503,13 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError, KeyError, RuntimeError, RecursionError):
             outcome, counts = "failed", {}
             if args.command == "run" and _media_collector(item):
-                media = "failed", {}
-        print(f"{item.id} {outcome} {json.dumps(counts)}")
+                media = "failed", _media_counts(), MediaFailure("collect", "state")
+            if args.command == "resend" and resend_media is not None:
+                resend_failure = MediaFailure("collect", "state")
+        _print_outcome(item.id, outcome, counts, resend_failure)
         failed |= outcome == "failed"
         if media is not None:
-            media_outcome, media_counts = media
-            print(f"{item.id} media {media_outcome} {json.dumps(media_counts)}")
+            _print_outcome(f"{item.id} media", *media)
+            media_outcome = media[0]
             failed |= media_outcome == "failed"
     return int(failed)
