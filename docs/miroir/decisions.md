@@ -1501,3 +1501,98 @@ credentials and its whole dependency set; the other runs on a personal machine
 with a receive-only token and three libraries. One name for both would either put
 the server's stack on a laptop or hold two installs apart by import discipline
 alone, for the sake of a shared command name.
+
+## 038 — Apple Messages through the collector, keyed so nothing arrives twice
+
+Status: accepted, 2026-11-21. Builds on 030, 033, 036 and 037.
+
+Messages (iMessage, SMS, RCS) live in a SQLite database on each Apple device,
+`~/Library/Messages/chat.db` on a Mac. Three ways to read them were looked at on
+the installation this is built for, by counting only:
+
+- *The BlueBubbles server's API.* It is a web layer over the database of the one
+  Mac it runs on. That Mac held three months of messages; the account's history
+  goes back eight years on another machine. It cannot serve what its Mac does not
+  hold, and its attachment download converts files unless told otherwise. It stays
+  useful for live events, which are a separate decision (030).
+- *imessage-exporter.* It writes text and HTML for reading, and names the
+  attachments it copies by row numbers of the database it read, which do not
+  survive that database being rebuilt.
+- *Reading the database directly, as a source of the collector.* The same layout
+  is found on every Mac and inside device backups, and the collector already
+  masks, spools, delivers and uploads files.
+
+**Messages are a source of the collector**, `apple_messages`, read from the
+database in place, read-only, under one snapshot.
+
+**Nothing may arrive twice.** The account's data exists on several devices, in
+backups and in old exports, and the same messages will be sent again: by a second
+machine, after a restore, or to add attachments that were missing. So:
+
+- Every table is keyed by the identifiers Apple assigns, never by row numbers. Row
+  numbers are local to one copy of the database and change when it is rebuilt,
+  which iCloud does. Messages are keyed by `guid`, attachments by `guid`, handles
+  by address and service, chats by `guid`.
+- One connection stands for the account, not for a machine. This departs from 030,
+  where a second machine is a second connection: there a machine had its own data,
+  here every device holds a copy of the same data. Rows from any device merge on
+  their key.
+- The cursor is a row number, because that is what finds new rows cheaply, with
+  a digest of the `guid` of up to eight recent rows beside it (a digest, because
+  the cursor is printed by `status`). When none of the three most recent is where
+  it was, the database was rebuilt, and the source starts again from the
+  beginning. The merge makes that harmless. Deleting the latest message does not
+  trigger it.
+- Chat identifiers are not stable: macOS 26 renames their prefix, so two devices
+  disagree. The chat's own identifier (a number, an address or a group id) is sent
+  with it, and models match conversations on that.
+
+A later source wins over an earlier one for the same row. Sending an old backup's
+rows after the live data would put back the old text of an edited message, so
+backups will contribute files, not rows, unless asked. The same holds between two
+machines: one that still holds an older version of an edited message can put it
+back when it next sends its edited messages, until it receives the newer state
+itself. Sending from one always-on machine avoids it. A connection per machine,
+with the models choosing the newest version of each message, would remove the case
+entirely; it was left out because the files would then be stored once per
+machine.
+
+**Text is read on the machine, so it can be masked there.** Most rows hold their
+text only in `attributedBody`, a binary archive: all but a handful per year in an
+iCloud-synced database. A small reader takes the plain string out of it. On a
+database of 10,299 messages it gave the same string as the `text` column for all
+4,531 rows that have both, and a string for all 5,756 that have only the archive.
+The text then goes through the same masking as screen text (036).
+
+This is more interpretation than 030 allows a source, and it is taken for 030's
+own exception: a secret that reaches Miroir is hard to remove, and the archive
+cannot be masked without being read. For the same reason the first version does
+not send the archive itself, nor `message_summary_info`, which holds every
+earlier version of an edited message as further archives. Edit history and rich
+formatting are therefore not in the warehouse yet. The database keeps them, and
+`resend` (034) will bring them once they can be masked.
+
+Messages are sent as soon as a pass sees them, so the warehouse can be about a
+minute behind when the collector runs every minute. A message can still be edited
+or unsent after that. The cursor keeps a digest of the edit and unsend times of
+the messages already sent; when it no longer matches, every edited or unsent
+message is sent again and the merge replaces the rows. That is more than is
+needed, and the set is small, because edits are rare. A first version kept the
+latest edit time instead and sent only what was newer. A review showed how that
+loses an edit made on another device and synced afterwards with an older time,
+and comparing state has no such case. Read and delivery times that change later
+are not sent again; `resend` refreshes a range.
+
+The source keeps a fingerprint of the database's layout, its table and column
+names, with its cursor. When a system update changes the layout, the next pass
+says so in its counts even if everything still works. The format of these files
+is not documented and this is the early warning.
+
+Not in this decision: the attachment files themselves, a record of which files
+are stored, and reading backups and old exports. They need the media walk to
+revisit old rows, because files appear on disk long after their rows, in no
+order, when a conversation is downloaded or a backup restored. That is the next
+step, and the keys above are chosen for it.
+
+Contact names are a separate source: the database holds numbers and addresses,
+and names live in the address book.

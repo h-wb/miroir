@@ -1958,3 +1958,61 @@ list.
 
 Not done: CI lints and type-checks `src tests scripts` only; the workflow change
 that adds `collector` is posted on the pull request.
+
+## 2026-11-21 — Apple Messages, part 1: rows (decision 038)
+
+Messages are read from `chat.db` on the Mac by a new source of the collector,
+`apple_messages`, and loaded by a new connector of the same name. Three ways in
+were compared by counting on the installation's two Macs: the BlueBubbles API
+holds only what its Mac holds (three months), imessage-exporter writes pages for
+reading and names files by row numbers that did not survive a rebuilt database,
+and the database itself has the same layout everywhere.
+
+Built:
+
+- **Source.** Reads the database in place, read-only, under one snapshot. Sends
+  messages, chats, handles, attachments (their rows, not yet their files) and the
+  links between them, keyed by Apple's identifiers; no row number is sent. Text
+  comes from the `text` column or is taken out of the `attributedBody` archive by
+  a small reader, then masked like screen text, as are subjects, group titles,
+  chat names and attachment file names. The raw archives are not sent.
+- **No waiting, and edits.** A message is sent by the pass that first sees it.
+  The cursor holds a digest of the edit and unsend state of what was already
+  sent; when it changes, every edited or unsent message is sent again.
+- **Rebuilds.** The cursor keeps digests of the ids of up to eight recent rows;
+  when none of the three most recent is where it was, the source starts over, and
+  the merge absorbs it.
+- **Early warning.** A fingerprint of the database's table and column names;
+  `layout_changed` in a pass's counts when a system update changed them.
+- **Connector.** Eight tables, all merged on their keys: `messages`, `chats`,
+  `handles`, `attachments`, `chat_messages`, `message_attachments`,
+  `chat_handles`, and `contacts`, which the format already knows and the next
+  part fills. `attachments.media_key` is the name the file will be stored under.
+
+The reader was checked on a real database before it was written into the source,
+by counting only: it gave the `text` column's value for all 4,531 messages holding
+both, and a string for all 5,756 holding only the archive.
+
+Two independent reviews changed the design twice. Edits were first found by a
+time watermark, which loses an edit synced late from another device with an older
+time; comparing state replaced it. And a message dated in the future (a scheduled
+one) would have held back every later row. They also found a message older than
+`since` being sent when edited, free-text fields that were not masked, one
+undecodable value failing every pass, and a masked attachment name making the
+server reject its batch. All fixed with tests.
+
+Known limits, in `docs/sources/apple-messages.md`: with several machines sending,
+the last to send a row wins; chats and their links appear once per chat naming
+scheme (macOS 26 renamed them), so conversations are matched on the chat's own
+identifier; read and delivery times that change later are not sent again; edit
+history and rich formatting are not sent.
+
+Validation: the collector suite (118 tests) and the server suite (222 tests) are
+green, with ruff, format and mypy clean. Never run on a real machine yet: the
+first run is a dry run on the owner's Mac that prints counts only.
+
+Also recorded here: the secret scanner's check owed by decision 036 was run on
+macOS 26. A dry run of 189 screen frames inside a sandbox that denies all network
+access succeeded, so scanning does not need a connection. The system log showed
+no denied connection for it; a control run to prove that log query sees denials
+has not been reported yet.

@@ -1,0 +1,124 @@
+# Apple Messages
+
+Message history (iMessage, SMS and RCS), collected on the Mac by the Miroir
+collector (decision 038).
+
+- **Status**: collector source and connector built; not deployed
+- **Code**: connector [`src/integrations/apple_messages/`](../../src/integrations/apple_messages/),
+  source [`collector/miroir_collector/sources/apple_messages.py`](../../collector/miroir_collector/sources/apple_messages.py)
+- **dbt and dashboards**: none yet
+
+## Where the data comes from
+
+The `apple_messages` source reads `~/Library/Messages/chat.db` in place, read-only,
+under one SQLite snapshot. Set `database` to use another path. On macOS, the
+process running the collector needs permission to read the Messages folder.
+Missing optional columns are sent as null. A missing table or required column
+stops collection with a fixed error.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `database` | `~/Library/Messages/chat.db` | The Messages database |
+| `since` | none | First message date to send |
+| `settle_seconds` | 0 | Send a message only once it is this old (normal passes only) |
+| `max_rows` | 20000 | Messages per batch (1 to 200,000) |
+
+The collector keeps a fingerprint of the database's layout (the table and column
+names it reads) with its cursor. When a system update changes that layout, the
+next batch reports `layout_changed: 1` in its counts, even if collection still
+works. A layout change alone does not send a batch: it is reported the next time
+there is something to send.
+
+## What the collector sends
+
+The collector sends gzip JSON Lines (`apple_messages_batch`, version 1). A trailer
+counts the eight record kinds (`contact` is always 0 in this version), unreadable
+text archives and masking replacements. The connector rejects incomplete batches
+and record counts that do not match.
+
+Normal passes send new messages from `since` (if set), at most `max_rows`
+(default 20,000) per batch, as soon as a pass sees them. With `settle_seconds`
+above 0, a message dated within that many seconds of now waits, and holds back
+the rows after it until it is old enough. A message dated in the future (a
+scheduled message, a wrong clock) is sent at once. Dates are compared row by row,
+whether the row stores seconds or nanoseconds; the values sent are the
+database's own integers.
+
+Edits and unsends are found by comparing state, not by time. The cursor keeps a
+digest of the guid, `date_edited`, `date_retracted` and the lengths of `text` and
+`attributedBody` of every message already sent that was edited or unsent (and is
+not before `since`); the lengths tell apart two edits made in the same second. When a pass finds
+that digest changed, it sends **all** of those messages again in its batch, with
+their links and attachments, whatever `max_rows` is: they are few, and sending
+the whole set is what catches an edit synced late from another device with an
+older time. The merge replaces the rows. The pass's counts report `resent`, how
+many messages in the batch came from this step. Databases without those two
+columns skip it. A message dated before `since` is never sent, edited or not.
+The check reads the two times of every sent message on each pass, which takes
+tens of milliseconds on 200,000 messages.
+
+An edit marker that is later cleared (the time set back to 0) is not detected.
+`resend --from ... --to ...` over the message's dates brings the row back in line.
+
+Chats with their participants, and handles, are sent when those snapshots change.
+`resend --from ... --to ...` sends every message dated in the chosen range, with
+its links and attachment metadata, ignoring `since` and `settle_seconds`, without
+advancing the saved cursor.
+
+## What never leaves the Mac
+
+The collector takes plain text from `text` or extracts it from `attributedBody`.
+It masks the free text (message text, subjects, group titles, chat display names
+and attachment transfer names) using the same rules as
+[ScreenMemory](screenmemory.md#what-never-leaves-the-mac). Identifiers are not
+masked, on purpose: guids, `chat_identifier`, `room_name`, handles and their
+services, service names, `mime_type`, `uti`, `balloon_bundle_id` and
+`expressive_send_style_id`. The batch reports
+where message text came from; a text archive it cannot read is counted and its
+text is null. The raw `attributedBody`, `message_summary_info` and `payload_data`
+are never sent. Neither are local row numbers, attachment paths or transfer state.
+An attachment's `media_key` is its `guid` plus a short extension taken from its
+file name (letters and digits only), taken before masking, never the path itself.
+Text that is not valid UTF-8 is decoded with U+FFFD in place of the bad bytes,
+and a U+0000 in any string sent becomes U+FFFD (a masked field holding one is
+masked whole). Keys are never altered: a row whose key holds U+0000 or U+FFFD is
+skipped and counted in `skipped`, since replacing the character could merge it
+with another row. The connector refuses a batch holding U+0000 or a lone surrogate.
+Masking is not anonymisation: addresses and ordinary message text can still be
+present. Treat these tables as sensitive.
+
+## Tables
+
+| Table | Key | Rows |
+|---|---|---|
+| `messages` | `guid` | Message text and metadata, raw Apple dates, and UTC `sent_at`, `read_at`, `delivered_at`, `edited_at`, `retracted_at` |
+| `chats` | `guid` | Chat identity and metadata |
+| `handles` | `id`, `service` | Addresses and services |
+| `attachments` | `guid` | Attachment metadata, with raw `created_date`, UTC `created_at`, and `media_key`, the name the file will be stored under (null when no extension is found) |
+| `chat_messages` | `chat_guid`, `message_guid` | Messages in chats |
+| `message_attachments` | `message_guid`, `attachment_guid` | Attachments on messages |
+| `chat_handles` | `chat_guid`, `handle`, `handle_service` | Chat participants |
+| `contacts` | `handle` | Names for an address: `first_name`, `last_name`, `nickname`, `organization`. Filled by a later version |
+
+One connection stands for the account. All eight tables merge on Apple's keys,
+so messages, attachments, handles and the links between messages and
+attachments do not appear twice, whether they come from several devices or after
+a rebuild. Chats are the exception: a chat's `guid` depends on the system's
+naming scheme, so two Macs on different macOS versions send the same
+conversation as two chat rows, and its links in `chat_messages` and
+`chat_handles`, whose keys hold the chat guid, appear once per scheme too. Match
+conversations on `chat_identifier`. Absence from a delivery does not delete a row.
+
+For the same key, the later load wins. With several machines sending, a machine
+that still holds an older version of an edited message can put that version back
+when it sends its own edited messages again; it is corrected when that machine
+receives the newer state and sends again. Running the source from one always-on
+machine avoids this.
+
+## Not covered yet
+
+Attachment files, rich formatting, edit history, contact names (the `contacts`
+table exists but the collector does not fill it yet), live events, backups and
+old exports are not covered. Edits and unsends are sent again, but earlier
+versions of an edited message are not kept. Read and delivery dates changed after
+the first delivery are refreshed only by `resend`.

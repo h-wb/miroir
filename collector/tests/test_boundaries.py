@@ -7,7 +7,7 @@ from importlib.util import resolve_name
 from pathlib import Path
 
 _COLLECTOR = Path(__file__).resolve().parents[1]
-_SOURCES = {"sources.screenmemory", "sources.zen_history"}
+_SOURCES = {"sources.screenmemory", "sources.zen_history", "sources.apple_messages"}
 # CLI constructs State for runner calls and handles a status read failure.
 _ALLOWED = {
     "": set(),

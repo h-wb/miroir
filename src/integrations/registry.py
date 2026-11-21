@@ -3,6 +3,7 @@
 from types import MappingProxyType
 
 from src.integrations.apple_health import DEFINITION as APPLE_HEALTH
+from src.integrations.apple_messages import DEFINITION as APPLE_MESSAGES
 from src.integrations.bikeshare import DEFINITION as BIKESHARE
 from src.integrations.browser_history import DEFINITION as BROWSER_HISTORY
 from src.integrations.github import DEFINITION as GITHUB
@@ -19,6 +20,7 @@ INTEGRATIONS = MappingProxyType(
             BIKESHARE,
             BROWSER_HISTORY,
             SCREENMEMORY,
+            APPLE_MESSAGES,
         )
     }
 )
