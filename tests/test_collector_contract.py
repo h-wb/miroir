@@ -7,6 +7,7 @@ import sys
 import time
 import unittest
 from contextlib import closing, redirect_stdout
+from importlib import import_module
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -18,6 +19,7 @@ import uvicorn
 
 from src.core.operations import MetadataStore
 from src.core.service import InlineExecutor, MiroirService
+from src.integrations.apple_messages import formats as apple_formats
 from src.integrations.browser_history.formats import read_rows
 from src.integrations.browser_history.formats import (
     validate_batch as validate_zen_batch,
@@ -28,6 +30,122 @@ from tests.fakes import ServedObjectStore
 from tests.test_browser_history_batch import snapshot
 
 _TS = 1795132100
+
+
+@unittest.skipIf(sys.version_info < (3, 12), "collector requires Python 3.12")
+class AppleMessagesContractTests(unittest.TestCase):
+    def test_collected_batch_matches_connector_format(self):
+        collector = Path(__file__).resolve().parents[1] / "collector"
+        with patch.object(sys, "path", [str(collector), *sys.path]):
+            from miroir_collector.masking import Masker
+            from miroir_collector.sources.apple_messages import (
+                AppleMessages,
+                AppleMessagesOptions,
+            )
+
+        fixture = import_module("collector.tests.test_apple_messages_source")
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            data = root / "Messages"
+            data.mkdir()
+            database = data / "chat.db"
+            with closing(sqlite3.connect(database)) as db:
+                db.executescript(
+                    fixture.SCHEMA
+                    + """
+                    INSERT INTO message (ROWID, guid, text, date, handle_id) VALUES (91, 'message-1', 'hello', 800000000, 81);
+                    INSERT INTO chat (ROWID, guid) VALUES (71, 'chat-1');
+                    INSERT INTO handle (ROWID, id, service) VALUES (81, 'handle-1', 'iMessage');
+                    INSERT INTO attachment (ROWID, guid, transfer_name) VALUES (61, 'attachment-1', 'IMG_1.HEIC');
+                    INSERT INTO chat_message_join VALUES (71, 91);
+                    INSERT INTO message_attachment_join VALUES (91, 61);
+                    INSERT INTO chat_handle_join VALUES (71, 81);
+                    INSERT INTO message (ROWID, guid, text, subject, date, handle_id)
+                        VALUES (92, 'message-2', CAST(X'48ff69' AS TEXT),
+                        CAST(X'ff' AS TEXT), 800000001, 82);
+                    INSERT INTO handle (ROWID, id, service)
+                        VALUES (82, CAST(X'74ff' AS TEXT), 'SMS');
+                    INSERT INTO handle (ROWID, id, service)
+                        VALUES (83, 'a' || char(0) || 'b', 'SMS');
+                    INSERT INTO chat (ROWID, guid, chat_identifier)
+                        VALUES (72, 'chat-2', 'c' || char(0) || 'd');
+                    INSERT INTO chat_handle_join VALUES (72, 83);
+                """
+                )
+            path = root / "batch.gz"
+            batch = AppleMessages().collect(
+                AppleMessagesOptions.model_validate({"database": str(database)}),
+                None,
+                path,
+                _TS,
+                masker=Masker(),
+            )
+            self.assertIsNotNone(batch)
+            apple_formats.validate_batch(path)
+            records = list(apple_formats.read_records(path))
+            # Contacts belong to the format; this version of the source sends none.
+            self.assertEqual(
+                {row["type"] for row in records},
+                {kind for kind in apple_formats.FIELDS if kind != "contact"},
+            )
+            self.assertEqual(
+                [row["text"] for row in records if row["type"] == "message"],
+                ["hello", "H\ufffdi"],
+            )
+            # Keys holding NUL or undecodable bytes are skipped, not altered.
+            self.assertEqual(
+                [row["id"] for row in records if row["type"] == "handle"],
+                ["handle-1"],
+            )
+            self.assertEqual(batch.counts["skipped"], 3)
+            attachment = next(row for row in records if row["type"] == "attachment")
+            self.assertEqual(attachment["media_key"], "attachment-1.heic")
+            self.assertEqual(batch.counts["contact"], 0)
+            self.assertEqual(
+                (batch.counts["resent"], batch.counts["layout_changed"]), (0, 0)
+            )
+
+            # Masks outside messages, in a batch with no chat row.
+            token = fixture.github_token()
+            with closing(sqlite3.connect(database)) as db, db:
+                db.executescript(
+                    f"""
+                    ALTER TABLE message ADD COLUMN group_title TEXT;
+                    INSERT INTO message (ROWID, guid, text, date, group_title)
+                        VALUES (93, 'message-3', 'hi', 800000002, 'PASSWORD=GroupTitle42');
+                    INSERT INTO attachment (ROWID, guid, transfer_name)
+                        VALUES (62, 'attachment-2', '{token}.JPG');
+                    INSERT INTO message_attachment_join VALUES (93, 62);
+                    INSERT INTO message (ROWID, guid, text, date)
+                        VALUES (94, 'message-4', 'hi', 800000003);
+                    INSERT INTO attachment (ROWID, guid, transfer_name)
+                        VALUES (63, 'attachment-3', '{token}.PNG');
+                    INSERT INTO message_attachment_join VALUES (94, 63);
+                    """
+                )
+            path.unlink()
+            # Chats are unchanged, so this batch holds no chat row.
+            second = AppleMessages().collect(
+                AppleMessagesOptions.model_validate({"database": str(database)}),
+                batch.cursor,
+                path,
+                _TS,
+                masker=Masker(),
+            )
+            self.assertIsNotNone(second)
+            apple_formats.validate_batch(path)
+            records = list(apple_formats.read_records(path))
+            self.assertNotIn("chat", {row["type"] for row in records})
+            messages = {r["guid"]: r for r in records if r["type"] == "message"}
+            self.assertEqual(
+                messages["message-3"]["group_title"], "PASSWORD=[masked:assignment]"
+            )
+            self.assertEqual(
+                {r["media_key"] for r in records if r["type"] == "attachment"},
+                {"attachment-2.jpg", "attachment-3.png"},
+            )
+            self.assertEqual(second.counts["masked"], {"assignment": 1, "token": 2})
+            self.assertNotIn(token, gzip.decompress(path.read_bytes()).decode())
 
 
 @unittest.skipIf(sys.version_info < (3, 12), "collector requires Python 3.12")

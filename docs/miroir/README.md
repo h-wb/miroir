@@ -588,8 +588,9 @@ variable the configuration names, and have the operating system's scheduler star
 its own connection. Each delivery requests an import, so a first pass over a long
 history is best started by hand with a larger `--max-batches`.
 
-Sources today: `screenmemory` ([what it sends and what it withholds](../sources/screenmemory.md))
-and `zen_history` ([browser history](../sources/browser-history.md#through-the-collector-decision-032)).
+Sources today: `screenmemory` ([what it sends and what it withholds](../sources/screenmemory.md)),
+`zen_history` ([browser history](../sources/browser-history.md#through-the-collector-decision-032)),
+and `apple_messages` ([Apple Messages rows](../sources/apple-messages.md)).
 The collector adds the source's format to the receiving URL itself.
 
 ### Media: files that rows point at
