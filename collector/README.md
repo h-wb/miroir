@@ -128,13 +128,20 @@ cannot start, the pass fails with `reason=masking` and nothing is collected.
 
 ## Media
 
-The collector can also upload the files a source's rows point at. For
-`screenmemory`, set `"media": true` in its options (and `media_dir` if the
-screenshots are not in `<data_dir>/screenshots`). After delivery, the collector asks Miroir
-for upload links, sends each file with an HTTP PUT, and asks Miroir to confirm.
-It never uploads the file of a frame it withheld, never runs ahead of delivered
-rows, and holds no storage credential. `run --max-media-files N` bounds how many
-frames one pass examines (default 2000). Links are requested for 25 files at a
+Set `"media": true` in a source's options to upload its files. Media requires a
+URL ending in `/receive`. The collector asks Miroir for upload links, sends each
+file with an HTTP PUT, and asks Miroir to confirm. It holds no storage credential.
+
+- `screenmemory`: uploads screenshots from `<data_dir>/screenshots` (or
+  `media_dir`). It never uploads a withheld frame or runs ahead of delivered rows.
+- `apple_messages`: uploads only files already on disk inside the resolved
+  Messages attachments folder, after Miroir has acknowledged their keys and
+  links to in-scope messages. `resend --media` filters these files by inode
+  change time, not by message date. See the
+  [source options](../docs/sources/apple-messages.md).
+
+`run --max-media-files N` sets the pass limit (default 2000); files sharing the
+same position stay together. Links are requested for 25 files at a
 time and used at once, four uploads in parallel, so a link never outlives its
 use. The machine must reach the storage address Miroir signs links for, not
 only Miroir.

@@ -22,6 +22,10 @@ stops collection with a fixed error.
 | `since` | none | First message date to send |
 | `settle_seconds` | 0 | Send a message only once it is this old (normal passes only) |
 | `max_rows` | 20000 | Messages per batch (1 to 200,000) |
+| `media` | false | Upload attachment files that are on disk |
+| `home` | user's home | Home directory for `~` in attachment paths and for the address book; set this for a restored copy |
+| `media_max_mb` | 500 | Maximum attachment size in MiB (1 to 5000); larger files count as `too_large` |
+| `names` | false | Send address book names for the handles in Messages |
 
 The collector keeps a fingerprint of the database's layout (the table and column
 names it reads) with its cursor. When a system update changes that layout, the
@@ -32,7 +36,7 @@ there is something to send.
 ## What the collector sends
 
 The collector sends gzip JSON Lines (`apple_messages_batch`, version 1). A trailer
-counts the eight record kinds (`contact` is always 0 in this version), unreadable
+counts the eight record kinds, unreadable
 text archives and masking replacements. The connector rejects incomplete batches
 and record counts that do not match.
 
@@ -64,6 +68,52 @@ Chats with their participants, and handles, are sent when those snapshots change
 `resend --from ... --to ...` sends every message dated in the chosen range, with
 its links and attachment metadata, ignoring `since` and `settle_seconds`, without
 advancing the saved cursor.
+
+### Contact names
+
+When `names` is enabled, the collector reads the Mac's AddressBook-v22 databases
+under `<home>/Library/Application Support/AddressBook`, including account
+databases in `Sources`. Only handles in Messages are sent, not the whole address
+book. Email addresses match without regard to case, using the address book's
+normalized address when present. Phone numbers match by digits (at least seven),
+with a leading `1` on an 11-digit number optional. Matching cards that agree
+are treated as one. If they disagree, the handle is counted in
+`names_ambiguous` and no name is sent for it.
+
+Names are not masked. The collector sends the whole matched set when it changes,
+but not during a resend. If it can name nobody, it sends no contact records and
+does not erase names already loaded. Missing, unreadable or incompatible address
+books count as `names_unavailable` without stopping message or file collection.
+
+### Attachment files
+
+Set `media` to true and use a receive URL ending in `/receive`. Only nonempty
+regular files already on disk under `<home>/Library/Messages/Attachments` are
+offered. Paths are resolved before the containment check, so a path or symlink
+pointing outside that folder is rejected. Files are stored by `media_key`; Miroir
+skips an upload when it already holds the same key at the same size.
+
+The collector only offers files linked to messages in the normal delivery
+scope (`since` and the acknowledged message cursor). It waits for Miroir to
+acknowledge the attachment key and links first. When a late download makes
+the key available or changes it, the collector sends the updated attachment
+metadata and links without resending the message text. Files wait 60 seconds
+after their last inode change. The normal walk also accounts for when the
+metadata was acknowledged, so a file already on disk is not missed when its
+message is delivered on a later page.
+
+A `resend --media --from ... --to ...` range selects already acknowledged,
+in-scope media by file inode change time; the row resend still uses message
+dates. A pre-attachment collector cursor or a changed `since` starts media
+tracking at the current row cursor rather than guessing which old rows were
+sent. To include those older attachments, deliberately replay the wanted
+scope using fresh collector state for the same connection. The collector does
+not download or recover missing files.
+
+A media pass that offers files also counts, once, the in-scope attachments
+whose file is not on disk (`missing`) and those it cannot use (`invalid`: no
+usable key, a path outside the folder, an empty file or a folder). A pass with
+nothing new to offer reports neither.
 
 ## What never leaves the Mac
 
@@ -98,7 +148,7 @@ present. Treat these tables as sensitive.
 | `chat_messages` | `chat_guid`, `message_guid` | Messages in chats |
 | `message_attachments` | `message_guid`, `attachment_guid` | Attachments on messages |
 | `chat_handles` | `chat_guid`, `handle`, `handle_service` | Chat participants |
-| `contacts` | `handle` | Names for an address: `first_name`, `last_name`, `nickname`, `organization`. Filled by a later version |
+| `contacts` | `handle` | Matched address book names: `first_name`, `last_name`, `nickname`, `organization` |
 
 One connection stands for the account. All eight tables merge on Apple's keys,
 so messages, attachments, handles and the links between messages and
@@ -117,8 +167,7 @@ machine avoids this.
 
 ## Not covered yet
 
-Attachment files, rich formatting, edit history, contact names (the `contacts`
-table exists but the collector does not fill it yet), live events, backups and
-old exports are not covered. Edits and unsends are sent again, but earlier
+Rich formatting, edit history, live events, reading backups directly and old
+exports are not covered. Edits and unsends are sent again, but earlier
 versions of an edited message are not kept. Read and delivery dates changed after
 the first delivery are refreshed only by `resend`.

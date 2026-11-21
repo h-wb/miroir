@@ -62,6 +62,14 @@ class Cursor(Model):
         except ValidationError:
             raise ValueError("Invalid saved cursor") from None
 
+    def acknowledged(self, now: float) -> Cursor:
+        """Finalize any acknowledgement-dependent positions before saving."""
+        return self
+
+    def public_status(self) -> dict[str, Any]:
+        """The cursor fields suitable for the CLI status output."""
+        return self.model_dump(exclude_unset=True)
+
 
 @dataclass(frozen=True)
 class Collected:
@@ -96,10 +104,18 @@ class Media(ABC):
 
     @abstractmethod
     def limit(self, cursor: Cursor | None) -> int | None:
-        """The last position whose row was delivered; None when no row was."""
+        """The scan's upper bound, or None when no media is eligible."""
 
     @abstractmethod
-    def page(self, after: int, upto: int, limit: int) -> MediaPage | None:
+    def page(
+        self,
+        after: int,
+        upto: int,
+        limit: int,
+        *,
+        cursor: Cursor | None = None,
+        resend: bool = False,
+    ) -> MediaPage | None:
         """Files for positions in (after, upto], or None when there are none."""
 
 

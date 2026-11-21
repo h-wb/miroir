@@ -1657,3 +1657,15 @@ Considered and left out:
 Not in this decision: the alert rules themselves, which belong to the
 installation; checks in the warehouse on what was loaded; and a fingerprint of a
 source's layout in its counts, which the Apple Messages source adds (038).
+
+### 038 follow-up — Apple Messages attachment uploads and contact names
+
+Attachment files use the existing media API and are opt-in. The collector
+limits uploads to the configured message scope and remembers fingerprints of
+the attachment keys and links it has delivered. A changed key or a late link
+sends its metadata again, without replaying message text. The file walk uses
+both inode change time and metadata acknowledgement time so a file already on
+disk is not skipped when its metadata becomes eligible later.
+
+Contact names are separately opt-in. Where matching address book cards
+disagree, the collector reports ambiguity and sends no name for that handle.

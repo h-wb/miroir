@@ -145,7 +145,7 @@ def _deliver_pending(
     cursor = _parse_cursor(config, pending.cursor)
     progress.step = "deliver"
     receipt = client.post_batch(state.batch, config.source.format_id)
-    state.save_cursor(cursor.model_dump(exclude_unset=True))
+    state.save_cursor(cursor.acknowledged(time.time()).model_dump(exclude_unset=True))
     state.clear_spool()
     return receipt
 
@@ -189,6 +189,7 @@ def _media_counts() -> dict[str, int]:
             "withheld",
             "missing",
             "invalid",
+            "too_large",
             "rejected",
         ),
         0,
@@ -206,6 +207,8 @@ class _MediaRange:
     upto: int | None
     maximum: int | None = None
     save: Callable[[int], None] | None = None
+    cursor: Cursor | None = None
+    resend: bool = False
 
 
 def _media_pages(
@@ -225,7 +228,9 @@ def _media_pages(
         limit = (
             500 if span.maximum is None else min(500, span.maximum - counts["examined"])
         )
-        page = source.page(position, span.upto, limit)
+        page = source.page(
+            position, span.upto, limit, cursor=span.cursor, resend=span.resend
+        )
         if page is None:
             break
         for name, count in page.counts.items():
@@ -250,11 +255,13 @@ def _run_media(
     counts = _media_counts()
     progress = _Pass(counts=counts)
     with progress.capture():
+        cursor = _cursor(config, state)
         span = _MediaRange(
             _media_position(state, source),
-            source.limit(_cursor(config, state)),
+            source.limit(cursor),
             maximum,
             state.save_media_position,
+            cursor=cursor,
         )
         _media_pages(client, source, span, counts, progress)
         if counts["examined"]:
@@ -448,10 +455,13 @@ def _resend_pass(
     _resend_rows(config, state, client, masker, selection, progress)
     progress.step = "collect"
     if source is not None:
-        upper = source.limit(_cursor(config, state))
+        cursor = _cursor(config, state)
+        upper = source.limit(cursor)
         if upper is not None:
             start, end = selection.window
-            span = _MediaRange(start - 1, min(end - 1, upper))
+            span = _MediaRange(
+                start - 1, min(end - 1, upper), cursor=cursor, resend=True
+            )
             _media_pages(client, source, span, media_counts, progress)
     if progress.batches or media_counts["examined"]:
         progress.outcome = (
@@ -495,7 +505,7 @@ def resend(
 def status(config: SourceConfig, state: State) -> dict[str, Any]:
     saved = _cursor(config, state)
     result: dict[str, Any] = {
-        "cursor": saved.model_dump(exclude_unset=True) if saved is not None else None,
+        "cursor": saved.public_status() if saved is not None else None,
         "pending": state.has_pending(),
         "status": state.status(),
     }

@@ -192,7 +192,7 @@ class AppleMessagesBatchTests(unittest.TestCase):
         definition = INTEGRATIONS["apple_messages"]
         self.assertEqual([r.name for r in definition.resources], list(TABLE_KEYS))
         self.assertIsNone(definition.analysis)
-        self.assertFalse(definition.media)
+        self.assertEqual([kind.name for kind in definition.media], ["attachments"])
         (fmt,) = definition.formats
         database = self.root / "warehouse.duckdb"
         pipeline = dlt.pipeline(
