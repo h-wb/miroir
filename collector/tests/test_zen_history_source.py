@@ -11,13 +11,13 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from miroir_agent.collectors.zen_history import (
+from miroir_collector.config import load_config
+from miroir_collector.errors import ConfigError, Failure
+from miroir_collector.sources.zen_history import (
     ZenHistory,
     ZenHistoryCursor,
     ZenHistoryOptions,
 )
-from miroir_agent.config import load_config
-from miroir_agent.errors import ConfigError, Failure
 
 from .masking_fixtures import MASKER, github_token
 
@@ -341,11 +341,11 @@ class ZenHistoryTests(unittest.TestCase):
 
                 with (
                     patch(
-                        "miroir_agent.collectors.zen_history.gettempdir",
+                        "miroir_collector.sources.zen_history.gettempdir",
                         return_value=str(temp),
                     ),
                     patch(
-                        "miroir_agent.collectors.zen_history.shutil.copyfile",
+                        "miroir_collector.sources.zen_history.shutil.copyfile",
                         side_effect=copy_and_touch,
                     ),
                 ):
@@ -443,17 +443,17 @@ class ZenHistoryTests(unittest.TestCase):
         self.assertEqual(trailer["masked"], {})
 
     def test_config_validates_options(self):
-        path = self.root / "agent.json"
+        path = self.root / "collector.json"
 
         def config(options):
             path.write_text(
                 json.dumps(
                     {
                         "state_dir": str(self.root),
-                        "collectors": [
+                        "sources": [
                             {
                                 "id": "zen",
-                                "collector": "zen_history",
+                                "source": "zen_history",
                                 "receive_url": "https://example.org/receive?format=firefox_places_batch",
                                 "token_env": "ZEN_TOKEN",
                                 "options": options,
@@ -463,7 +463,7 @@ class ZenHistoryTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            return load_config(path).collectors[0].options
+            return load_config(path).sources[0].options
 
         options = self.options | {
             "profiles_dir": str(self.root),

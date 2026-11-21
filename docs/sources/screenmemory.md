@@ -1,12 +1,12 @@
 # ScreenMemory
 
 What was on the Mac's screen: one row per screenshot with its recognised text, and
-which app was in front. Collected on the Mac by the Miroir agent (decision 030).
+which app was in front. Collected on the Mac by the Miroir collector (decision 030).
 
-- **Status**: connector and collector built 2026-11-20; not deployed, no connection
+- **Status**: connector and source built 2026-11-20; not deployed, no connection
   configured yet
 - **Code**: connector [`src/integrations/screenmemory/`](../../src/integrations/screenmemory/),
-  collector [`agent/miroir_agent/collectors/screenmemory.py`](../../agent/miroir_agent/collectors/screenmemory.py)
+  source [`collector/miroir_collector/sources/screenmemory.py`](../../collector/miroir_collector/sources/screenmemory.py)
 - **Tables**: `frames`, `app_usage`, in the connection's dataset
 - **dbt**: none yet
 - **Dashboard**: none yet
@@ -21,7 +21,7 @@ reads its text on the Mac. In its data folder:
 - `usage.sqlite`, table `usage`: `timestamp`, `identifier` (the front app's bundle
   id). Its `name` column is unusable.
 - `screenshots/`: the image files. Miroir never parses them; `frames.image_path`
-  points at them, and the agent can upload them as media (decision 033).
+  points at them, and the collector can upload them as media (decision 033).
 
 ScreenMemory documents none of this, so a new version can change it. The collector
 checks the tables and columns it needs and fails with a fixed message if they are
@@ -47,9 +47,9 @@ output.
 - **Whole frames withheld** (the row is kept with `text` null and a reason in
   `withheld`): the front app is a password manager (`excluded_app`), or the text
   contains a password-manager address such as a web vault or the browser's own
-  password page (`marker`). Both lists can be extended in the agent's configuration.
+  password page (`marker`). Both lists can be extended in the collector's configuration.
 - **Spans masked** as `[masked:<rule>]`, counted per frame in `masked`. The
-  agent's own rules, in this order:
+  collector's own rules, in this order:
   - `private_key`: private key blocks;
   - `token`: known key and token shapes (GitHub, GitLab, AWS, Slack, Google, npm,
     Stripe, Tailscale, age, JSON web tokens, bearer values, `sk-` keys);
@@ -74,10 +74,10 @@ caught, so treat these tables as the most sensitive data in the warehouse.
 
 ### Your own rules
 
-Name rule files in the agent's configuration, beside `state_dir`:
+Name rule files in the collector's configuration, beside `state_dir`:
 
 ```json
-"masking": { "rules": ["~/.config/miroir-agent/rules.yml"] }
+"masking": { "rules": ["~/.config/miroir-collector/rules.yml"] }
 ```
 
 A rule file is in the scanner's format. Each rule is a pattern whose first
@@ -101,7 +101,7 @@ rules:
 A new or changed rule applies to what is collected from then on. To apply it to
 text already sent, run `resend` over the dates concerned.
 
-Screenshots cannot be masked. With `media` on, the agent uploads the image of
+Screenshots cannot be masked. With `media` on, the collector uploads the image of
 each frame it sent, and never the image of a frame it withheld. A screenshot can
 still show a secret that the text rules masked, so the bucket is private and a
 file is only reachable through a logged-in view link.
@@ -109,7 +109,7 @@ file is only reachable through a logged-in view link.
 To see what a batch would contain before anything is sent:
 
 ```bash
-miroir-agent collect --config agent.json --collector <id> --out /tmp/batches
+miroir-collector collect --config collector.json --source <id> --out /tmp/batches
 ```
 
 ## Tables
@@ -126,9 +126,9 @@ its app on the exact timestamp.
 
 - No dbt models: sessions, hours per app and a cleaned text for summaries are the
   next step.
-- Screenshots are uploaded only when the collector's `media` option is true, and
+- Screenshots are uploaded only when the source's `media` option is true, and
   only for frames after the media cursor. An existing archive is brought in by
   copying the `screenshots/` folder into the bucket under
-  `<prefix>/<connection>/screenshots/`; the agent then finds those files present.
-- History before the collector's `since` is not sent by normal runs. Load it later
-  with `miroir-agent resend --from ... --to ...`, with `--media` for the screenshots.
+  `<prefix>/<connection>/screenshots/`; the collector then finds those files present.
+- History before the source's `since` is not sent by normal runs. Load it later
+  with `miroir-collector resend --from ... --to ...`, with `--media` for the screenshots.

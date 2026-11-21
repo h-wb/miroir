@@ -6,8 +6,8 @@ from collections.abc import Iterator
 from importlib.util import resolve_name
 from pathlib import Path
 
-_AGENT = Path(__file__).resolve().parents[1]
-_SOURCES = {"collectors.screenmemory", "collectors.zen_history"}
+_COLLECTOR = Path(__file__).resolve().parents[1]
+_SOURCES = {"sources.screenmemory", "sources.zen_history"}
 # CLI constructs State for runner calls and handles a status read failure.
 _ALLOWED = {
     "": set(),
@@ -17,17 +17,17 @@ _ALLOWED = {
     "scanner": {"errors"},
     "batch": {"errors", "files"},
     "transport": {"errors", "models", ""},
-    "collectors.base": {"errors", "models", "dates", "masking"},
-    **dict.fromkeys(_SOURCES, {"collectors.base", "batch", "masking", "errors"}),
-    "collectors": {"collectors.base", *_SOURCES},
+    "sources.base": {"errors", "models", "dates", "masking"},
+    **dict.fromkeys(_SOURCES, {"sources.base", "batch", "masking", "errors"}),
+    "sources": {"sources.base", *_SOURCES},
     "state": {"errors", "models", "files"},
-    "media": {"transport", "collectors.base", "errors"},
-    "config": {"collectors", "collectors.base", "transport", "errors", "models"},
+    "media": {"transport", "sources.base", "errors"},
+    "config": {"sources", "sources.base", "transport", "errors", "models"},
     "cli": {
         "runner",
         "config",
         "errors",
-        "collectors.base",
+        "sources.base",
         "dates",
         "",
         "state",
@@ -38,8 +38,8 @@ _ALLOWED["runner"] = set(_ALLOWED) - {"cli", "__main__", *_SOURCES}
 _EXTERNAL = {
     "pydantic": {
         "models",
-        "collectors",
-        "collectors.base",
+        "sources",
+        "sources.base",
         *_SOURCES,
         "config",
         "state",
@@ -77,7 +77,7 @@ def _violation(part: str, source: str, symbol: str) -> str | None:
     root, _, suffix = source.partition(".")
     if symbol.startswith("_") and not symbol.startswith("__"):
         return f"private import {source}.{symbol}"
-    if root == "miroir_agent":
+    if root == "miroir_collector":
         if suffix not in _ALLOWED[part]:
             return f"{part} may not import {source}"
     elif root in _EXTERNAL:
@@ -90,24 +90,24 @@ def _violation(part: str, source: str, symbol: str) -> str | None:
 
 class BoundaryTests(unittest.TestCase):
     def test_import_boundaries(self) -> None:
-        modules = _modules(_AGENT / "miroir_agent")
+        modules = _modules(_COLLECTOR / "miroir_collector")
         self.assertEqual(modules.keys(), _ALLOWED.keys())
-        full_names = {f"miroir_agent.{part}" for part in modules if part}
+        full_names = {f"miroir_collector.{part}" for part in modules if part}
         errors = []
         for part, path in modules.items():
             parent = part if path.stem == "__init__" else part.rpartition(".")[0]
-            package = ".".join(filter(None, ("miroir_agent", parent)))
+            package = ".".join(filter(None, ("miroir_collector", parent)))
             for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
                 for source, symbol in _imports(node, package, full_names):
                     if error := _violation(part, source, symbol):
                         errors.append(
-                            f"{path.relative_to(_AGENT)}:{node.lineno}: {error}"
+                            f"{path.relative_to(_COLLECTOR)}:{node.lineno}: {error}"
                         )
         self.assertFalse(errors, "\n".join(errors))
 
     def test_declared_dependencies(self) -> None:
         project = tomllib.loads(
-            (_AGENT / "pyproject.toml").read_text(encoding="utf-8")
+            (_COLLECTOR / "pyproject.toml").read_text(encoding="utf-8")
         )["project"]
         self.assertCountEqual(
             project["dependencies"],
@@ -119,11 +119,11 @@ class BoundaryTests(unittest.TestCase):
         )
 
     def test_only_scanner_and_rules_are_imported_from_kingfisher(self) -> None:
-        path = _AGENT / "miroir_agent" / "scanner.py"
+        path = _COLLECTOR / "miroir_collector" / "scanner.py"
         imports = {
             (source, symbol)
             for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
-            for source, symbol in _imports(node, "miroir_agent", set())
+            for source, symbol in _imports(node, "miroir_collector", set())
             if source.split(".")[0] == "kingfisher_sdk"
         }
         self.assertEqual(

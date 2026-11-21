@@ -1452,3 +1452,52 @@ Considered and left out:
   a finding's value. Text that looks like UTF-16 would make the scanner report
   positions in its own decoded copy, so a text holding NUL characters counts as
   one it cannot answer for, and is masked whole.
+
+## 037 — The agent is renamed the collector
+
+Status: accepted, 2026-11-21. Renames what 030 to 036 call the agent.
+
+Decision 030 called the device-side program "the agent", the usual word for a
+small program installed on a machine that ships local data to a server. Two
+things made it the wrong word here:
+
+- The installations this is built for also run AI agents: an assistant, coding
+  agents, and whatever comes next. "The agent" stopped saying which one, and the
+  word should stay free for those.
+- It suggests a process that stays running. This program runs one pass and exits;
+  the operating system's scheduler starts it.
+
+**The program is the collector**: distribution and command `miroir-collector`,
+import name `miroir_collector`, folder `collector/`. The name says what it does:
+it sits beside the sources, reads them, masks, and forwards to Miroir.
+
+**What it reads from is a source.** The collector used to call one module per
+local application "a collector". That is now a source, which is also what
+`docs/sources/` already called the same thing on the server side.
+
+| Before | After |
+| --- | --- |
+| the agent, `miroir-agent`, `agent/` | the collector, `miroir-collector`, `collector/` |
+| a collector (ScreenMemory, browser history) | a source |
+| `"collectors": [...]`, `"collector": "screenmemory"` | `"sources": [...]`, `"source": "screenmemory"` |
+| `--collector ID` | `--source ID` |
+
+Nothing else changes: behaviour, the state folder, the batch formats, the
+requests, and the other configuration keys are as they were. The step name
+`collect` and the failure reason `source` keep their meaning.
+
+The old configuration keys are not accepted. There is one installation, and an
+alias kept for it would outlive its reason. An old file fails with the normal
+message, `top level: unknown key collectors`.
+
+Decisions 030 to 036 and the implementation log up to this date keep their
+wording; they are a record. Read "agent" there as the collector and "collector"
+as a source.
+
+The two programs stay two (decision 031). The question came up whether the
+server's command line and this one should be one. They are both command lines,
+but on opposite sides of a wall: one runs where the warehouse is, with its
+credentials and its whole dependency set; the other runs on a personal machine
+with a receive-only token and three libraries. One name for both would either put
+the server's stack on a laptop or hold two installs apart by import discipline
+alone, for the sake of a shared command name.

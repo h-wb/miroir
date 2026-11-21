@@ -1,4 +1,4 @@
-"""The durable state and lock of one collector."""
+"""The durable state and lock of one source."""
 
 import fcntl
 import json
@@ -51,7 +51,7 @@ def _validate[M: Model](model: type[M], raw: object) -> M:
     try:
         return model.model_validate(raw)
     except ValidationError:
-        raise StateError("Invalid agent state") from None
+        raise StateError("Invalid collector state") from None
 
 
 def _read(path: Path) -> dict[str, Any] | None:
@@ -60,9 +60,9 @@ def _read(path: Path) -> dict[str, Any] | None:
     except FileNotFoundError:
         return None
     except (OSError, ValueError, RecursionError):
-        raise StateError("Unreadable agent state") from None
+        raise StateError("Unreadable collector state") from None
     if not isinstance(data, dict):
-        raise StateError("Invalid agent state")
+        raise StateError("Invalid collector state")
     return data
 
 

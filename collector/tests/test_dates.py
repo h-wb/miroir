@@ -8,9 +8,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from miroir_agent.config import load_config
-from miroir_agent.dates import parse_date
-from miroir_agent.errors import ConfigError
+from miroir_collector.config import load_config
+from miroir_collector.dates import parse_date
+from miroir_collector.errors import ConfigError
 
 
 @contextmanager
@@ -64,15 +64,15 @@ class DateTests(unittest.TestCase):
 
     def options(self, name: str, options: dict):
         with TemporaryDirectory() as tmp:
-            path = Path(tmp) / "agent.json"
+            path = Path(tmp) / "collector.json"
             path.write_text(
                 json.dumps(
                     {
                         "state_dir": "state",
-                        "collectors": [
+                        "sources": [
                             {
                                 "id": "example",
-                                "collector": name,
+                                "source": name,
                                 "receive_url": "https://example.test/receive",
                                 "token_env": "TOKEN",
                                 "options": options,
@@ -81,7 +81,7 @@ class DateTests(unittest.TestCase):
                     }
                 )
             )
-            return load_config(path).collectors[0].options
+            return load_config(path).sources[0].options
 
     def test_config_since(self) -> None:
         with local_zone("UTC0"):

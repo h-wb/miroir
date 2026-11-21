@@ -1,4 +1,4 @@
-"""All agent HTTP requests, without redirects or retries."""
+"""All collector HTTP requests, without redirects or retries."""
 
 import json
 import os
@@ -125,7 +125,7 @@ class _Body:
 
 
 class Client:
-    """Every request the agent sends. Each method returns or raises `Failure`."""
+    """Every request the collector sends. Each method returns or raises `Failure`."""
 
     def __init__(self, receive_url: str, token_env: str, timeout: int) -> None:
         self.receive_url = receive_url
@@ -169,7 +169,7 @@ class Client:
                 method,
                 url,
                 body=body,
-                headers={"User-Agent": f"miroir-agent/{__version__}", **headers},
+                headers={"User-Agent": f"miroir-collector/{__version__}", **headers},
                 redirect=False,
                 preload_content=False,
             )

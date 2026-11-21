@@ -4,7 +4,7 @@ Browsing history from Zen (Firefox-based) on the MacBook, from 2025-01-07 on,
 including how long each page was in view and how much I typed on it.
 
 - **Status**: legacy load retired 2026-11-11; the data stays in `browser_history_data`. To be redone as a Miroir connection with a watched folder at `/miroir/data/browser` (the same synced NAS folder the legacy flow read)
-- **Code**: connector [`src/integrations/browser_history/`](../../src/integrations/browser_history/) (two formats: a full snapshot, and incremental batches from the agent); collector [`agent/miroir_agent/collectors/zen_history.py`](../../agent/miroir_agent/collectors/zen_history.py), built 2026-11-20, not deployed
+- **Code**: connector [`src/integrations/browser_history/`](../../src/integrations/browser_history/) (two formats: a full snapshot, and incremental batches from the collector); source [`collector/miroir_collector/sources/zen_history.py`](../../collector/miroir_collector/sources/zen_history.py), built 2026-11-20, not deployed
 - **Raw schema**: `browser_history_data.zen_*`
 - **dbt**: `staging.stg_browser__{visits, page_interactions}` → `browser.{visits, domains_daily}`
 - **Dashboard**: Browser (31): Overview (pages, hours in view, top sites, how I got there) / When (weekday × hour heatmap, hour and weekday charts, recent visits); Date, Group by and Site filters
@@ -61,9 +61,9 @@ replacement characters rather than failing the run.
 - `browser.domains_daily`: per site per local day, navigations plus minutes in
   view, minutes typing and key presses.
 
-## Through the agent (decision 032)
+## Through the collector (decision 032)
 
-The agent's `zen_history` collector is the second way in. It sends only what is
+The collector's `zen_history` source is the second way in. It sends only what is
 new, as `firefox_places_batch` files, into the same `zen_*` tables the snapshots
 load, so both can feed one connection.
 
@@ -81,7 +81,7 @@ Secrets in addresses are masked on the Mac unless `mask_urls` is false: a passwo
 in `user:password@host`, the value of a secret-named query or fragment parameter
 (`token`, `signature`, `code`, `key` and the like), and provider credentials and
 known token shapes in addresses and titles, found by the scanner's catalogue,
-your own rule files and the agent's own rules (decision 036). A long id in a
+your own rule files and the collector's own rules (decision 036). A long id in a
 path is left alone. The snapshot path masks nothing.
 
 Limits: a page whose title or counters change without a new visit is not sent

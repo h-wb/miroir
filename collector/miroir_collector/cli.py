@@ -6,12 +6,12 @@ import time
 from pathlib import Path
 
 from . import __version__, runner
-from .collectors.base import Window
-from .config import CollectorConfig, load_config
+from .config import SourceConfig, load_config
 from .dates import parse_date
 from .errors import ConfigError, Failure
 from .masking import Masker
 from .runner import Outcome, Resend, Result
+from .sources.base import Window
 from .state import State, StateError
 
 
@@ -45,7 +45,7 @@ def _print_result(label: str, result: Result) -> bool:
 
 
 def _run(
-    args: argparse.Namespace, config: CollectorConfig, state: State, masker: Masker
+    args: argparse.Namespace, config: SourceConfig, state: State, masker: Masker
 ) -> bool:
     rows, media = runner.run(
         config,
@@ -61,7 +61,7 @@ def _run(
 
 
 def _preview(
-    args: argparse.Namespace, config: CollectorConfig, state: State, masker: Masker
+    args: argparse.Namespace, config: SourceConfig, state: State, masker: Masker
 ) -> bool:
     return _print_result(
         config.id,
@@ -72,10 +72,10 @@ def _preview(
 
 
 def _resend(
-    args: argparse.Namespace, config: CollectorConfig, state: State, masker: Masker
+    args: argparse.Namespace, config: SourceConfig, state: State, masker: Masker
 ) -> bool:
-    if args.media and config.collector.media(config.options) is None:
-        print("Media is not enabled for this collector")
+    if args.media and config.source.media(config.options) is None:
+        print("Media is not enabled for this source")
         return True
     try:
         window = _resend_window(args.start, args.end)
@@ -94,7 +94,7 @@ def _resend(
 
 
 def _status(
-    args: argparse.Namespace, config: CollectorConfig, state: State, masker: Masker
+    args: argparse.Namespace, config: SourceConfig, state: State, masker: Masker
 ) -> bool:
     try:
         result = runner.status(config, state)
@@ -108,7 +108,7 @@ def _status(
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="miroir-agent", description="Collect and deliver local data to Miroir."
+        prog="miroir-collector", description="Collect and deliver local data to Miroir."
     )
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
@@ -123,10 +123,10 @@ def _parser() -> argparse.ArgumentParser:
     for command in (run, preview, resend, status):
         command.add_argument("--config", required=True, type=Path)
     for command in (run, preview):
-        command.add_argument("--collector", required=command is preview)
+        command.add_argument("--source", required=command is preview)
         command.add_argument("--max-batches", type=_positive, default=1)
     preview.add_argument("--out", required=True, type=Path)
-    resend.add_argument("--collector", required=True)
+    resend.add_argument("--source", required=True)
     resend.add_argument("--from", dest="start", required=True)
     resend.add_argument("--to", dest="end")
     resend.add_argument("--max-batches", type=_positive)
@@ -143,7 +143,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def _dispatch(
     args: argparse.Namespace,
-    config: CollectorConfig,
+    config: SourceConfig,
     state_dir: Path,
     masker: Masker,
 ) -> bool:
@@ -162,17 +162,17 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = load_config(args.config)
     except ConfigError as error:
-        print(f"Invalid agent configuration: {error}")
+        print(f"Invalid collector configuration: {error}")
         return 1
-    collectors = config.collectors
-    if (selected := getattr(args, "collector", None)) is not None:
-        collectors = [item for item in collectors if item.id == selected]
-        if not collectors:
-            print("Collector not configured")
+    sources = config.sources
+    if (selected := getattr(args, "source", None)) is not None:
+        sources = [item for item in sources if item.id == selected]
+        if not sources:
+            print("Source not configured")
             return 1
     # Starting the scanner is deferred to the first text that needs masking.
     masker = Masker(config.masking_rules)
     failed = False
-    for item in collectors:
+    for item in sources:
         failed |= _dispatch(args, item, config.state_dir, masker)
     return int(failed)

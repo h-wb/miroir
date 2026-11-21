@@ -14,13 +14,13 @@ from time import sleep
 from unittest.mock import patch
 from urllib.parse import urlsplit
 
-from miroir_agent.cli import main
-from miroir_agent.collectors.base import MediaItem
-from miroir_agent.config import load_config
-from miroir_agent.errors import ConfigError, Failure
-from miroir_agent.media import upload
-from miroir_agent.state import State
-from miroir_agent.transport import Client
+from miroir_collector.cli import main
+from miroir_collector.config import load_config
+from miroir_collector.errors import ConfigError, Failure
+from miroir_collector.media import upload
+from miroir_collector.sources.base import MediaItem
+from miroir_collector.state import State
+from miroir_collector.transport import Client
 
 from .masking_fixtures import MASKER
 from .test_dates import local_zone
@@ -42,7 +42,7 @@ class MediaTests(unittest.TestCase):
         self.images = self.data / "screenshots"
         self.images.mkdir(parents=True)
         self.state = self.root / "state" / "screen"
-        self.config = self.root / "agent.json"
+        self.config = self.root / "collector.json"
         self.plans: list[list[dict]] = []
         self.confirms: list[list[dict]] = []
         self.put_connections = set()
@@ -202,7 +202,7 @@ class MediaTests(unittest.TestCase):
         self,
         *,
         path: str = "/receive?format=old",
-        collector: str = "screenmemory",
+        source: str = "screenmemory",
         timeout_seconds: int = 10,
         **options: object,
     ) -> None:
@@ -210,15 +210,15 @@ class MediaTests(unittest.TestCase):
             json.dumps(
                 {
                     "state_dir": str(self.state.parent),
-                    "collectors": [
+                    "sources": [
                         {
                             "id": "screen",
-                            "collector": collector,
+                            "source": source,
                             "token_env": "TEST_TOKEN",
                             "receive_url": self.url + path,
                             "timeout_seconds": timeout_seconds,
                             "options": {"data_dir": str(self.data), **options}
-                            if collector == "screenmemory"
+                            if source == "screenmemory"
                             else options,
                         }
                     ],
@@ -236,11 +236,11 @@ class MediaTests(unittest.TestCase):
             db.execute("CREATE TABLE usage(timestamp, identifier)")
             db.executemany("INSERT INTO usage VALUES (?, ?)", apps)
 
-    def run_agent(
+    def run_collector(
         self, *extra: str, command: str = "run", token: str = "testing"
     ) -> tuple[int, str]:
         with (
-            patch("miroir_agent.cli.Masker", return_value=MASKER),
+            patch("miroir_collector.cli.Masker", return_value=MASKER),
             patch.dict(os.environ, TEST_TOKEN=token),
             redirect_stdout(io.StringIO()) as out,
         ):
@@ -282,8 +282,8 @@ class MediaTests(unittest.TestCase):
     def resend(
         self, *extra: str, end: str = END, token: str = "testing"
     ) -> tuple[int, str]:
-        return self.run_agent(
-            "--collector",
+        return self.run_collector(
+            "--source",
             "screen",
             "--from",
             START,
@@ -301,7 +301,7 @@ class MediaTests(unittest.TestCase):
         )
         for key in ("old.jpg", KEY):
             (self.images / key).write_bytes(b"fixture")
-        self.assertEqual(self.run_agent()[0], 0)
+        self.assertEqual(self.run_collector()[0], 0)
         self.assertEqual([row["ts"] for row in self.row_batches[0][1:-1]], [TS, TS])
         self.assertEqual(self.plans, [[{"key": KEY, "size": 7}]])
 
@@ -435,7 +435,7 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(
             self.plans[-1], [{"key": KEY, "size": 7}, {"key": "unsaved.jpg", "size": 7}]
         )
-        _, status = self.run_agent(command="status")
+        _, status = self.run_collector(command="status")
         self.assertIn('"resend":', status)
         for value in (KEY, TEXT, self.signed_url):
             self.assertNotIn(value, output + status)
@@ -447,7 +447,7 @@ class MediaTests(unittest.TestCase):
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
             self.resend("--media", "--out", str(self.root / "output"))
         self.assertEqual(error.exception.code, 2)
-        self.configure(collector="zen_history")
+        self.configure(source="zen_history")
         self.assertEqual(self.resend("--media")[0], 1)
         self.assertEqual(self.row_posts, 0)
 
@@ -473,8 +473,8 @@ class MediaTests(unittest.TestCase):
             with self.subTest(enabled=enabled):
                 self.configure(media=enabled, media_dir=str(directory))
                 out = directory / str(enabled)
-                code, _ = self.run_agent(
-                    "--collector", "screen", "--out", str(out), command="collect"
+                code, _ = self.run_collector(
+                    "--source", "screen", "--out", str(out), command="collect"
                 )
                 self.assertEqual(code, int(enabled))
                 self.assertEqual((out / "batch-0001.jsonl.gz").exists(), not enabled)
@@ -501,7 +501,7 @@ class MediaTests(unittest.TestCase):
             ("last.jpg", b"last"),
         ]:
             (self.images / key).write_bytes(body)
-        code, output = self.run_agent()
+        code, output = self.run_collector()
         self.assertEqual(code, 0)
         self.assertEqual(self.row_posts, 1)
         expected = [{"key": KEY, "size": 5}, {"key": "last.jpg", "size": 4}]
@@ -529,7 +529,7 @@ class MediaTests(unittest.TestCase):
             },
         )
         self.assertIn("media delivered", output)
-        code, status = self.run_agent(command="status")
+        code, status = self.run_collector(command="status")
         self.assertEqual(code, 0)
         self.assertIn(f'"media_cursor": {{"ts": {TS + 6}}}', status)
         for text in (self.signed_url, "private-link", KEY, TEXT):
@@ -543,7 +543,7 @@ class MediaTests(unittest.TestCase):
         for key in (KEY, "bad.txt"):
             (self.images / key).write_bytes(b"fixture")
         self.mode = "mixed"
-        self.assertEqual(self.run_agent()[0], 0)
+        self.assertEqual(self.run_collector()[0], 0)
         self.assertEqual(self.cursor(), TS + 1)
         self.assertEqual(self.media_status()["counts"]["present"], 1)
         self.assertEqual(self.media_status()["counts"]["rejected"], 1)
@@ -566,7 +566,7 @@ class MediaTests(unittest.TestCase):
             with self.subTest(mode=mode):
                 self.mode = mode
                 before = len(self.puts)
-                code, output = self.run_agent()
+                code, output = self.run_collector()
                 self.assertEqual(code, 1)
                 self.assert_failure(output, step, reason, status)
                 self.assertEqual(self.media_status()["counts"]["uploaded"], 0)
@@ -579,10 +579,10 @@ class MediaTests(unittest.TestCase):
         with (
             patch.dict(
                 os.environ,
-                {load_config(self.config).collectors[0].token_env: "testing"},
+                {load_config(self.config).sources[0].token_env: "testing"},
             ),
             Client(
-                self.url, load_config(self.config).collectors[0].token_env, 10
+                self.url, load_config(self.config).sources[0].token_env, 10
             ) as client,
             self.assertRaisesRegex(Failure, "^put: link$"),
         ):
@@ -593,7 +593,7 @@ class MediaTests(unittest.TestCase):
                 {"uploaded": 0},
             )
         self.mode = "upload"
-        self.assertEqual(self.run_agent()[0], 0)
+        self.assertEqual(self.run_collector()[0], 0)
         self.assertEqual(self.cursor(), TS)
         self.assertEqual(self.plans, [[{"key": KEY, "size": 7}]] * 8)
 
@@ -609,7 +609,7 @@ class MediaTests(unittest.TestCase):
     def test_upload_groups_and_put_concurrency(self) -> None:
         bodies = self.group_source()
         self.mode = "grouped"
-        self.assertEqual(self.run_agent()[0], 0)
+        self.assertEqual(self.run_collector()[0], 0)
         self.assertEqual([len(plan) for plan in self.plans], [25, 25, 10])
         self.assertEqual(self.confirms, self.plans)
         self.assertEqual(self.media_requests, ["uploads", "confirm"] * 3)
@@ -622,7 +622,7 @@ class MediaTests(unittest.TestCase):
     def test_reuses_put_connections_across_groups(self) -> None:
         self.group_source(30)
         self.mode = "grouped"
-        self.assertEqual(self.run_agent()[0], 0)
+        self.assertEqual(self.run_collector()[0], 0)
         self.assertEqual(len(self.puts), 30)
         self.assertLessEqual(len(self.put_connections), 4)
 
@@ -636,7 +636,7 @@ class MediaTests(unittest.TestCase):
             "plan",
             return_value={"key": KEY, "status": "present", "extra": marker},
         ):
-            code, output = self.run_agent()
+            code, output = self.run_collector()
         self.assertEqual(code, 1)
         self.assert_failure(output, "links", "reply")
         self.assertNotIn(marker, output + (self.state / "status.json").read_text())
@@ -676,10 +676,10 @@ class MediaTests(unittest.TestCase):
                 }
             )
         )
-        code, output = self.run_agent(command="status")
+        code, output = self.run_collector(command="status")
         self.assertEqual(code, 0)
         self.assertTrue(json.loads(output.split(" ", 1)[1])["pending"])
-        self.assertEqual(self.run_agent()[0], 0)
+        self.assertEqual(self.run_collector()[0], 0)
         self.assertEqual(self.row_batches, [[{"type": "header"}]])
         self.assertEqual(
             json.loads((self.state / "cursor.json").read_text()),
@@ -699,7 +699,7 @@ class MediaTests(unittest.TestCase):
         self.state.mkdir(parents=True)
         (self.state / "media_cursor.json").write_text(json.dumps({"ts": TS - 1}))
         self.mode = "fail_second_group"
-        code, output = self.run_agent()
+        code, output = self.run_collector()
         self.assertEqual(code, 1)
         result = self.assert_failure(output, "put", "http", 403)
         self.assertNotIn(
@@ -712,7 +712,7 @@ class MediaTests(unittest.TestCase):
 
         self.mode = "grouped"
         self.puts.clear()
-        self.assertEqual(self.run_agent()[0], 0)
+        self.assertEqual(self.run_collector()[0], 0)
         self.assertCountEqual([body for _, _, body, _ in self.puts], bodies[25:])
         self.assertEqual(self.media_status()["counts"]["present"], 25)
         self.assertEqual(self.media_status()["counts"]["uploaded"], 35)
@@ -724,7 +724,7 @@ class MediaTests(unittest.TestCase):
         (self.images / KEY).write_bytes(b"fixture")
         self.mode = "timeout"
         try:
-            code, output = self.run_agent()
+            code, output = self.run_collector()
         finally:
             self.release_timeout.set()
         self.assertEqual(code, 1)
@@ -733,13 +733,13 @@ class MediaTests(unittest.TestCase):
     def test_refused_connection(self) -> None:
         self.source()
         (self.images / KEY).write_bytes(b"fixture")
-        self.assertEqual(self.run_agent()[0], 0)
+        self.assertEqual(self.run_collector()[0], 0)
         # Reserve a port without listening so the connection is refused.
         with socket() as endpoint:
             endpoint.bind(("127.0.0.1", 0))
             self.url = f"http://127.0.0.1:{endpoint.getsockname()[1]}"
             self.configure(media=True)
-            code, output = self.run_agent()
+            code, output = self.run_collector()
         self.assertEqual(code, 1)
         self.assert_failure(output, "links", "network")
 
@@ -751,7 +751,7 @@ class MediaTests(unittest.TestCase):
         (self.state / "cursor.json").write_text(json.dumps(rows))
         (self.state / "status.json").write_text(json.dumps(status))
         (self.state / "media_cursor.json").write_text("{invalid fixture")
-        _, output = self.run_agent(command="status")
+        _, output = self.run_collector(command="status")
         self.assertEqual(
             json.loads(output.removeprefix("screen ")),
             {
@@ -768,7 +768,7 @@ class MediaTests(unittest.TestCase):
         self.state.mkdir(parents=True)
         cursor = self.state / "media_cursor.json"
         cursor.write_text(TEXT)
-        code, output = self.run_agent()
+        code, output = self.run_collector()
         self.assertEqual(code, 1)
         self.assert_failure(output, "collect", "state")
         self.assertEqual(cursor.read_text(), TEXT)
@@ -793,7 +793,10 @@ class MediaTests(unittest.TestCase):
         )
         for error in (OSError, sqlite3.OperationalError):
             with self.subTest(error=error):
-                for key, run in (("media", self.run_agent), ("resend", self.resend)):
+                for key, run in (
+                    ("media", self.run_collector),
+                    ("resend", self.resend),
+                ):
                     # Both passes open the two databases for rows before reading media.
                     connect = sqlite3.connect
                     reads = iter(range(2))
@@ -829,7 +832,7 @@ class MediaTests(unittest.TestCase):
                     },
                 ),
             ):
-                code, output = self.run_agent()
+                code, output = self.run_collector()
                 self.assertEqual(code, 1)
                 self.assert_failure(output, "links", "reply")
                 self.assertFalse(self.puts or self.confirms)
@@ -858,7 +861,7 @@ class MediaTests(unittest.TestCase):
             with (
                 patch.object(Path, "open", return_value=body),
                 patch.object(body, "read", side_effect=OSError(TEXT)),
-                patch("miroir_agent.transport.PoolManager") as opener,
+                patch("miroir_collector.transport.PoolManager") as opener,
                 Client(self.url, "UNUSED", 10) as client,
                 self.assertRaises(Failure) as failure,
             ):
@@ -871,7 +874,7 @@ class MediaTests(unittest.TestCase):
             )
             self.assertIsNone(failure.exception.http_status)
 
-        with patch("miroir_agent.transport.PoolManager") as opener:
+        with patch("miroir_collector.transport.PoolManager") as opener:
             opener.return_value.request.side_effect = OSError(TEXT)
             with (
                 Client(self.url, "UNUSED", 10) as client,
@@ -886,7 +889,7 @@ class MediaTests(unittest.TestCase):
     def test_put_uses_a_pool_without_proxies_retries_or_redirects(self) -> None:
         file = self.images / KEY
         file.write_bytes(b"x")
-        with patch("miroir_agent.transport.PoolManager") as pool_factory:
+        with patch("miroir_collector.transport.PoolManager") as pool_factory:
             pool = pool_factory.return_value
             pool.request.return_value.status = 204
             pool.request.return_value.length_remaining = 0
@@ -904,10 +907,10 @@ class MediaTests(unittest.TestCase):
         self.source([(TS + i, key, TEXT) for i, key in enumerate(keys)])
         for key in keys:
             (self.images / key).write_bytes(b"x")
-        self.assertEqual(self.run_agent("--max-media-files", "1")[0], 0)
+        self.assertEqual(self.run_collector("--max-media-files", "1")[0], 0)
         self.assertEqual(self.media_status()["counts"]["examined"], 1)
         self.assertEqual(self.cursor(), TS)
-        self.assertEqual(self.run_agent()[0], 0)
+        self.assertEqual(self.run_collector()[0], 0)
         self.assertEqual(self.cursor(), TS + 2)
         self.assertEqual(self.media_status()["counts"]["examined"], 2)
 
@@ -916,7 +919,7 @@ class MediaTests(unittest.TestCase):
         self.source([(TS, KEY, TEXT), (TS + 1, "new.jpg", TEXT)])
         for key in (KEY, "new.jpg"):
             (self.images / key).write_bytes(b"x")
-        self.assertEqual(self.run_agent()[0], 0)
+        self.assertEqual(self.run_collector()[0], 0)
         self.assertEqual(self.cursor(), TS)
         self.assertEqual(self.media_status()["counts"]["examined"], 1)
         self.assertEqual(self.plans, [[{"key": KEY, "size": 1}]])
@@ -926,12 +929,12 @@ class MediaTests(unittest.TestCase):
         self.source([(TS + 0.9, "b.jpg", TEXT), (TS + 0.1, KEY, TEXT)])
         for key in (KEY, "b.jpg"):
             (self.images / key).write_bytes(b"x")
-        self.assertEqual(self.run_agent("--max-media-files", "1")[0], 0)
+        self.assertEqual(self.run_collector("--max-media-files", "1")[0], 0)
         self.assertEqual(self.cursor(), TS)
         self.assertEqual(
             self.plans, [[{"key": key, "size": 1} for key in ("b.jpg", KEY)]]
         )
-        self.assertEqual(self.run_agent()[0], 0)
+        self.assertEqual(self.run_collector()[0], 0)
         self.assertEqual(self.media_status()["outcome"], "nothing_new")
         self.assertEqual(len(self.puts), 2)
 
@@ -939,8 +942,8 @@ class MediaTests(unittest.TestCase):
         self.configure(media=True)
         self.source()
         self.assertEqual(
-            self.run_agent(
-                "--collector",
+            self.run_collector(
+                "--source",
                 "screen",
                 "--out",
                 str(self.root / "preview"),
@@ -948,7 +951,7 @@ class MediaTests(unittest.TestCase):
             )[0],
             0,
         )
-        code, output = self.run_agent(token="")
+        code, output = self.run_collector(token="")
         self.assertEqual(code, 1)
         self.assert_failure(output, "links", "token")
         code, output = self.resend("--media", token="")
@@ -959,19 +962,19 @@ class MediaTests(unittest.TestCase):
     def test_disabled_by_default(self) -> None:
         self.source()
         (self.images / KEY).write_bytes(b"x")
-        self.assertEqual(self.run_agent()[0], 0)
+        self.assertEqual(self.run_collector()[0], 0)
         self.assertEqual(self.row_posts, 1)
         self.assertFalse(self.plans or self.puts or self.confirms)
         self.assertFalse((self.state / "media_cursor.json").exists())
 
     def test_config(self) -> None:
         self.configure(media=True, media_dir="~/images")
-        options = load_config(self.config).collectors[0].options
+        options = load_config(self.config).sources[0].options
         self.assertIs(options.media, True)
         self.assertEqual(options.media_dir, Path.home() / "images")
         for kwargs in (
             {"path": "/wrong?then=/receive", "media": True},
-            {"collector": "zen_history", "media": False},
+            {"source": "zen_history", "media": False},
             {"media": 1},
         ):
             with self.subTest(kwargs=kwargs):

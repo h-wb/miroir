@@ -1931,3 +1931,30 @@ Not done: never run on the real machine. Scanning is documented as offline and
 opened no socket in a check on Linux; a run on macOS with network access denied to
 the process is still owed. The agent's random-string rule still stops at `/` and
 `+`, as before.
+
+## 2026-11-21 — The agent renamed the collector (decision 037)
+
+"Agent" is wanted for AI components, and it suggested a process that stays
+running. The device-side program is now the collector: folder `collector/`,
+distribution and command `miroir-collector`, import name `miroir_collector`. What
+it called a collector, one module per local application, is a source:
+`sources/`, the `Source` contract, the `SOURCES` registry.
+
+For an installation: the configuration keys `collectors` and `collector` become
+`sources` and `source`, and the flag `--collector` becomes `--source`. The old
+keys are refused with the normal message. The state folder, the entry ids, the
+batch formats and the requests are unchanged, so a renamed configuration carries
+on from the same saved position. Requests now carry
+`User-Agent: miroir-collector/<version>`.
+
+On the server, the two connectors' labels say "Miroir collector", and the import
+rule refuses the old package names as well as the new one. Decisions 030 to 036
+and earlier log entries keep their wording.
+
+Validation: the collector suite (98 tests), the whole server suite and the
+contract tests are green, with ruff, format and mypy clean. A search for the old
+names finds them only in the historical records and in the import rule's refusal
+list.
+
+Not done: CI lints and type-checks `src tests scripts` only; the workflow change
+that adds `collector` is posted on the pull request.

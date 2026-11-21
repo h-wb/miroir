@@ -97,8 +97,8 @@ ListenBrainz, GitHub (personal access token for the configured login; the token'
 account is checked), and Bike Share Toronto (mobile-app member ID and authorization
 token) fetch. Apple Health reads Health Auto Export JSON (option `role`:
 `ongoing`/`historical`); browser history reads Firefox/Zen Places snapshots, plain or
-gzip, or the incremental batches the local agent sends; ScreenMemory reads the
-agent's batches too (see below). Native
+gzip, or the incremental batches the local collector sends; ScreenMemory reads the
+collector's batches too (see below). Native
 Apple Health XML is not supported. Each connector package under
 `src/integrations/<name>/` owns its settings, credentials, check, resources, inputs,
 and dlt sources; the registry only lists them. The legacy `src/sources/` and per-source
@@ -538,19 +538,19 @@ Configurable destinations, machine-local overlays, and stored immutable revision
 snapshots remain outside this schema. Unsupported fields fail validation rather than being ignored.
 Add each through a documented schema change when its operation is implemented.
 
-### Sending device data with the local agent
+### Sending device data with the local collector
 
-Some sources exist only on a personal machine. The agent in `agent/` (the
-`miroir-agent` package, decisions 030, 031 and 035) reads them there and posts
+Some sources exist only on a personal machine. The collector in `collector/` (the
+`miroir-collector` package, decisions 030, 031 and 035) reads them there and posts
 what is new to a connection's receiving URL. It installs on its own, with two
-small libraries and none of the server's; [its README](../../agent/README.md)
+small libraries and none of the server's; [its README](../../collector/README.md)
 covers installing it.
 
 ```bash
-miroir-agent run     --config agent.json [--collector ID] [--max-batches N]
-miroir-agent collect --config agent.json --collector ID --out DIR
-miroir-agent resend  --config agent.json --collector ID --from DATE [--to DATE]
-miroir-agent status  --config agent.json
+miroir-collector run     --config collector.json [--source ID] [--max-batches N]
+miroir-collector collect --config collector.json --source ID --out DIR
+miroir-collector resend  --config collector.json --source ID --from DATE [--to DATE]
+miroir-collector status  --config collector.json
 ```
 
 `run` is one pass: deliver a pending batch if there is one, otherwise collect, write
@@ -559,20 +559,20 @@ or 201; anything else leaves the batch in the spool for the next pass. `collect`
 writes the batches to a folder and sends nothing, to inspect what would leave the
 machine. `resend` collects a date range again and delivers it without moving the
 saved position (decision 034): use it after improving a masking rule, to repair a
-gap, or to load older history later. `status` shows each collector's cursor and
+gap, or to load older history later. `status` shows each source's cursor and
 last outcome. None of them prints source content.
 
-A collector's optional `since` (a date, or an instant with a UTC offset) is where
+A source's optional `since` (a date, or an instant with a UTC offset) is where
 it starts when it has no saved position. Starting recent and re-sending older
 months later gets a connection live quickly.
 
 ```json
 {
-  "state_dir": "~/Library/Application Support/miroir-agent",
-  "collectors": [
+  "state_dir": "~/Library/Application Support/miroir-collector",
+  "sources": [
     {
       "id": "screen_macbook",
-      "collector": "screenmemory",
+      "source": "screenmemory",
       "receive_url": "https://miroir.example/api/connections/screen_macbook/receive",
       "token_env": "MIROIR_TOKEN_SCREEN_MACBOOK",
       "options": {"data_dir": "~/ScreenMemoryData", "since": "2025-01-01"}
@@ -588,9 +588,9 @@ variable the configuration names, and have the operating system's scheduler star
 its own connection. Each delivery requests an import, so a first pass over a long
 history is best started by hand with a larger `--max-batches`.
 
-Collectors today: `screenmemory` ([what it sends and what it withholds](../sources/screenmemory.md))
-and `zen_history` ([browser history](../sources/browser-history.md#through-the-agent-decision-032)).
-The agent adds its collector's format to the receiving URL itself.
+Sources today: `screenmemory` ([what it sends and what it withholds](../sources/screenmemory.md))
+and `zen_history` ([browser history](../sources/browser-history.md#through-the-collector-decision-032)).
+The collector adds the source's format to the receiving URL itself.
 
 ### Media: files that rows point at
 
