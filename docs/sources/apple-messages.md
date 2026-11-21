@@ -25,7 +25,7 @@ stops collection with a fixed error.
 | `media` | false | Upload attachment files that are on disk |
 | `home` | user's home | Home directory for `~` in attachment paths and for the address book; set this for a restored copy |
 | `media_max_mb` | 500 | Maximum attachment size in MiB (1 to 5000); larger files count as `too_large` |
-| `names` | true | Send address book names for the handles in Messages |
+| `names` | false | Send address book names for the handles in Messages |
 
 The collector keeps a fingerprint of the database's layout (the table and column
 names it reads) with its cursor. When a system update changes that layout, the
@@ -76,9 +76,9 @@ under `<home>/Library/Application Support/AddressBook`, including account
 databases in `Sources`. Only handles in Messages are sent, not the whole address
 book. Email addresses match without regard to case, using the address book's
 normalized address when present. Phone numbers match by digits (at least seven),
-with a leading `1` on an 11-digit number optional. If several named records
-match, the collector uses the lowest database path and record ID and counts the
-handle in `names_ambiguous`.
+with a leading `1` on an 11-digit number optional. Matching cards that agree
+are treated as one. If they disagree, the handle is counted in
+`names_ambiguous` and no name is sent for it.
 
 Names are not masked. The collector sends the whole matched set when it changes,
 but not during a resend. If it can name nobody, it sends no contact records and
@@ -93,13 +93,27 @@ offered. Paths are resolved before the containment check, so a path or symlink
 pointing outside that folder is rejected. Files are stored by `media_key`; Miroir
 skips an upload when it already holds the same key at the same size.
 
-The collector revisits attachment rows and walks the files by inode change time,
-not by message date. A file that appears later for an old message can be picked
-up on a later pass. Files wait 60 seconds after their last inode change before
-they are eligible. A `resend --media --from ... --to ...` range selects media by
-when the file appeared on this machine; the row resend still uses message dates.
-The collector does not download or recover missing files or track which files
-are stored.
+The collector only offers files linked to messages in the normal delivery
+scope (`since` and the acknowledged message cursor). It waits for Miroir to
+acknowledge the attachment key and links first. When a late download makes
+the key available or changes it, the collector sends the updated attachment
+metadata and links without resending the message text. Files wait 60 seconds
+after their last inode change. The normal walk also accounts for when the
+metadata was acknowledged, so a file already on disk is not missed when its
+message is delivered on a later page.
+
+A `resend --media --from ... --to ...` range selects already acknowledged,
+in-scope media by file inode change time; the row resend still uses message
+dates. A pre-attachment collector cursor or a changed `since` starts media
+tracking at the current row cursor rather than guessing which old rows were
+sent. To include those older attachments, deliberately replay the wanted
+scope using fresh collector state for the same connection. The collector does
+not download or recover missing files.
+
+A media pass that offers files also counts, once, the in-scope attachments
+whose file is not on disk (`missing`) and those it cannot use (`invalid`: no
+usable key, a path outside the folder, an empty file or a folder). A pass with
+nothing new to offer reports neither.
 
 ## What never leaves the Mac
 

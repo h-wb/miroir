@@ -127,7 +127,15 @@ class Screenshots(Media):
         assert isinstance(cursor, ScreenMemoryCursor)
         return cursor.frames
 
-    def page(self, after: int, upto: int, limit: int) -> MediaPage | None:
+    def page(
+        self,
+        after: int,
+        upto: int,
+        limit: int,
+        *,
+        cursor: Cursor | None = None,
+        resend: bool = False,
+    ) -> MediaPage | None:
         return _collect_media(self.options, after, upto, limit)
 
 

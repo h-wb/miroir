@@ -2057,3 +2057,18 @@ green, with ruff, format and mypy clean. Not yet deployed.
 Not done: the scrape configuration and alert rules belong to the installation
 (home-ops), and nothing sets `MIROIR_METRICS_TOKEN` there yet. The pages show a
 UTC time, not an age.
+
+## 2026-11-21 — Apple Messages attachments and contact names (PR #40)
+
+The collector uses the existing media API for files under the Messages
+attachments directory. Uploads require acknowledged attachment metadata linked
+to in-scope messages. A late key change sends an attachment-only repair before
+the file is eligible. Contact names are opt-in and conflicting cards are skipped.
+
+Regression tests cover a recent-only paged import, failed deliveries, old files
+that become eligible on later pages, and a late attachment whose key is updated
+in the warehouse before the file can be used.
+
+The saved cursor now holds one entry per in-scope attachment (two digests and a
+time, about 150 bytes each: roughly 1 MB for 7,000 attachments); `status` leaves
+them out. A media pass counts files that are not on disk once, not once per page.

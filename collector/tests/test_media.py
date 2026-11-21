@@ -587,7 +587,8 @@ class MediaTests(unittest.TestCase):
             "home": str(home),
         }
         self.configure(**options)
-        self.assertEqual(self.run_collector()[0], 0)
+        with patch("miroir_collector.runner.time.time", return_value=TS):
+            self.assertEqual(self.run_collector()[0], 0)
         self.assertEqual(self.row_posts, 1)
         self.assertFalse(self.media_requests)
 
@@ -606,7 +607,7 @@ class MediaTests(unittest.TestCase):
 
         with patch.object(Path, "stat", timed_stat):
             self.assertEqual(self.run_collector()[0], 0)
-            self.assertEqual(self.cursor(), TS)
+            self.assertEqual(self.cursor(), TS + 60)
             self.assertEqual(self.confirms, [[{"key": "new.mov", "size": 4}]])
             self.assertEqual(self.media_status()["counts"]["uploaded"], 1)
             self.assertEqual(self.media_status()["counts"]["present"], 1)
@@ -619,6 +620,85 @@ class MediaTests(unittest.TestCase):
             self.assertEqual(self.plans, [self.plans[0]] * 2)
             self.assertEqual(len(self.puts), 1)
             self.assertEqual(self.row_posts, 1)
+
+    def test_apple_messages_uploads_only_after_scoped_metadata_delivery(self) -> None:
+        home = self.root / "home"
+        attachments = home / "Library/Messages/Attachments"
+        attachments.mkdir(parents=True)
+        database = attachments.parent / "chat.db"
+        with closing(sqlite3.connect(database)) as db:
+            db.executescript(
+                MESSAGES_SCHEMA
+                + """
+                INSERT INTO message(guid, date) VALUES
+                    ('excluded', 1), ('first', 800000000), ('next', 800000001);
+                INSERT INTO attachment(guid, filename) VALUES
+                    ('old', '~/Library/Messages/Attachments/old.jpg'),
+                    ('first', '~/Library/Messages/Attachments/first.jpg'),
+                    ('next', '~/Library/Messages/Attachments/next.jpg'),
+                    ('late', NULL),
+                    ('orphan', '~/Library/Messages/Attachments/orphan.jpg');
+                INSERT INTO message_attachment_join VALUES (1, 1), (2, 2), (3, 3), (2, 4);
+                """
+            )
+        for name in ("old", "first", "next", "late", "orphan"):
+            (attachments / f"{name}.jpg").write_bytes(b"data")
+        self.configure(
+            source="apple_messages",
+            home=str(home),
+            database=str(database),
+            media=True,
+            since="2023-01-01T00:00:00Z",
+            max_rows=1,
+        )
+        self.mode = "grouped"
+        now = max(path.stat().st_ctime for path in attachments.iterdir()) + 120
+        with patch("miroir_collector.runner.time.time", return_value=now) as clock:
+            self.assertEqual(self.run_collector()[0], 0)
+            first = self.row_batches[-1]
+            self.assertIsNone(
+                next(row for row in first if row.get("guid") == "late")["media_key"]
+            )
+            self.assertEqual(self.plans, [])
+
+            # A failed second page does not unlock its files. The first page
+            # can still upload, even though its files predate both pages.
+            clock.return_value += 1
+            self.fail_row_post = 2
+            self.assertEqual(self.run_collector()[0], 1)
+            self.assertEqual(self.plans, [[{"key": "first.jpg", "size": 4}]])
+
+            clock.return_value += 1
+            self.assertEqual(self.run_collector()[0], 0)
+            self.assertEqual(len(self.plans), 1)
+
+            with closing(sqlite3.connect(database)) as db, db:
+                db.execute(
+                    "UPDATE attachment SET filename = '~/Library/Messages/Attachments/late.jpg' WHERE guid = 'late'"
+                )
+            self.fail_row_post = 4
+            clock.return_value += 1
+            self.assertEqual(self.run_collector()[0], 1)
+            self.assertEqual(self.plans[-1], [{"key": "next.jpg", "size": 4}])
+
+            clock.return_value += 1
+            self.assertEqual(self.run_collector()[0], 0)
+            update = self.row_batches[-1][1:-1]
+            self.assertEqual(
+                {row["type"] for row in update}, {"attachment", "message_attachment"}
+            )
+            self.assertEqual(
+                next(row for row in update if row["type"] == "attachment")["media_key"],
+                "late.jpg",
+            )
+            self.assertEqual(len(self.plans), 2)
+
+            clock.return_value += 1
+            self.assertEqual(self.run_collector()[0], 0)
+            self.assertEqual(self.plans[-1], [{"key": "late.jpg", "size": 4}])
+            self.assertEqual(len(self.plans), 3)
+            self.assertEqual(self.row_posts, 5)
+            self.assertNotIn('"attachments"', self.run_collector(command="status")[1])
 
     def test_failure_retries_same_page(self) -> None:
         self.configure(media=True, since=START)

@@ -12,7 +12,6 @@ from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Thread
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 from urllib.request import Request, urlopen
@@ -94,7 +93,7 @@ def serve_collector_target(test, root, integration):
 
 @unittest.skipIf(sys.version_info < (3, 12), "collector requires Python 3.12")
 class AppleMessagesContractTests(unittest.TestCase):
-    def test_uploads_attachment_and_loads_collected_contacts(self):
+    def test_repairs_late_attachment_key_and_loads_collected_contacts(self):
         collector = Path(__file__).resolve().parents[1] / "collector"
         with patch.object(sys, "path", [str(collector), *sys.path]):
             from miroir_collector.cli import main
@@ -116,7 +115,7 @@ class AppleMessagesContractTests(unittest.TestCase):
                 + """
                 INSERT INTO message(guid, date, handle_id) VALUES ('message', 800000000, 1);
                 INSERT INTO handle(id, service) VALUES ('person@example.org', 'iMessage');
-                INSERT INTO attachment(guid, filename) VALUES ('attachment', '~/Library/Messages/Attachments/video.MOV');
+                INSERT INTO attachment(guid) VALUES ('attachment');
                 INSERT INTO message_attachment_join VALUES (1, 1);
             """
             )
@@ -146,6 +145,7 @@ class AppleMessagesContractTests(unittest.TestCase):
                                 "database": str(database),
                                 "home": str(home),
                                 "media": True,
+                                "names": True,
                             },
                         }
                     ],
@@ -153,26 +153,34 @@ class AppleMessagesContractTests(unittest.TestCase):
             )
         )
         ctime = file.stat().st_ctime
+        args = ["run", "--config", str(config)]
         with (
             patch.dict(os.environ, TEST_TOKEN=token),
             patch(
-                "miroir_collector.sources.apple_messages.time",
-                SimpleNamespace(time=lambda: ctime + 120),
-            ),
+                "miroir_collector.runner.time.time", return_value=ctime + 120
+            ) as clock,
             redirect_stdout(StringIO()),
         ):
-            self.assertEqual(main(["run", "--config", str(config)]), 0)
+            self.assertEqual(main(args), 0)
+            self.assertEqual(objects.put_count, 0)
+            with closing(sqlite3.connect(database)) as db, db:
+                db.execute(
+                    "UPDATE attachment SET filename = '~/Library/Messages/Attachments/video.MOV'"
+                )
+            clock.return_value += 1
+            self.assertEqual(main(args), 0)
+            self.assertEqual(objects.put_count, 0)
+            clock.return_value += 1
+            self.assertEqual(main(args), 0)
             key = "source/attachments/attachment.mov"
             self.assertEqual(objects.objects, {key: 5})
             self.assertEqual(objects.content_types, {key: "video/quicktime"})
             self.assertEqual(objects.put_count, 1)
-            self.assertEqual(main(["run", "--config", str(config)]), 0)
+            self.assertEqual(main(args), 0)
             self.assertEqual(objects.put_count, 1)
 
-        (artifact,) = metadata.list_artifacts("test", "source")
-        batch = Path(artifact["storage_path"])
+        first, repair = metadata.list_artifacts("test", "source")
         (fmt,) = APPLE_MESSAGES.formats
-        fmt.validate(batch)
         warehouse = root / "warehouse.duckdb"
         pipeline = dlt.pipeline(
             pipeline_name="apple_messages_contract",
@@ -180,9 +188,20 @@ class AppleMessagesContractTests(unittest.TestCase):
             destination=dlt.destinations.duckdb(credentials=str(warehouse)),
             dataset_name="apple_rows",
         )
-        with fmt.open(APPLE_MESSAGES.settings_model(), str(batch), {}) as source:
-            pipeline.run(source)
         with closing(duckdb.connect(str(warehouse))) as db:
+            for artifact, expected in ((first, None), (repair, "attachment.mov")):
+                batch = Path(artifact["storage_path"])
+                fmt.validate(batch)
+                with fmt.open(
+                    APPLE_MESSAGES.settings_model(), str(batch), {}
+                ) as source:
+                    pipeline.run(source)
+                self.assertEqual(
+                    db.execute(
+                        "SELECT media_key FROM apple_rows.attachments"
+                    ).fetchall(),
+                    [(expected,)],
+                )
             self.assertEqual(
                 db.execute(
                     "SELECT handle, first_name, last_name FROM apple_rows.contacts"

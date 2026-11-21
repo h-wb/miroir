@@ -135,10 +135,10 @@ file with an HTTP PUT, and asks Miroir to confirm. It holds no storage credentia
 - `screenmemory`: uploads screenshots from `<data_dir>/screenshots` (or
   `media_dir`). It never uploads a withheld frame or runs ahead of delivered rows.
 - `apple_messages`: uploads only files already on disk inside the resolved
-  Messages attachments folder, using each attachment's `media_key`. It can run
-  ahead of individual rows after the first row delivery. Later files are picked
-  up by inode change time, so `resend --media` selects files by when they appeared,
-  not by message date. See the [source options](../docs/sources/apple-messages.md).
+  Messages attachments folder, after Miroir has acknowledged their keys and
+  links to in-scope messages. `resend --media` filters these files by inode
+  change time, not by message date. See the
+  [source options](../docs/sources/apple-messages.md).
 
 `run --max-media-files N` sets the pass limit (default 2000); files sharing the
 same position stay together. Links are requested for 25 files at a

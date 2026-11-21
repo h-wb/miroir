@@ -1,5 +1,7 @@
 """Collect Apple Messages rows, attachment files and address book names."""
 
+from __future__ import annotations
+
 import hashlib
 import json
 import math
@@ -10,9 +12,10 @@ import time
 from collections import Counter
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
+from dataclasses import dataclass
 from itertools import batched
 from pathlib import Path, PurePosixPath
-from typing import Annotated, Any
+from typing import Annotated, Any, TypeGuard
 from urllib.parse import quote
 
 from pydantic import BeforeValidator, Field
@@ -153,6 +156,7 @@ def _pair(value: object) -> object:
 
 
 Anchor = Annotated[tuple[int, Digest], BeforeValidator(_pair)]
+AttachmentAck = Annotated[tuple[Digest, int | None], BeforeValidator(_pair)]
 
 
 class AppleMessagesOptions(Options):
@@ -165,7 +169,7 @@ class AppleMessagesOptions(Options):
     media: bool = False
     home: UserPath = Field(default="~", validate_default=True)
     media_max_mb: int = Field(default=500, ge=1, le=5000)
-    names: bool = True
+    names: bool = False
 
     @property
     def attachments(self) -> Path:
@@ -184,6 +188,26 @@ class AppleMessagesCursor(Cursor):
     edits: Digest = ""
     # SHA-256 of the sorted table.column names the source reads.
     layout: Digest = ""
+    # Fingerprint of attachment GUID -> (fingerprint of key and links, ack second).
+    attachments: dict[Digest, AttachmentAck] = Field(default_factory=dict)
+    attachment_floor: int | None = None
+    attachment_since: int | None = None
+
+    def acknowledged(self, now: float) -> AppleMessagesCursor:
+        return self.model_copy(
+            update={
+                "attachments": {
+                    key: (digest, int(now) if ack is None else ack)
+                    for key, (digest, ack) in self.attachments.items()
+                }
+            }
+        )
+
+    def public_status(self) -> dict[str, Any]:
+        return self.model_dump(
+            exclude_unset=True,
+            exclude={"attachments", "attachment_floor", "attachment_since"},
+        )
 
 
 class AppleMessages(Source[AppleMessagesOptions, AppleMessagesCursor]):
@@ -254,19 +278,47 @@ class Attachments(Media):
 
     def __init__(self, options: AppleMessagesOptions) -> None:
         self.options = options
+        self._walked = False
 
     def start(self) -> int:
         return 0
 
     def limit(self, cursor: Cursor | None) -> int | None:
-        return None if cursor is None else 2**62
+        if (
+            not isinstance(cursor, AppleMessagesCursor)
+            or not cursor.attachments
+            or cursor.attachment_since != self.options.since
+        ):
+            return None
+        return 2**62
 
-    def page(self, after: int, upto: int, limit: int) -> MediaPage | None:
+    def page(
+        self,
+        after: int,
+        upto: int,
+        limit: int,
+        *,
+        cursor: Cursor | None = None,
+        resend: bool = False,
+    ) -> MediaPage | None:
+        if not isinstance(cursor, AppleMessagesCursor) or self.limit(cursor) is None:
+            return None
         counts = dict.fromkeys(("examined", "missing", "invalid", "too_large"), 0)
-        upper = min(upto, int(time.time()) - 60)
+        now = int(time.time())
+        upper = min(upto, now - 1)
         try:
             with _snapshot(self.options.database) as db:
-                files = self._files(db, after, upper, counts)
+                if _rebuilt(
+                    cursor.anchors, [a for a in cursor.anchors if _matches(db, a)]
+                ):
+                    return None
+                # Every page walks the whole scope, so files with no timestamp
+                # are counted by the first page of a pass only.
+                unplaced = dict(counts) if self._walked else counts
+                files = self._files(
+                    db, cursor, (after, upper), unplaced, now=now, resend=resend
+                )
+                self._walked = True
         except (sqlite3.Error, OSError, RuntimeError, ValueError):
             raise Failure("collect", "source") from None
         if not files:
@@ -290,38 +342,40 @@ class Attachments(Media):
         )
 
     def _files(
-        self, db: sqlite3.Connection, after: int, upper: int, counts: dict[str, int]
+        self,
+        db: sqlite3.Connection,
+        cursor: AppleMessagesCursor,
+        span: tuple[int, int],
+        counts: dict[str, int],
+        *,
+        now: int,
+        resend: bool,
     ) -> list[tuple[int, str | None, Path, int]]:
+        after, upper = span
         root = self.options.attachments.resolve()
-        columns = {
-            row[0].lower()
-            for row in db.execute("SELECT name FROM pragma_table_info('attachment')")
-        }
-        if "guid" not in columns:
-            raise Failure("collect", "source")
-        if "filename" not in columns:
-            return []
-        transfer = _column("a", "transfer_name", columns, "transfer_name")
         files = []
-        for guid, filename, name in db.execute(
-            f"SELECT a.guid, a.filename, {transfer} FROM attachment a WHERE a.filename IS NOT NULL"
-        ):
-            key = media_key(guid, name, filename)
+        for ref in _attachment_refs(db, _columns(db), self.options, cursor):
+            ack = ref.acknowledgement(cursor)
+            if ack is None or ref.filename is None:
+                continue
             try:
-                path = _attachment_path(filename, self.options.home, root)
+                path = _attachment_path(ref.filename, self.options.home, root)
                 info = path.stat()
             except FileNotFoundError:
                 # Paths with no timestamp are counted during the scan, but
                 # cannot advance a page or count against its file limit.
-                counts["missing" if key is not None else "invalid"] += 1
+                counts["missing" if ref.key is not None else "invalid"] += 1
                 continue
             except (OSError, RuntimeError, ValueError):
                 counts["invalid"] += 1
                 continue
             second = int(info.st_ctime)
+            if second > now - 60:
+                continue
+            second = second if resend else max(second + 60, ack)
             if after < second <= upper:
                 size = info.st_size if stat.S_ISREG(info.st_mode) else 0
-                files.append((second, key, path, size))
+                files.append((second, ref.key, path, size))
         return files
 
 
@@ -476,6 +530,107 @@ def _since(options: AppleMessagesOptions) -> tuple[str, list[int]]:
     return f" AND {_ns('m.date')} >= ?", [_nanoseconds(options.since)]
 
 
+@dataclass(frozen=True)
+class _AttachmentRef:
+    rowid: int
+    guid: str
+    filename: str | None
+    key: str | None
+    messages: set[str]
+
+    def fingerprint(self) -> str:
+        return _fingerprint(
+            json.dumps([self.key, self.filename, sorted(self.messages)])
+        )
+
+    def acknowledgement(self, cursor: AppleMessagesCursor) -> int | None:
+        saved = cursor.attachments.get(_fingerprint(self.guid))
+        return (
+            saved[1] if saved is not None and saved[0] == self.fingerprint() else None
+        )
+
+
+def _attachment_scope(
+    options: AppleMessagesOptions, cursor: AppleMessagesCursor
+) -> tuple[str, list[int]]:
+    params = [cursor.attachment_floor or 0, cursor.message]
+    cutoffs = [
+        date for date in (options.since, cursor.attachment_since) if date is not None
+    ]
+    if not cutoffs:
+        return "", params
+    return f" AND {_ns('m.date')} >= ?", [*params, _nanoseconds(max(cutoffs))]
+
+
+def _attachment_refs(
+    db: sqlite3.Connection,
+    columns: dict[str, set[str]],
+    options: AppleMessagesOptions,
+    cursor: AppleMessagesCursor,
+) -> list[_AttachmentRef]:
+    fields = columns["attachment"]
+    filename = _column("a", "filename", fields, "filename")
+    transfer = _column("a", "transfer_name", fields, "transfer_name")
+    since, params = _attachment_scope(options, cursor)
+    refs: dict[int, _AttachmentRef] = {}
+    for rowid, guid, path, name, message in db.execute(
+        f"SELECT a.ROWID, a.guid, {filename}, {transfer}, m.guid "
+        "FROM message m JOIN message_attachment_join j ON j.message_id = m.ROWID "
+        "JOIN attachment a ON a.ROWID = j.attachment_id "
+        f"WHERE m.ROWID > ? AND m.ROWID <= ? AND typeof(m.date) = 'integer'{since}",
+        params,
+    ):
+        if not (_valid_key(guid) and _valid_key(message)):
+            continue
+        if rowid not in refs:
+            filename_value = path if isinstance(path, str) else None
+            refs[rowid] = _AttachmentRef(
+                rowid,
+                guid,
+                filename_value,
+                media_key(guid, name, filename_value),
+                set(),
+            )
+        refs[rowid].messages.add(message)
+    return list(refs.values())
+
+
+def _attachment_updates(
+    db: sqlite3.Connection,
+    columns: dict[str, set[str]],
+    options: AppleMessagesOptions,
+    cursor: AppleMessagesCursor,
+    rows: dict[str, list[Row]],
+) -> dict[str, tuple[str, int | None]]:
+    saved = cursor.attachments.copy()
+    changed: list[int] = []
+    links: set[tuple[str, str]] = set()
+    for ref in _attachment_refs(db, columns, options, cursor):
+        key = _fingerprint(ref.guid)
+        digest = ref.fingerprint()
+        if (prior := saved.get(key)) is not None and prior[0] == digest:
+            continue
+        saved[key] = (digest, None)
+        changed.append(ref.rowid)
+        links.update((guid, ref.guid) for guid in ref.messages)
+    if changed:
+        records = rows.setdefault("attachment", [])
+        existing = {row["guid"] for row in records}
+        records.extend(
+            row
+            for row in _attachment_rows(db, columns, changed)
+            if row["guid"] not in existing
+        )
+        edge_rows = rows.setdefault("message_attachment", [])
+        links.difference_update(
+            (row["message_guid"], row["attachment_guid"]) for row in edge_rows
+        )
+        edge_rows.extend(
+            {"message_guid": m, "attachment_guid": a} for m, a in sorted(links)
+        )
+    return saved
+
+
 def _edits(
     db: sqlite3.Connection,
     columns: dict[str, set[str]],
@@ -622,11 +777,19 @@ def _message_links(
             rows["message_attachment"].append(link)
             if rowid is not None:
                 attachments.add(rowid)
+    rows["attachment"] = _attachment_rows(db, columns, sorted(attachments))
+    return rows
+
+
+def _attachment_rows(
+    db: sqlite3.Connection, columns: dict[str, set[str]], ids: list[int]
+) -> list[Row]:
     fields = _fields("a", _ATTACHMENT, columns["attachment"])
     fields += ", " + _column("a", "filename", columns["attachment"], "_filename")
-    for chunk in batched(sorted(attachments), 500):
+    rows: list[Row] = []
+    for chunk in batched(ids, 500):
         marks = ",".join("?" for _ in chunk)
-        rows["attachment"].extend(
+        rows.extend(
             dict(row)
             for row in db.execute(
                 f"SELECT {fields} FROM attachment a WHERE a.ROWID IN ({marks}) ORDER BY a.ROWID",
@@ -751,9 +914,7 @@ def _book_matches(
 
 def _contacts(home: Path, handles: list[Row]) -> tuple[list[Row], int, int]:
     addresses = {
-        handle: _address(handle)
-        for row in handles
-        if isinstance(handle := row["id"], str)
+        handle: _address(handle) for row in handles if _valid_key(handle := row["id"])
     }
     try:
         books = _address_books(home)
@@ -770,8 +931,10 @@ def _contacts(home: Path, handles: list[Row]) -> tuple[list[Row], int, int]:
     ambiguous = 0
     for handle, key in sorted(addresses.items()):
         if key is not None and (records := matches.get(key)):
-            contacts.append({"handle": handle, **records[0]})
-            ambiguous += len(records) > 1 and _valid_key(handle)
+            if any(record != records[0] for record in records[1:]):
+                ambiguous += 1
+            else:
+                contacts.append({"handle": handle, **records[0]})
     return contacts, 0, ambiguous
 
 
@@ -807,6 +970,14 @@ def _collect_rows(
         "names_unavailable": 0,
         "names_ambiguous": 0,
     }
+    next_cursor = cursor.model_copy(
+        update={
+            "message": last,
+            "anchors": _anchors(kept, messages),
+            "edits": edits,
+            "layout": layout,
+        }
+    )
     if window is None:
         chats, handles = _snapshots(db, columns)
         chats_digest, handles_digest = _digest(chats), _digest(handles)
@@ -820,26 +991,47 @@ def _collect_rows(
                 diagnostics["names_unavailable"],
                 diagnostics["names_ambiguous"],
             ) = _contacts(options.home, handles["handle"])
-            valid = [row for row in contacts if _valid_key(row["handle"])]
             if not diagnostics["names_unavailable"]:
-                contacts_digest = _digest({"contact": valid}) if valid else ""
-            if (valid and contacts_digest != cursor.contacts_digest) or (
-                rows and not valid and contacts
-            ):
+                contacts_digest = _digest({"contact": contacts}) if contacts else ""
+            if contacts and contacts_digest != cursor.contacts_digest:
                 rows["contact"] = contacts
+        next_cursor = _track_attachments(
+            db, columns, options, cursor, next_cursor, rows
+        )
     return (
         rows,
-        AppleMessagesCursor(
-            message=last,
-            anchors=_anchors(kept, messages),
-            chats_digest=chats_digest,
-            handles_digest=handles_digest,
-            contacts_digest=contacts_digest,
-            edits=edits,
-            layout=layout,
+        next_cursor.model_copy(
+            update={
+                "chats_digest": chats_digest,
+                "handles_digest": handles_digest,
+                "contacts_digest": contacts_digest,
+            }
         ),
         more,
         diagnostics,
+    )
+
+
+def _track_attachments(
+    db: sqlite3.Connection,
+    columns: dict[str, set[str]],
+    options: AppleMessagesOptions,
+    previous: AppleMessagesCursor,
+    cursor: AppleMessagesCursor,
+    rows: dict[str, list[Row]],
+) -> AppleMessagesCursor:
+    if previous.attachment_floor is None or previous.attachment_since != options.since:
+        # A legacy cursor or a changed cutoff cannot establish which older rows
+        # were delivered under this scope.
+        cursor = cursor.model_copy(
+            update={
+                "attachment_floor": previous.message,
+                "attachment_since": options.since,
+                "attachments": {},
+            }
+        )
+    return cursor.model_copy(
+        update={"attachments": _attachment_updates(db, columns, options, cursor, rows)}
     )
 
 
@@ -851,7 +1043,7 @@ def _value(key: str, value: Any) -> str | int | None:
     return value if isinstance(value, str) else None
 
 
-def _valid_key(value: object) -> bool:
+def _valid_key(value: object) -> TypeGuard[str]:
     # A key is never altered: one holding NUL or undecodable bytes (decoded as
     # U+FFFD) could merge with another row once replaced, so the row is skipped.
     return isinstance(value, str) and not ("\x00" in value or "\ufffd" in value)
