@@ -5,16 +5,18 @@ import shutil
 import sqlite3
 import unittest
 from contextlib import closing
+from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from miroir_agent.collectors.zen_history import (
-    CHANGING_SOURCE_ERROR,
-    SOURCE_ERROR,
-    collect,
+    ZenHistory,
+    ZenHistoryCursor,
+    ZenHistoryOptions,
 )
 from miroir_agent.config import load_config
+from miroir_agent.errors import ConfigError, Failure
 
 _REQUIRED = """
 CREATE TABLE moz_places(id INTEGER PRIMARY KEY, url TEXT, title TEXT, description TEXT, preview_image_url TEXT);
@@ -44,7 +46,14 @@ class ZenHistoryTests(unittest.TestCase):
 
     def run_collect(self, cursor=None, **options):
         self.out.unlink(missing_ok=True)
-        return collect(self.options | options, cursor, self.out, 1795186800)
+        raw = self.options | options
+        if isinstance(raw.get("since"), int):
+            raw["since"] = datetime.fromtimestamp(raw["since"], UTC).isoformat()
+        if isinstance(cursor, dict):
+            cursor = ZenHistoryCursor.model_validate(cursor)
+        return ZenHistory().collect(
+            ZenHistoryOptions.model_validate(raw), cursor, self.out, 1795186800
+        )
 
     def batch(self):
         with gzip.open(self.out, "rt", encoding="utf-8") as file:
@@ -82,12 +91,12 @@ class ZenHistoryTests(unittest.TestCase):
             trailer, {"type": "trailer", "rows": dict.fromkeys(rows, 1), "masked": {}}
         )
         self.assertEqual(batch.counts, {"rows": trailer["rows"], "masked": {}})
-        self.assertEqual(batch.cursor["visit_id"], 5)
-        self.assertEqual(batch.cursor["visit_date"], 20)
-        self.assertEqual(batch.cursor["place_id"], 1)
-        self.assertEqual(batch.cursor["metadata_updated_at"], 30)
+        self.assertEqual(batch.cursor.model_dump()["visit_id"], 5)
+        self.assertEqual(batch.cursor.model_dump()["visit_date"], 20)
+        self.assertEqual(batch.cursor.model_dump()["place_id"], 1)
+        self.assertEqual(batch.cursor.model_dump()["metadata_updated_at"], 30)
         for name in ("origins_digest", "bookmarks_digest"):
-            self.assertRegex(batch.cursor[name], r"^[0-9a-f]{64}$")
+            self.assertRegex(batch.cursor.model_dump()[name], r"^[0-9a-f]{64}$")
         self.assertFalse(batch.more)
         self.assertIsNone(self.run_collect(batch.cursor))
         self.assertFalse(self.out.exists())
@@ -103,7 +112,8 @@ class ZenHistoryTests(unittest.TestCase):
             },
         )
         self.assertEqual(
-            next_batch.cursor, batch.cursor | {"visit_id": 6, "visit_date": 40}
+            next_batch.cursor,
+            batch.cursor.model_copy(update={"visit_id": 6, "visit_date": 40}),
         )
 
         self.sql("UPDATE moz_origins SET host = 'example.net';")
@@ -112,7 +122,8 @@ class ZenHistoryTests(unittest.TestCase):
             self.batch()[0], {"moz_origins": [{"id": 3, "host": "example.net"}]}
         )
         self.assertNotEqual(
-            changed.cursor["origins_digest"], batch.cursor["origins_digest"]
+            changed.cursor.model_dump()["origins_digest"],
+            batch.cursor.model_dump()["origins_digest"],
         )
 
     def test_collects_visits_whose_ids_were_reused(self):
@@ -143,12 +154,16 @@ class ZenHistoryTests(unittest.TestCase):
         self.assertEqual([r["id"] for r in rows["moz_historyvisits"]], reused)
         self.assertEqual([r["visit_date"] for r in rows["moz_historyvisits"]], [40, 50])
         self.assertCountEqual([r["id"] for r in rows["moz_places"]], [2, 3])
-        self.assertEqual(next_batch.cursor, initial.cursor | {"visit_date": 50})
+        self.assertEqual(
+            next_batch.cursor, initial.cursor.model_copy(update={"visit_date": 50})
+        )
         self.assertFalse(next_batch.more)
         self.assertIsNone(self.run_collect(next_batch.cursor))
 
         legacy = {
-            key: value for key, value in initial.cursor.items() if key != "visit_date"
+            key: value
+            for key, value in initial.cursor.model_dump().items()
+            if key != "visit_date"
         }
         self.assertEqual(self.run_collect(legacy).cursor, next_batch.cursor)
         self.assertEqual(
@@ -205,15 +220,17 @@ class ZenHistoryTests(unittest.TestCase):
         self.dated_source()
         cursor = None
         for visit, metadata in ((2, 2), (4, 4)):
-            batch = collect(
-                self.options | {"since": 99, "max_rows": 1},
+            batch = ZenHistory().collect(
+                ZenHistoryOptions.model_validate(
+                    self.options | {"since": "1970-01-01T00:01:39Z", "max_rows": 1}
+                ),
                 cursor,
                 self.out,
                 20,
                 window=(10, 12),
             )
             assert batch is not None
-            cursor = batch.cursor | {"visit_date": 0}
+            cursor = batch.cursor.model_copy(update={"visit_date": 0})
             rows, _ = self.batch()
             self.assertEqual(
                 {table: [row["id"] for row in items] for table, items in rows.items()},
@@ -223,7 +240,15 @@ class ZenHistoryTests(unittest.TestCase):
                     "moz_places_metadata": [metadata],
                 },
             )
-        self.assertIsNone(collect(self.options, cursor, self.out, 20, window=(10, 12)))
+        self.assertIsNone(
+            ZenHistory().collect(
+                ZenHistoryOptions.model_validate(self.options),
+                cursor,
+                self.out,
+                20,
+                window=(10, 12),
+            )
+        )
 
     def test_visit_and_place_pages_with_interaction_ties(self):
         self.sql(
@@ -248,7 +273,7 @@ class ZenHistoryTests(unittest.TestCase):
             self.assertCountEqual([r["id"] for r in rows["moz_places"]], places)
             self.assertEqual([r["id"] for r in rows["moz_places_metadata"]], metadata)
             self.assertEqual(batch.more, i < 2)
-            self.assertEqual(batch.cursor["place_id"], 2 if i == 0 else 3)
+            self.assertEqual(batch.cursor.model_dump()["place_id"], 2 if i == 0 else 3)
             cursor = batch.cursor
         self.assertIsNone(self.run_collect(cursor, max_rows=2))
 
@@ -278,9 +303,11 @@ class ZenHistoryTests(unittest.TestCase):
         for exists in (False, True):
             if exists:
                 self.sql("CREATE TABLE moz_places(id, url);")
-            with self.assertRaises(ValueError) as caught:
+            with self.assertRaises(Failure) as caught:
                 self.run_collect()
-            self.assertEqual(str(caught.exception), SOURCE_ERROR)
+            self.assertEqual(
+                (caught.exception.step, caught.exception.reason), ("collect", "source")
+            )
             self.assertNotIn(str(self.source), str(caught.exception))
             self.assertFalse(self.out.exists())
 
@@ -317,9 +344,12 @@ class ZenHistoryTests(unittest.TestCase):
                         self.assertIsNotNone(self.run_collect())
                         self.assertEqual(self.batch()[0]["moz_places"][0]["id"], 1)
                     else:
-                        with self.assertRaises(ValueError) as caught:
+                        with self.assertRaises(Failure) as caught:
                             self.run_collect()
-                        self.assertEqual(str(caught.exception), CHANGING_SOURCE_ERROR)
+                        self.assertEqual(
+                            (caught.exception.step, caught.exception.reason),
+                            ("collect", "source"),
+                        )
                         self.assertFalse(self.out.exists())
                 self.assertEqual(len(set(attempts)), expected_attempts)
                 self.assertEqual(list(temp.iterdir()), [])
@@ -336,8 +366,13 @@ class ZenHistoryTests(unittest.TestCase):
         self.options = {"profiles_dir": str(self.root)}
         self.run_collect()
         self.assertEqual(self.batch()[0]["moz_places"][0]["id"], 2)
-        with self.assertRaisesRegex(ValueError, "output cannot be inside"):
-            collect(self.options, None, new_profile / "batch.gz", 1795186800)
+        with self.assertRaisesRegex(Failure, "^collect: state$"):
+            ZenHistory().collect(
+                ZenHistoryOptions.model_validate(self.options),
+                None,
+                new_profile / "batch.gz",
+                1795186800,
+            )
 
     def test_masks_urls_and_titles_and_can_disable_masking(self):
         self.sql(_REQUIRED + _OPTIONAL)
@@ -417,11 +452,13 @@ class ZenHistoryTests(unittest.TestCase):
             "max_rows": 1,
             "mask_urls": False,
         }
-        self.assertEqual(config(options), options)
+        self.assertEqual(
+            config(options).model_dump(exclude_unset=True, mode="json"), options
+        )
         defaults = config({})
-        self.assertNotIn("places_path", defaults)
-        self.assertEqual(defaults["max_rows"], 20000)
-        self.assertIs(defaults["mask_urls"], True)
+        self.assertNotIn("places_path", defaults.model_fields_set)
+        self.assertEqual(defaults.max_rows, 20000)
+        self.assertIs(defaults.mask_urls, True)
         for bad in (
             {"unknown": 1},
             {"max_rows": 0},
@@ -430,5 +467,5 @@ class ZenHistoryTests(unittest.TestCase):
             {"mask_urls": 1},
             {"places_path": ""},
         ):
-            with self.subTest(bad=bad), self.assertRaises(ValueError):
+            with self.subTest(bad=bad), self.assertRaises(ConfigError):
                 config(bad)

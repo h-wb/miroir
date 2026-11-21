@@ -4,12 +4,12 @@ import unittest
 from pathlib import Path
 
 
+@unittest.skipIf(sys.version_info < (3, 12), "agent requires Python 3.12")
 class AgentPackageTests(unittest.TestCase):
-    def test_agent_suite_without_site_packages(self) -> None:
+    def test_agent_suite_with_same_interpreter(self) -> None:
         result = subprocess.run(
             [
                 sys.executable,
-                "-S",
                 "-m",
                 "unittest",
                 "discover",

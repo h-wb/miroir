@@ -1843,3 +1843,51 @@ request carrying no reason), fixed with tests.
 
 Validation: the agent suite (71 tests) and the contract tests are green, with
 ruff and mypy clean. Not yet run against the real bucket.
+
+## 2026-11-21 — The agent restructured (decision 035)
+
+A read of the whole agent after its first real use found working behaviour in a
+shape that had drifted: `cli.py` held the run loop, the spool, media paging,
+resend and the status file in 515 lines, with two functions of 21 branches each;
+a collector's options, cursor shape and source folders were spread over the
+configuration and command line modules; rows and media had separate HTTP code,
+and only media said why a request failed.
+
+Rebuilt without changing what is on disk, on the wire or on the command line:
+
+- `collectors/base.py` states what a collector is. Each collector owns a model of
+  its options, a model of its cursor, its source folders and, for ScreenMemory,
+  its media source. No other module names a collector.
+- `transport.py` is the one client, on a urllib3 connection pool: no redirects, no
+  retries, connections reused. `errors.py` is the one failure: a step and a
+  reason, for rows as for media.
+- `batch.py` writes a batch file for both collectors. `state.py` owns every file
+  in the state folder. `runner.py` holds the passes; `cli.py` parses, prints and
+  returns the exit code (159 lines).
+- pydantic validates the configuration, the state files and the server's replies.
+- The agent's lint rules cap a function at 10 branches, and
+  `agent/tests/test_boundaries.py` holds the import rules between its modules and
+  its two dependencies.
+
+Visible changes: a failed row delivery names its step and reason, a
+configuration error names the key (`collectors.0.options.max_rows: expected an
+integer`), connections are reused, and requests carry
+`User-Agent: miroir-agent/<version>`. System proxy settings are no longer read.
+Browser-history batch lines keep the source's column order instead of sorted
+keys; the connector reads both.
+
+An independent review found nothing severe and two behaviour changes, both fixed
+with tests: a timeout while the body was still being sent was reported as a
+network error, and a delivery whose receipt never arrived was counted as
+acknowledged. It confirmed that state written by the previous agent is read and
+continued, in both directions. One risk is accepted: a reused connection that
+the server closes at the moment of the next request fails that pass, and the
+next pass retries.
+
+Validation: the agent suite (80 tests) and the contract tests are green, with
+ruff (including the complexity cap) and `mypy --strict` clean. Run by hand
+against a state folder left by the previous agent. Not yet run on the real
+machine.
+
+Not done: CI still lints and type-checks `src tests scripts` only; the agent's
+stricter rules are enforced there once the workflow lists `agent`.

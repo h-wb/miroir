@@ -541,9 +541,10 @@ Add each through a documented schema change when its operation is implemented.
 ### Sending device data with the local agent
 
 Some sources exist only on a personal machine. The agent in `agent/` (the
-`miroir-agent` package, decisions 030 and 031) reads them there and posts what is
-new to a connection's receiving URL. It uses only the Python standard library and
-installs on its own; [its README](../../agent/README.md) covers installing it.
+`miroir-agent` package, decisions 030, 031 and 035) reads them there and posts
+what is new to a connection's receiving URL. It installs on its own, with two
+small libraries and none of the server's; [its README](../../agent/README.md)
+covers installing it.
 
 ```bash
 miroir-agent run     --config agent.json [--collector ID] [--max-batches N]

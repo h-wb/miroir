@@ -1,6 +1,5 @@
 """Collect incremental Firefox/Zen history from a private Places copy."""
 
-import gzip
 import hashlib
 import json
 import shutil
@@ -8,26 +7,27 @@ import sqlite3
 from collections import Counter
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
-from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory, gettempdir
-from typing import Any
+from typing import Annotated, Any
 
+from pydantic import BeforeValidator, Field
+
+from ..batch import BatchWriter
+from ..errors import Failure
 from ..masking import mask_tokens, mask_url
-from ..state import atomic_path, outside_source
-from . import Collected, Cursor
+from .base import (
+    Collected,
+    Collector,
+    Cursor,
+    Options,
+    Since,
+    UserPath,
+    Window,
+    nonempty,
+)
 
 DEFAULT_PROFILES_DIR = "~/Library/Application Support/zen/Profiles"
-SOURCE_ERROR = "Cannot read Zen Places database or required columns"
-CHANGING_SOURCE_ERROR = "Zen Places source kept changing during copy"
-_INITIAL_CURSOR: Cursor = {
-    "visit_id": 0,
-    "visit_date": 0,
-    "place_id": 0,
-    "metadata_updated_at": 0,
-    "origins_digest": "",
-    "bookmarks_digest": "",
-}
 _REQUIRED = {
     "moz_places": {"id", "url"},
     "moz_historyvisits": {"id", "place_id", "visit_date"},
@@ -35,31 +35,69 @@ _REQUIRED = {
 Row = dict[str, Any]
 
 
-class _ChangingSource(ValueError):
-    pass
+class ZenHistoryOptions(Options):
+    places_path: Annotated[UserPath | None, BeforeValidator(nonempty)] = None
+    profiles_dir: UserPath = Field(default=DEFAULT_PROFILES_DIR, validate_default=True)
+    max_rows: int = Field(default=20000, ge=1, le=200000)
+    mask_urls: bool = True
+    since: Annotated[Since | None, BeforeValidator(nonempty)] = None
 
 
-def _source(options: dict[str, Any]) -> Path:
-    if "places_path" in options:
-        return Path(options["places_path"]).expanduser()
-    profiles = Path(options.get("profiles_dir", DEFAULT_PROFILES_DIR)).expanduser()
-    return max(profiles.glob("*/places.sqlite"), key=lambda p: p.stat().st_mtime_ns)
+Digest = Annotated[str, Field(pattern=r"^(?:[0-9a-f]{64})?$")]
 
 
-def _guard(source: Path, *paths: Path) -> None:
-    for path in paths:
-        outside_source(path, source.parent)
-        outside_source(path, source.resolve().parent)
+class ZenHistoryCursor(Cursor):
+    visit_id: int = 0
+    visit_date: int = 0
+    place_id: int = 0
+    metadata_updated_at: int = 0
+    origins_digest: Digest = ""
+    bookmarks_digest: Digest = ""
 
 
-def require_outside_source(options: dict[str, Any], *paths: Path) -> None:
-    try:
+class ZenHistory(Collector[ZenHistoryOptions, ZenHistoryCursor]):
+    name = "zen_history"
+    format_id = "firefox_places_batch"
+    options_model = ZenHistoryOptions
+    cursor_model = ZenHistoryCursor
+
+    def source_dirs(self, options: ZenHistoryOptions) -> list[Path]:
+        return _source_dirs(_source(options))
+
+    def collect(
+        self,
+        options: ZenHistoryOptions,
+        cursor: ZenHistoryCursor | None,
+        out: Path,
+        now: float,
+        *,
+        window: Window | None = None,
+    ) -> Collected | None:
         source = _source(options)
-        if not source.is_file():
-            raise ValueError(SOURCE_ERROR)
+        temp_root = Path(gettempdir())
+        # Resolve the source once so the guarded file is the one copied.
+        self.guard_paths(_source_dirs(source), out, temp_root)
+        return _collect(source, options, cursor, out, now, window)
+
+
+def _source_dirs(source: Path) -> list[Path]:
+    try:
+        return [source.parent, source.resolve().parent]
     except (OSError, ValueError, RuntimeError):
-        raise ValueError(SOURCE_ERROR) from None
-    _guard(source, *paths)
+        raise Failure("collect", "source") from None
+
+
+def _source(options: ZenHistoryOptions) -> Path:
+    try:
+        source = options.places_path or max(
+            options.profiles_dir.glob("*/places.sqlite"),
+            key=lambda p: p.stat().st_mtime_ns,
+        )
+        if not source.is_file():
+            raise Failure("collect", "source")
+        return source
+    except (OSError, ValueError, RuntimeError):
+        raise Failure("collect", "source") from None
 
 
 def _decode(raw: bytes) -> str:
@@ -77,13 +115,12 @@ def _stamp(path: Path) -> tuple[int, int] | None:
 @contextmanager
 def _stable_copy(source: Path) -> Iterator[Path]:
     temp_root = Path(gettempdir())
-    _guard(source, temp_root)
     wal = source.with_name(source.name + "-wal")
     for attempt in range(3):
         before = _stamp(source), _stamp(wal)
         if before[0] is None:
             if attempt == 0:
-                raise ValueError(SOURCE_ERROR)
+                raise Failure("collect", "source")
             continue
         with TemporaryDirectory(prefix="miroir-zen-", dir=temp_root) as temporary:
             target = Path(temporary) / "places.sqlite"
@@ -98,7 +135,7 @@ def _stable_copy(source: Path) -> Iterator[Path]:
             if before == (_stamp(source), _stamp(wal)):
                 yield target
                 return
-    raise _ChangingSource(CHANGING_SOURCE_ERROR)
+    raise Failure("collect", "source")
 
 
 def _rows(
@@ -118,28 +155,14 @@ def _json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
-def _pages(
+def _visits(
     db: sqlite3.Connection,
-    cursor: Cursor,
+    visit_id: int,
+    visit_date: int,
     limit: int,
     since: int | None,
-    window: tuple[int, int] | None,
-) -> tuple[dict[str, list[Row]], Cursor, bool]:
-    tables = {
-        row[0]
-        for row in db.execute("SELECT name FROM sqlite_schema WHERE type='table'")
-    }
-    if any(
-        table not in tables or required - _columns(db, table)
-        for table, required in _REQUIRED.items()
-    ):
-        raise ValueError(SOURCE_ERROR)
-
-    next_cursor = cursor.copy()
-    visit_id = cursor["visit_id"]
-    visit_date = cursor.get("visit_date", 0)
-    if type(visit_date) is not int:
-        raise ValueError(SOURCE_ERROR)
+    window: Window | None,
+) -> tuple[list[Row], int, int, bool]:
     visit_filter = ""
     visit_params: tuple[int, ...] = ()
     if window is not None:
@@ -154,8 +177,7 @@ def _pages(
         (visit_id, *visit_params, limit),
     )
     more_visits = len(visits) == limit
-    if visits:
-        next_cursor["visit_id"] = visits[-1]["id"]
+    next_id = visits[-1]["id"] if visits else visit_id
     if window is None and not more_visits:
         visits.extend(
             _rows(
@@ -165,13 +187,24 @@ def _pages(
                 (visit_id, visit_date, *visit_params),
             )
         )
-    next_cursor["visit_date"] = max(
+    next_date = max(
         visit_date,
         max(
             (row["visit_date"] for row in visits if type(row["visit_date"]) is int),
             default=visit_date,
         ),
     )
+    return visits, next_id, next_date, more_visits
+
+
+def _places(
+    db: sqlite3.Connection,
+    place_id: int,
+    limit: int,
+    since: int | None,
+    window: Window | None,
+    visits: list[Row],
+) -> tuple[list[Row], int, bool]:
     new_places = []
     if window is None:
         place_filter = ""
@@ -182,10 +215,9 @@ def _pages(
         new_places = _rows(
             db,
             f"SELECT * FROM moz_places WHERE id > ?{place_filter} ORDER BY id LIMIT ?",
-            (cursor["place_id"], *place_params, limit),
+            (place_id, *place_params, limit),
         )
-    if new_places:
-        next_cursor["place_id"] = new_places[-1]["id"]
+    next_id = new_places[-1]["id"] if new_places else place_id
     places = {row["id"]: row for row in new_places}
     ids = list(
         dict.fromkeys(
@@ -199,49 +231,106 @@ def _pages(
             db, f"SELECT * FROM moz_places WHERE id IN ({placeholders})", chunk
         ):
             places[row["id"]] = row
-    rows = {"moz_places": list(places.values()), "moz_historyvisits": visits}
-    more = more_visits or len(new_places) == limit
+    return list(places.values()), next_id, len(new_places) == limit
 
+
+def _metadata(
+    db: sqlite3.Connection,
+    updated_at: int,
+    limit: int,
+    since: int | None,
+    window: Window | None,
+) -> tuple[list[Row], int, bool]:
+    metadata_filter = ""
+    metadata_params: tuple[int, ...] = ()
+    if window is not None:
+        metadata_filter = " AND updated_at >= ? AND updated_at < ?"
+        metadata_params = (window[0] * 1000, window[1] * 1000)
+    elif since is not None:
+        metadata_filter = " AND updated_at >= ?"
+        metadata_params = (since * 1000,)
+    metadata = _rows(
+        db,
+        "SELECT * FROM moz_places_metadata WHERE updated_at > ?"
+        f"{metadata_filter} ORDER BY updated_at, id LIMIT ?",
+        (updated_at, *metadata_params, limit),
+    )
+    more = len(metadata) == limit
+    if more:
+        last = metadata[-1]["updated_at"]
+        earlier = [row for row in metadata if row["updated_at"] != last]
+        metadata = earlier or _rows(
+            db,
+            "SELECT * FROM moz_places_metadata WHERE updated_at = ? ORDER BY id",
+            (last,),
+        )
+    return metadata, metadata[-1]["updated_at"] if metadata else updated_at, more
+
+
+def _changed_snapshot(
+    db: sqlite3.Connection, table: str, previous: str
+) -> tuple[list[Row] | None, str]:
+    items = _rows(db, f"SELECT * FROM {table} ORDER BY id")
+    digest = hashlib.sha256(_json(items).encode("ascii")).hexdigest()
+    return (items if digest != previous else None), digest
+
+
+def _pages(
+    db: sqlite3.Connection,
+    cursor: ZenHistoryCursor,
+    limit: int,
+    since: int | None,
+    window: Window | None,
+) -> tuple[dict[str, list[Row]], ZenHistoryCursor, bool]:
+    tables = {
+        row[0]
+        for row in db.execute("SELECT name FROM sqlite_schema WHERE type='table'")
+    }
+    if any(
+        table not in tables or required - _columns(db, table)
+        for table, required in _REQUIRED.items()
+    ):
+        raise Failure("collect", "source")
+
+    visits, visit_id, visit_date, more_visits = _visits(
+        db, cursor.visit_id, cursor.visit_date, limit, since, window
+    )
+    places, place_id, more_places = _places(
+        db, cursor.place_id, limit, since, window, visits
+    )
+    rows = {"moz_places": places, "moz_historyvisits": visits}
+    updated_at = cursor.metadata_updated_at
+    more_metadata = False
     if "moz_places_metadata" in tables and "updated_at" in _columns(
         db, "moz_places_metadata"
     ):
-        metadata_filter = ""
-        metadata_params: tuple[int, ...] = ()
-        if window is not None:
-            metadata_filter = " AND updated_at >= ? AND updated_at < ?"
-            metadata_params = (window[0] * 1000, window[1] * 1000)
-        elif since is not None:
-            metadata_filter = " AND updated_at >= ?"
-            metadata_params = (since * 1000,)
-        metadata = _rows(
-            db,
-            "SELECT * FROM moz_places_metadata WHERE updated_at > ?"
-            f"{metadata_filter} ORDER BY updated_at, id LIMIT ?",
-            (cursor["metadata_updated_at"], *metadata_params, limit),
+        metadata, updated_at, more_metadata = _metadata(
+            db, updated_at, limit, since, window
         )
-        if len(metadata) == limit:
-            more = True
-            last = metadata[-1]["updated_at"]
-            earlier = [row for row in metadata if row["updated_at"] != last]
-            metadata = earlier or _rows(
-                db,
-                "SELECT * FROM moz_places_metadata WHERE updated_at = ? ORDER BY id",
-                (last,),
-            )
         if metadata:
-            next_cursor["metadata_updated_at"] = metadata[-1]["updated_at"]
             rows["moz_places_metadata"] = metadata
-
+    digests = {
+        "origins_digest": cursor.origins_digest,
+        "bookmarks_digest": cursor.bookmarks_digest,
+    }
     for name in ("origins", "bookmarks") if window is None else ():
         table = "moz_" + name
         if table in tables:
-            items = _rows(db, f"SELECT * FROM {table} ORDER BY id")
-            digest = hashlib.sha256(_json(items).encode("ascii")).hexdigest()
             key = name + "_digest"
-            if digest != cursor[key]:
-                next_cursor[key] = digest
+            items, digests[key] = _changed_snapshot(db, table, digests[key])
+            if items is not None:
                 rows[table] = items
-    return rows, next_cursor, more
+    return (
+        rows,
+        ZenHistoryCursor(
+            visit_id=visit_id,
+            visit_date=visit_date,
+            place_id=place_id,
+            metadata_updated_at=updated_at,
+            **digests,
+        ),
+        more_visits or more_places or more_metadata,
+    )
 
 
 def _redact(table: str, row: Row, masked: Counter[str]) -> None:
@@ -257,76 +346,48 @@ def _redact(table: str, row: Row, masked: Counter[str]) -> None:
             masked.update(counts)
 
 
-def collect(
-    options: dict[str, Any],
-    cursor: Cursor | None,
+def _collect(
+    source: Path,
+    options: ZenHistoryOptions,
+    cursor: ZenHistoryCursor | None,
     out_path: Path,
     now: float,
-    *,
-    window: tuple[int, int] | None = None,
+    window: Window | None,
 ) -> Collected | None:
-    try:
-        source = _source(options)
-    except (OSError, ValueError, RuntimeError):
-        raise ValueError(SOURCE_ERROR) from None
-    _guard(source, out_path)
-    since = options.get("since") if window is None else None
+    since = options.since if window is None else None
     if cursor is None:
-        cursor = _INITIAL_CURSOR.copy()
         start = window[0] if window is not None else since
-        if start is not None:
-            cursor["metadata_updated_at"] = start * 1000 - 1
+        cursor = ZenHistoryCursor(
+            metadata_updated_at=start * 1000 - 1 if start is not None else 0
+        )
     try:
         with _stable_copy(source) as target, closing(sqlite3.connect(target)) as db:
             db.text_factory = _decode
             db.row_factory = sqlite3.Row
             db.execute("PRAGMA trusted_schema=OFF")
+            db.execute("PRAGMA query_only=ON")
+            db.execute("BEGIN")
             if [tuple(row) for row in db.execute("PRAGMA quick_check")] != [("ok",)]:
-                raise ValueError(SOURCE_ERROR)
+                raise Failure("collect", "source")
             rows, next_cursor, more = _pages(
                 db,
                 cursor,
-                options.get("max_rows", 20000),
+                options.max_rows,
                 since,
                 window,
             )
-    except _ChangingSource:
-        raise
     except (OSError, sqlite3.Error, ValueError, OverflowError):
-        raise ValueError(SOURCE_ERROR) from None
+        raise Failure("collect", "source") from None
 
     counts = {table: len(items) for table, items in rows.items() if items}
     if not counts:
         return None
     masked: Counter[str] = Counter()
-    with atomic_path(out_path) as path, gzip.open(path, "wt", encoding="utf-8") as file:
-        size = 0
-
-        def write(record: Row) -> None:
-            nonlocal size
-            try:
-                line = _json(record) + "\n"
-            except ValueError:
-                raise ValueError(SOURCE_ERROR) from None
-            size += len(line)
-            if len(line) > 2 * 1024**2 or size > 512 * 1024**2:
-                raise ValueError("Zen history batch exceeds format size limits")
-            file.write(line)
-
-        write(
-            {
-                "type": "header",
-                "format": "firefox_places_batch",
-                "version": 1,
-                "collected_at": datetime.fromtimestamp(now, timezone.utc)
-                .isoformat()
-                .replace("+00:00", "Z"),
-            }
-        )
+    with BatchWriter(out_path, ZenHistory.format_id, 1, now) as batch:
         for table, items in rows.items():
             for row in items:
-                if options.get("mask_urls", True):
+                if options.mask_urls:
                     _redact(table, row, masked)
-                write({"type": "row", "table": table, "row": row})
-        write({"type": "trailer", "rows": counts, "masked": dict(masked)})
+                batch.write({"type": "row", "table": table, "row": row})
+        batch.finish({"rows": counts, "masked": dict(masked)})
     return Collected(next_cursor, {"rows": counts, "masked": dict(masked)}, more)

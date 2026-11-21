@@ -1257,3 +1257,97 @@ Limits:
 - Tables without a date are outside a window: browser origins and bookmarks are
   not re-sent.
 - `resend --out` is a dry run: it writes the batches and records nothing.
+
+## 035 — The agent takes two libraries, and its parts get tested boundaries
+
+Status: accepted, 2026-11-21. Refines 030 and 031.
+
+Decisions 030 and 031 made the agent standard-library only, so that a laptop does
+not install dlt, dbt or Prefect to send a file. That reason holds. The rule went
+further than the reason, and five features later its cost showed in a read of the
+whole package:
+
+- The HTTP code sat on `urllib.request`. It opened a new connection for every
+  request, so every screenshot paid a TLS handshake. It needed a handler to switch
+  redirects off, and mapped three families of exceptions by hand, in two modules
+  that had grown apart: a failed media upload named its step and reason, a failed
+  row delivery said only `failed`.
+- About 250 lines validated JSON by hand: the configuration, the saved state and
+  the server's replies. A wrong value was reported without the key it belonged
+  to.
+
+The same read found the drift that 031 had found in the server. `cli.py` had
+become the whole program. A collector's options were parsed in the configuration
+module, its cursor checked and its source folders named in the command line
+module, so a third collector meant edits in five places. Options and results
+travelled as untyped dictionaries and tuples, and both collectors carried their
+own copy of the batch-file writer.
+
+**The agent depends on urllib3 and pydantic, and on nothing else.** urllib3 gives
+one connection pool, no redirects by an argument, and one family of errors; it has
+no dependencies of its own. pydantic turns the configuration, the state files and
+the server's replies into typed values and names the key that is wrong; the
+server already uses it for the same job. A test allows exactly these two imports
+beside the standard library and checks the package declares exactly these two.
+
+What this costs:
+
+- The agent no longer runs from a bare checkout. A machine installs it with
+  `uv tool install`, which was already the documented way. Its tests run in the
+  server's environment, whose lock file pins both libraries; it has no lock file
+  of its own.
+- More code runs in a process that reads screen text and holds delivery tokens.
+  Both libraries are among the most used Python packages; the list is closed by
+  the test above, and adding to it needs a decision.
+- Python 3.12 or later, the version the server's image runs.
+
+**A collector is self-contained.** It declares its name, its batch format, a model
+of its options (with the only copy of their defaults), a model of its cursor, the
+folders it reads from, and optionally a media source. Everything else asks the
+collector and names none: the registry is the one place that lists them. The rule
+that the agent never writes inside a source folder has one implementation, on the
+collector's base.
+
+**One client and one failure type.** Every request goes through one client:
+delivering a batch, asking for upload links, sending a file, confirming. Every
+failure of a pass is a step and a reason from fixed lists, for rows as for media,
+so what is printed is always safe to print and always says why. No retries inside
+a pass: the next scheduled pass is the retry, as 030 decided.
+
+**The agent's parts have import rules, and a test holds them**, as 031 did for the
+server:
+
+| Part | Job |
+| --- | --- |
+| `cli` | arguments, printing, exit code |
+| `runner` | the passes for one collector: run, preview, resend, status |
+| `config` | the configuration file as typed values |
+| `state` | the state folder: cursor, spool, media position, status, lock |
+| `transport` | every request the agent sends |
+| `media` | upload a page of files in groups |
+| `batch` | one batch file: header, records, counted trailer |
+| `collectors` | one module per source, and the registry |
+| `masking` | the fixed rules |
+
+Lower parts do not import higher ones, only the registry imports a collector, and
+no module imports another's private names. The agent's lint rules also cap a
+function's branches, so a function that becomes a second program fails the check.
+
+**Nothing changes outside the code.** The state folder, the batch formats, the
+requests, the commands and the configuration file are as they were; an installed
+agent carries on from its saved position. Three things do change for the user: a
+failed row delivery says why, a configuration error names its key, and connections
+are reused.
+
+Considered and left out:
+
+- *httpx.* A pleasanter interface, but five packages where urllib3 is one, and no
+  release since 2024.
+- *msgspec for validation.* Smaller than pydantic, but a second validation idiom in
+  one repository.
+- *A command-line library.* The trouble was dispatch written as one long function,
+  not argument parsing.
+- *Retries in the client.* One line with urllib3 if spurious failures show up; not
+  needed while a failed pass costs an hour and loses nothing.
+- *A shared package for the batch formats*, as in 031: still not worth a second
+  thing to release.

@@ -2,24 +2,22 @@
 
 A small program for a personal machine. It reads sources that exist only
 there, withholds secrets, and delivers what is new to a Miroir connection's
-receiving URL. It uses only the Python standard library (3.10 or later) and
-imports no server code. Design: decisions 030 and 031 in
+receiving URL. It needs Python 3.12 or later and two libraries, urllib3 and
+pydantic, and imports no server code. Design: decisions 030, 031 and 035 in
 [`docs/miroir/decisions.md`](../docs/miroir/decisions.md).
 
 ## Run it
 
-From a checkout, with nothing installed:
+Install it as a command, from this folder of the repository at a pinned commit
+or tag:
 
 ```bash
-cd agent && python3 -m miroir_agent --version
+uv tool install "git+https://github.com/h-wb/pipelines@<ref>#subdirectory=agent"
+miroir-agent --version
 ```
 
-Or as an installed command, from this folder of the repository at a pinned
-commit or tag:
-
-```bash
-uvx --from "git+https://github.com/h-wb/pipelines@<ref>#subdirectory=agent" miroir-agent --version
-```
+Add `--force` to move an installed agent to another commit. It carries on from
+its saved state.
 
 ## Commands
 
@@ -45,7 +43,10 @@ miroir-agent status  --config agent.json
   range, up to the saved frame cursor.
 - `status` shows each collector's position and the last row, media and resend outcomes.
 
-None of them prints source content.
+None of them prints source content. A line for a failed pass names the step
+(`collect`, `deliver`, `links`, `put`, `confirm`) and a reason, for example
+`screen_macbook failed step=deliver reason=network {...}`, and the same fields
+are in `status`.
 
 ## Configuration
 
@@ -83,9 +84,8 @@ It never uploads the file of a frame it withheld, never runs ahead of delivered
 rows, and holds no storage credential. `run --max-media-files N` bounds how many
 frames one pass examines (default 2000). Links are requested for 25 files at a
 time and used at once, four uploads in parallel, so a link never outlives its
-use. A failure names the step (`collect`, `links`, `put`, `confirm`), a reason
-and the HTTP status, in the printed line and in `status`. The machine must reach the storage
-address Miroir signs links for, not only Miroir.
+use. The machine must reach the storage address Miroir signs links for, not
+only Miroir.
 
 ## Collectors
 
@@ -98,21 +98,41 @@ address Miroir signs links for, not only Miroir.
 
 | Module | Job |
 |---|---|
-| `cli.py` | Commands and exit codes; the pass over collectors |
-| `config.py` | Load and validate the configuration |
-| `dates.py` | Parse local dates and offset-qualified instants |
-| `collectors/` | One module per source: read new rows, write one batch |
+| `cli.py` | Arguments, printing, exit code |
+| `runner.py` | The passes for one collector: run, preview, resend, status |
+| `config.py` | The configuration file as typed values |
+| `state.py` | The state folder: cursor, spool, media position, status, lock |
+| `transport.py` | Every request the agent sends, through one connection pool |
+| `media.py` | Upload a page of files in groups |
+| `batch.py` | One batch file: header, records, counted trailer |
+| `collectors/base.py` | What a collector is: the contract every source implements |
+| `collectors/<source>.py` | One source: its options, cursor, source folders and rows |
 | `masking.py` | The fixed rules that mask secrets in text |
-| `state.py` | Saved position, the spool, status and the lock |
-| `deliver.py` | The HTTP POST |
-| `media.py` | Upload links, the PUT and the confirmation |
+| `dates.py` | Parse local dates and offset-qualified instants |
+| `errors.py` | The failure a pass reports: a step and a reason |
+
+Lower modules do not import higher ones, only the registry imports a collector,
+and `tests/test_boundaries.py` holds both rules.
+
+### Adding a collector
+
+Write one module in `collectors/`: a model of its options, a model of its
+cursor, and a `Collector` subclass that names its batch format, lists the
+folders it reads from and writes a batch with `BatchWriter`. Add it to the
+registry in `collectors/__init__.py`. Nothing else in the agent changes. The
+connector that reads the batch lives on the server, with a contract test
+between the two.
 
 ## Tests
 
+From the repository root, in the server's environment, which has both
+libraries:
+
 ```bash
-cd agent && python3 -S -m unittest discover -s tests -t .
+(cd agent && uv run --project .. --locked python -m unittest discover -s tests -t .)
+uv run --locked ruff check agent
+uv run --locked mypy --strict --config-file agent/pyproject.toml agent/miroir_agent
 ```
 
-`-S` disables site packages, which proves nothing beyond the standard library
-is needed. The server's suite runs this too, and holds the contract test that
+The server's suite runs the agent's tests too, and holds the contract test that
 checks a collected batch against the connector that reads it.

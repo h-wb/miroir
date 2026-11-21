@@ -1,12 +1,16 @@
+import json
 import os
 import time
 import unittest
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from miroir_agent.config import _options
+from miroir_agent.config import load_config
 from miroir_agent.dates import parse_date
+from miroir_agent.errors import ConfigError
 
 
 @contextmanager
@@ -58,22 +62,45 @@ class DateTests(unittest.TestCase):
             ):
                 parse_date(value)
 
+    def options(self, name: str, options: dict):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "agent.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "state_dir": "state",
+                        "collectors": [
+                            {
+                                "id": "example",
+                                "collector": name,
+                                "receive_url": "https://example.test/receive",
+                                "token_env": "TOKEN",
+                                "options": options,
+                            }
+                        ],
+                    }
+                )
+            )
+            return load_config(path).collectors[0].options
+
     def test_config_since(self) -> None:
         with local_zone("UTC0"):
             for name, options in (
                 ("zen_history", {}),
                 ("screenmemory", {"data_dir": "source"}),
             ):
-                self.assertNotIn("since", _options(name, options))
+                self.assertNotIn("since", self.options(name, options).model_fields_set)
                 for value, expected in (
                     ("2023-11-15", 1700006400),
                     ("2023-11-14T22:13:20Z", 1700000000),
                 ):
                     self.assertEqual(
-                        _options(name, options | {"since": value})["since"], expected
+                        self.options(name, options | {"since": value}).since, expected
                     )
                 for value in ("bad input", 1700000000):
-                    with self.assertRaises(ValueError):
-                        _options(name, options | {"since": value})
-                with self.assertRaisesRegex(ValueError, "options: unknown key"):
-                    _options(name, options | {"cutoff" + "_ts": 0})
+                    with self.assertRaises(ConfigError):
+                        self.options(name, options | {"since": value})
+                with self.assertRaisesRegex(
+                    ConfigError, r"options\.cutoff_ts: unknown key"
+                ):
+                    self.options(name, options | {"cutoff" + "_ts": 0})

@@ -36,12 +36,16 @@ Miroir (decision 014); history keeps its own words.
 - **Who may import whom** is in `docs/architecture.md` and enforced by
   `tests/test_boundaries.py` (decision 031). A new folder under `src/` fails
   that test until it is given a rule.
-- `agent/` — `miroir-agent`, its own dependency-free package (decisions 030,
-  031): the local agent for device-only sources. Collectors, masking, spool
-  and delivery to a connection's receiving URL. **Standard library only**:
-  the server never imports it and it never imports `src/`. Its tests are in
-  `agent/tests/`; `tests/test_agent_contract.py` ties a collector to its
-  connector, and `tests/test_agent_package.py` runs the agent's suite.
+- `agent/` — `miroir-agent`, its own package (decisions 030, 031, 035): the
+  local agent for device-only sources. Collectors, masking, spool and delivery
+  to a connection's receiving URL. **Standard library plus urllib3 and
+  pydantic, nothing else**; the server never imports it and it never imports
+  `src/`. A collector is one module under `agent/miroir_agent/collectors/`
+  that implements the contract in `collectors/base.py`; no other module names
+  a collector. `agent/tests/test_boundaries.py` holds the agent's import rules
+  and its dependency list, and its lint rules cap a function's branches. Its
+  tests are in `agent/tests/`; `tests/test_agent_contract.py` ties a collector
+  to its connector, and `tests/test_agent_package.py` runs the agent's suite.
 - Media (decision 033): files that rows point at. `src/core/media.py` signs
   upload and view links through the `ObjectStore` protocol; `src/adapters/s3.py`
   is the boto3 implementation; the agent's `media.py` uploads. No metadata

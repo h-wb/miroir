@@ -7,7 +7,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from miroir_agent.collectors.screenmemory import SOURCE_ERROR, collect
+from miroir_agent.collectors.screenmemory import (
+    ScreenMemory,
+    ScreenMemoryCursor,
+    ScreenMemoryOptions,
+)
+from miroir_agent.errors import Failure
 
 _TS = 1795132100
 
@@ -46,20 +51,32 @@ class ScreenMemoryCollectorTests(unittest.TestCase):
         )
         self.options["max_rows"] = 3
         # The second page is also exactly full, so conservatively advertises more.
-        first = collect(self.options, None, self.out, self.now)
+        first = ScreenMemory().collect(
+            ScreenMemoryOptions.model_validate(self.options), None, self.out, self.now
+        )
         assert first is not None
         self.assertTrue(first.more)
-        self.assertEqual(first.cursor, {"frames": _TS + 1, "app_usage": 0})
+        self.assertEqual(first.cursor, ScreenMemoryCursor(frames=_TS + 1, app_usage=0))
         records = list(self._records())
-        second = collect(self.options, first.cursor, self.out, self.now)
+        second = ScreenMemory().collect(
+            ScreenMemoryOptions.model_validate(self.options),
+            first.cursor,
+            self.out,
+            self.now,
+        )
         assert second is not None
         self.assertTrue(second.more)
-        self.assertEqual(second.cursor, {"frames": _TS + 2, "app_usage": 0})
+        self.assertEqual(second.cursor, ScreenMemoryCursor(frames=_TS + 2, app_usage=0))
         records.extend(self._records())
-        third = collect(self.options, second.cursor, self.out, self.now)
+        third = ScreenMemory().collect(
+            ScreenMemoryOptions.model_validate(self.options),
+            second.cursor,
+            self.out,
+            self.now,
+        )
         assert third is not None
         self.assertFalse(third.more)
-        self.assertEqual(third.cursor, {"frames": _TS + 3, "app_usage": 0})
+        self.assertEqual(third.cursor, ScreenMemoryCursor(frames=_TS + 3, app_usage=0))
         records.extend(self._records())
         self.assertEqual(
             [row["image_path"] for row in records], [f"{i}.jpeg" for i in range(5)]
@@ -75,23 +92,32 @@ class ScreenMemoryCollectorTests(unittest.TestCase):
             ],
             [(_TS, ""), (_TS + 2, "app.example.browser")],
         )
-        batch = collect(self.options, None, self.out, self.now)
+        batch = ScreenMemory().collect(
+            ScreenMemoryOptions.model_validate(self.options), None, self.out, self.now
+        )
         assert batch is not None
         self.assertEqual(batch.counts["skipped"], 3)
         self.assertEqual(
             [row["image_path"] for row in self._records() if row["type"] == "frame"],
             ["ok.jpeg"],
         )
-        self.assertIsNone(collect(self.options, batch.cursor, self.out, self.now))
+        self.assertIsNone(
+            ScreenMemory().collect(
+                ScreenMemoryOptions.model_validate(self.options),
+                batch.cursor,
+                self.out,
+                self.now,
+            )
+        )
 
     def test_window_intersects_settle_bound(self) -> None:
         self._source(
             [(_TS + i, f"{i}.jpg", None) for i in range(-1, 4)],
             [(_TS + i, "app.example") for i in range(-1, 4)],
         )
-        batch = collect(
-            self.options,
-            {"frames": _TS - 2, "app_usage": _TS},
+        batch = ScreenMemory().collect(
+            ScreenMemoryOptions.model_validate(self.options),
+            ScreenMemoryCursor(frames=_TS - 2, app_usage=_TS),
             self.out,
             _TS + 301,
             window=(_TS, _TS + 3),
@@ -112,16 +138,25 @@ class ScreenMemoryCollectorTests(unittest.TestCase):
             [(_TS + 0.8, "com.apple.Passwords"), (_TS + 1, "app.example.later")],
         )
         now = _TS + 300.3
-        batch = collect(self.options, None, self.out, now)
+        batch = ScreenMemory().collect(
+            ScreenMemoryOptions.model_validate(self.options), None, self.out, now
+        )
         assert batch is not None
-        self.assertEqual(batch.cursor, {"frames": _TS, "app_usage": _TS})
+        self.assertEqual(batch.cursor, ScreenMemoryCursor(frames=_TS, app_usage=_TS))
         records = list(self._records())
         self.assertEqual([row["ts"] for row in records], [_TS] * 3)
         self.assertEqual(
             [row["image_path"] for row in records[:2]], ["a.jpeg", "b.jpeg"]
         )
         self.assertEqual([row["withheld"] for row in records[:2]], ["excluded_app"] * 2)
-        self.assertIsNone(collect(self.options, batch.cursor, self.out, now))
+        self.assertIsNone(
+            ScreenMemory().collect(
+                ScreenMemoryOptions.model_validate(self.options),
+                batch.cursor,
+                self.out,
+                now,
+            )
+        )
 
     def test_decodes_invalid_utf8_and_blob_text(self) -> None:
         self._source([(_TS, "blob.jpeg", b"blob \xff")], [])
@@ -130,7 +165,14 @@ class ScreenMemoryCollectorTests(unittest.TestCase):
                 "INSERT INTO ocrresults VALUES (?, ?, CAST(? AS TEXT))",
                 (_TS + 1, "text.jpeg", b"text \xfe"),
             )
-        self.assertIsNotNone(collect(self.options, None, self.out, self.now))
+        self.assertIsNotNone(
+            ScreenMemory().collect(
+                ScreenMemoryOptions.model_validate(self.options),
+                None,
+                self.out,
+                self.now,
+            )
+        )
         self.assertEqual(
             [r["text"] for r in self._records()], ["blob \ufffd", "text \ufffd"]
         )
@@ -141,10 +183,12 @@ class ScreenMemoryCollectorTests(unittest.TestCase):
             [(_TS + i / 10, f"{i}.jpeg", None) for i in range(3)],
             [(_TS + i / 10, f"app.example.{i}") for i in range(3)],
         )
-        batch = collect(self.options, None, self.out, self.now)
+        batch = ScreenMemory().collect(
+            ScreenMemoryOptions.model_validate(self.options), None, self.out, self.now
+        )
         assert batch is not None
         self.assertTrue(batch.more)
-        self.assertEqual(batch.cursor, {"frames": _TS, "app_usage": _TS})
+        self.assertEqual(batch.cursor, ScreenMemoryCursor(frames=_TS, app_usage=_TS))
         records = list(self._records())
         self.assertEqual(
             [r["image_path"] for r in records[:3]], [f"{i}.jpeg" for i in range(3)]
@@ -153,7 +197,14 @@ class ScreenMemoryCollectorTests(unittest.TestCase):
             [r["bundle_id"] for r in records[3:]],
             [f"app.example.{i}" for i in range(3)],
         )
-        self.assertIsNone(collect(self.options, batch.cursor, self.out, self.now))
+        self.assertIsNone(
+            ScreenMemory().collect(
+                ScreenMemoryOptions.model_validate(self.options),
+                batch.cursor,
+                self.out,
+                self.now,
+            )
+        )
 
     def test_queries_ignore_unreadable_timestamps(self) -> None:
         invalid = [None, f"{_TS}bad", b"\xff", "nan"]
@@ -166,16 +217,30 @@ class ScreenMemoryCollectorTests(unittest.TestCase):
                 "INSERT INTO ocrresults VALUES (CAST(? AS TEXT), ?, NULL)",
                 (b"\xff", "bad.jpeg"),
             )
-        self.assertIsNone(collect(self.options, None, self.out, self.now))
+        self.assertIsNone(
+            ScreenMemory().collect(
+                ScreenMemoryOptions.model_validate(self.options),
+                None,
+                self.out,
+                self.now,
+            )
+        )
         self.assertFalse(self.out.exists())
 
     def test_missing_file_table_and_column(self) -> None:
         with closing(sqlite3.connect(self.data / "usage.sqlite")) as db, db:
             db.execute("CREATE TABLE usage(timestamp, identifier)")
         for case in ("file", "table", "column"):
-            with self.subTest(case=case), self.assertRaises(ValueError) as raised:
-                collect(self.options, None, self.out, self.now)
-            self.assertEqual(str(raised.exception), SOURCE_ERROR)
+            with self.subTest(case=case), self.assertRaises(Failure) as raised:
+                ScreenMemory().collect(
+                    ScreenMemoryOptions.model_validate(self.options),
+                    None,
+                    self.out,
+                    self.now,
+                )
+            self.assertEqual(
+                (raised.exception.step, raised.exception.reason), ("collect", "source")
+            )
             self.assertNotIn(str(self.data), str(raised.exception))
             if case != "column":
                 with closing(sqlite3.connect(self.data / "text.sqlite")) as db, db:
