@@ -7,16 +7,49 @@ MIROIR_SECRET_KEY (decision 011).
 """
 
 import os
+import uuid
+from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 from prefect import flow
-from prefect.runtime import flow_run
+from prefect.runtime import deployment, flow_run
 
 from src.core.config import load_miroir, metadata_url
 from src.core.operations import MetadataStore
 from src.core.runner import run_connection
 from src.core.secrets import SecretBox, SecretStore, make_resolver
 from src.pipelines.transform import build_connection_models
+
+
+def schedule_build(
+    store: MetadataStore, deployment_id: str, connection_id: str, config_path: str
+) -> Callable[[str, datetime], None]:
+    """Start a recorded build on this deployment at a later time (decision 040).
+
+    The operation ID is the idempotency key, as for any submission.
+    """
+    from prefect.client.schemas.objects import FlowRun
+    from prefect.deployments import run_deployment
+
+    def schedule(operation_id: str, start_at: datetime) -> None:
+        scheduled = run_deployment(
+            uuid.UUID(deployment_id),
+            parameters={
+                "connection_id": connection_id,
+                "operation_id": operation_id,
+                "config_path": config_path,
+            },
+            scheduled_time=start_at,
+            timeout=0,
+            idempotency_key=operation_id,
+            # Its own run: it must outlive the load that scheduled it.
+            as_subflow=False,
+        )
+        assert isinstance(scheduled, FlowRun)  # synchronous outside an event loop
+        store.bind_backend_run(operation_id, str(scheduled.id))
+
+    return schedule
 
 
 @flow
@@ -40,6 +73,8 @@ def sync_connection(
         )
     store = MetadataStore(url)
     store.migrate()
+    # Outside a deployment there is nothing to schedule on; builds run with the load.
+    deployment_id = deployment.id
     outcome = run_connection(
         load_miroir(Path(config_path)),
         connection_id,
@@ -55,6 +90,9 @@ def sync_connection(
         operation_id=operation_id,
         backend_run_id=str(flow_run.id),
         transform=build_connection_models,
+        defer=schedule_build(store, deployment_id, connection_id, config_path)
+        if deployment_id
+        else None,
         # Overlapping runs of one connection queue instead of failing.
         lock_wait=3600,
         # Watched folders register files where the server keeps artifacts:

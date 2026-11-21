@@ -9,7 +9,7 @@ import tempfile
 import unittest
 import uuid
 from contextlib import redirect_stderr, redirect_stdout
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -70,6 +70,13 @@ class PrefectAdapterTests(unittest.TestCase):
         self.addCleanup(self.store.engine.dispose)
         self.store.migrate()
         self.orchestrator = PrefectOrchestrator(self.store, "/miroir/miroir.json")
+
+    def delete_deployments(self, ws):
+        from prefect import get_client
+
+        with get_client(sync_client=True) as client:
+            for deployment in self.orchestrator.actual(ws).values():
+                client.delete_deployment(uuid.UUID(deployment["id"]))
 
     def converge(self, ws):
         self.orchestrator.apply(ws, self.orchestrator.plan(ws))
@@ -287,6 +294,49 @@ class PrefectAdapterTests(unittest.TestCase):
             self.store.attempts(rebuilding.id)[0]["transformation"], "lost"
         )
         self.assertEqual(self.orchestrator.observe(ws), [])  # already closed
+
+    def test_a_deferred_build_is_a_scheduled_run_of_the_same_deployment(self):
+        from prefect import get_client
+        from prefect.client.schemas.objects import StateType
+
+        from src.core.runner import request_models
+        from src.pipelines.miroir import schedule_build
+
+        ws = miroir()
+        self.converge(ws)
+        # Later tests expect a Prefect without this miroir's deployments.
+        self.addCleanup(self.delete_deployments, ws)
+        load = request_sync(ws, "music", store=self.store, origin="request")
+        attempt, _ = self.store.start_attempt(load.id, "running")
+        self.store.update_attempt(attempt, ingestion="succeeded")
+        build = request_models(ws, "music", store=self.store, origin="prefect")
+        deployment_id = self.orchestrator.actual(ws)["personal-music"]["id"]
+        schedule = schedule_build(
+            self.store, deployment_id, "music", "/miroir/miroir.json"
+        )
+        start_at = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(
+            minutes=5
+        )
+        schedule(build.id, start_at)
+        bound = self.store.get_operation(build.id).backend_run_id
+        schedule(build.id, start_at)  # e.g. retried: the same run
+        self.assertEqual(self.store.get_operation(build.id).backend_run_id, bound)
+        with get_client(sync_client=True) as client:
+            run = client.read_flow_run(uuid.UUID(bound))
+        self.assertEqual(str(run.deployment_id), deployment_id)
+        self.assertEqual(run.state.type, StateType.SCHEDULED)
+        self.assertEqual(run.expected_start_time, start_at)
+        self.assertIsNone(run.parent_task_run_id)
+        self.assertEqual(
+            run.parameters,
+            {
+                "connection_id": "music",
+                "operation_id": build.id,
+                "config_path": "/miroir/miroir.json",
+            },
+        )
+        # Scheduled, not ended: observing leaves it alone.
+        self.assertEqual(self.orchestrator.observe(ws), [])
 
     def test_a_deployment_prefect_rejects_on_create_is_a_readable_error(self):
         raw = example()

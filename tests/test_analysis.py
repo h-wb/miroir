@@ -7,13 +7,8 @@ initdb/pg_ctl on PATH. No server, production credentials, or Prefect API is used
 import getpass
 import json
 import os
-import shutil
-import socket
-import subprocess
-import tempfile
 import unittest
 from contextlib import closing, nullcontext
-from pathlib import Path
 from unittest.mock import patch
 
 import dlt
@@ -31,6 +26,7 @@ from src.core.runner import (
 )
 from src.core.service import InlineExecutor, MiroirService
 from src.pipelines.transform import build_connection_models
+from tests.postgres import start_postgres
 from tests.test_miroir import example
 from tests.test_operations import listens_response
 
@@ -92,56 +88,7 @@ class AnalysisPlanTests(unittest.TestCase):
 class DbtPostgresTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        binary = os.environ.get("MIROIR_TEST_POSTGRES_BIN")
-        cls.initdb = str(Path(binary) / "initdb") if binary else shutil.which("initdb")
-        cls.pg_ctl = str(Path(binary) / "pg_ctl") if binary else shutil.which("pg_ctl")
-        if not cls.initdb or not cls.pg_ctl:
-            raise unittest.SkipTest(
-                "Postgres binaries unavailable; set MIROIR_TEST_POSTGRES_BIN"
-            )
-        cls.tmp = tempfile.TemporaryDirectory(prefix="miroir-models-")
-        cls.addClassCleanup(cls.tmp.cleanup)
-        cls.root = Path(cls.tmp.name)
-        cls.socket = cls.root / "socket"
-        cls.socket.mkdir()
-        cls.datadir = cls.root / "postgres"
-        with socket.socket() as listener:
-            listener.bind(("127.0.0.1", 0))
-            cls.port = listener.getsockname()[1]
-        subprocess.run(
-            [
-                cls.initdb,
-                "-D",
-                str(cls.datadir),
-                "-A",
-                "trust",
-                "--no-locale",
-                "--encoding=UTF8",
-            ],
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            [
-                cls.pg_ctl,
-                "-D",
-                str(cls.datadir),
-                "-l",
-                str(cls.root / "postgres.log"),
-                "-o",
-                f"-F -k {cls.socket} -h 127.0.0.1 -p {cls.port}",
-                "-w",
-                "start",
-            ],
-            check=True,
-            capture_output=True,
-        )
-        cls.addClassCleanup(
-            subprocess.run,
-            [cls.pg_ctl, "-D", str(cls.datadir), "-m", "fast", "-w", "stop"],
-            check=True,
-            capture_output=True,
-        )
+        cls.root, cls.port = start_postgres(cls, "miroir-models-")
         cls.env = {
             "DESTINATION__POSTGRES__CREDENTIALS__HOST": "127.0.0.1",
             "DESTINATION__POSTGRES__CREDENTIALS__PORT": str(cls.port),

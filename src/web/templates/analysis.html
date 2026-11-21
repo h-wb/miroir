@@ -12,7 +12,7 @@
 {% if a.status.state != 'no_data' %}
 <form class="inline" method="post" action="/analyses/{{ a.id }}/models"><button>Rebuild analysis</button></form>
 {% else %}<p class="muted">Import or sync a linked connection to build it.</p>{% endif %}
-{% if a.dashboards %}<p>{% for d in a.dashboards %}<a href="{{ d.url }}" target="_blank" rel="noopener">Open {{ d.name }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
+{% if a.dashboards %}<p>{% for d in a.dashboards %}<a href="{{ d.url }}" target="_blank" rel="noopener noreferrer">Open {{ d.name }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
 
 <h2>Inputs and settings</h2>
 <form method="post" action="/analyses/{{ a.id }}/settings" class="stack">
@@ -34,7 +34,7 @@
   {% for name, prop in (a.package.parameters_schema.properties or {}).items() %}
   <label>{{ prop.title or name }}
     {% if prop.type == 'array' %}
-    <textarea name="parameter_list.{{ name }}" rows="3" style="min-height:4rem">{{ (a.parameters.get(name) or []) | join('\n') }}</textarea>
+    <textarea name="parameter_list.{{ name }}" rows="3" class="short">{{ (a.parameters.get(name) or []) | join('\n') }}</textarea>
     {% else %}<input name="parameter.{{ name }}" value="{{ a.parameters.get(name) or '' }}">{% endif %}
     {% if prop.description %}<span class="muted">{{ prop.description }}</span>{% endif %}
   </label>
@@ -57,7 +57,7 @@
     <td>{% if operation.attempts %}{% set attempt = operation.attempts[-1] %}{{ badge(attempt.transformation) }}
       {% if attempt.transformation in ['failed', 'lost', 'cancelled', 'blocked'] %}<div>{{ attempt.transformation_detail or attempt.error_message or '' }}</div>{% endif %}
       {% else %}{{ badge('requested') }}{% endif %}</td>
-    <td>{% if operation.run_url %}<a href="{{ operation.run_url }}" target="_blank" rel="noopener">Prefect run</a>{% endif %}</td>
+    <td>{% if operation.run_url %}<a href="{{ operation.run_url }}" target="_blank" rel="noopener noreferrer">Prefect run</a>{% endif %}</td>
   </tr>
   {% endfor %}
 </table>

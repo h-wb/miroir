@@ -57,7 +57,7 @@
 {% macro endpoint(c, request) %}
 <label>Receiving URL
   <input class="copy-value" aria-label="Automatic delivery URL" readonly value="{{ request.base_url | string | trim('/') }}/api/connections/{{ c.id }}/receive">
-  <button type="button" onclick="navigator.clipboard.writeText(this.previousElementSibling.value).then(() => this.textContent = 'Copied')">Copy URL</button>
+  <button type="button" data-copy-previous>Copy URL</button>
 </label>
 {% endmacro %}
 

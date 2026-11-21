@@ -37,7 +37,7 @@
     <p>Add <code>Content-Type: {{ c.formats[0].content_type }}</code> and this Authorization header:</p>
     {% if delivery_token %}
     <input class="copy-value" aria-label="Authorization header" readonly value="Bearer {{ delivery_token }}">
-    <button type="button" onclick="navigator.clipboard.writeText(this.previousElementSibling.value).then(() => this.textContent = 'Copied')">Copy header</button>
+    <button type="button" data-copy-previous>Copy header</button>
     {% else %}
     <p>Use <code>Authorization: Bearer &lt;delivery token&gt;</code> with the token you saved. If you lost it, <a href="/connections/{{ c.id }}/settings#delivery">replace it in settings</a>.</p>
     {% endif %}

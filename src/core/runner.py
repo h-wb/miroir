@@ -15,6 +15,7 @@ import subprocess
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,8 @@ log = logging.getLogger(__name__)
 
 REPO = Path(__file__).resolve().parents[2]
 MAX_ERROR_LENGTH = 500
+# How long a load waits for another load deciding the same analysis's build.
+BUILD_DECISION_WAIT = 60
 
 
 @dataclass(frozen=True)
@@ -65,6 +68,9 @@ class Execution:
     pipelines_dir: str | None = None
     lock_wait: float = 0
     artifact_root: Path | None = None
+    # Starts a recorded build at a later time (decision 040). Without it every
+    # analysis builds with the load, whatever its package's interval.
+    defer: Callable[[str, datetime], None] | None = None
 
 
 class IngestionFailed(RuntimeError):
@@ -270,6 +276,7 @@ def execute_operation(
     pipelines_dir: str | None = None,
     lock_wait: float = 0,
     artifact_root: Path | None = None,
+    defer: Callable[[str, datetime], None] | None = None,
 ) -> RunOutcome:
     """Run one recorded operation as a new attempt and record each stage.
 
@@ -291,6 +298,7 @@ def execute_operation(
         pipelines_dir,
         lock_wait,
         artifact_root,
+        defer,
     )
     return _execute_operation(run, miroir, operation_id, backend_run_id)
 
@@ -753,7 +761,9 @@ def _transform(
     A requested rebuild builds exactly its analysis on its own attempt. After a
     load, each linked analysis is a child `models` operation with its own
     attempt; the load attempt records a summary. A failed build never fails the
-    load (decision 019).
+    load (decision 019). An analysis whose package states a minimum interval may
+    be deferred instead (decision 040); a load that deferred every build records
+    its transformation as skipped.
     """
     store = run.store
     if operation.kind == "models":
@@ -776,6 +786,9 @@ def _transform(
     recorded = _record(store, attempt, "Transformation start", transformation="running")
     outcomes = []
     for analysis in analyses:
+        if _deferred(run, operation, miroir, connection, analysis):
+            outcomes.append((analysis.id, "deferred"))
+            continue
         try:
             child = _new_operation(
                 store,
@@ -798,9 +811,13 @@ def _transform(
         outcome, ok = _build(run, child_attempt, analysis, secrets)
         outcomes.append((analysis.id, outcome))
         recorded = recorded and ok
-    transformation = (
-        "succeeded" if all(o == "succeeded" for _, o in outcomes) else "failed"
-    )
+    built = [o for _, o in outcomes if o != "deferred"]
+    if not built:
+        transformation = "skipped"
+    elif all(o == "succeeded" for o in built):
+        transformation = "succeeded"
+    else:
+        transformation = "failed"
     summary = ", ".join(f"{analysis_id} {outcome}" for analysis_id, outcome in outcomes)
     ok = _record(
         store,
@@ -810,6 +827,81 @@ def _transform(
         transformation_detail=f"Analyses: {summary}"[:200],
     )
     return transformation, recorded and ok
+
+
+def _deferred(
+    run: Execution,
+    operation: Operation,
+    miroir: ResolvedMiroir,
+    connection: ResolvedConnection,
+    analysis: ResolvedAnalysis,
+) -> bool:
+    """Leave this load's build to one at the end of the package's interval.
+
+    The load joins a scheduled build that has not started, or, inside the
+    interval after the latest build started, schedules one at its end. False
+    (build now, as without an interval) whenever that cannot be done safely: a
+    redundant build costs time, a missing one leaves the analysis stale.
+    """
+    interval = analysis.package.min_build_interval
+    if interval is None or run.defer is None:
+        return False
+    store = run.store
+    receipt = analysis_plan(analysis).receipt
+    try:
+        with store.connection_lock(
+            f"analysis-build-{analysis.id}", BUILD_DECISION_WAIT
+        ):
+            now = datetime.now(timezone.utc)
+            revisions = {c.config.id: c.revision for c in miroir.connections}
+            for scheduled in store.unstarted_builds(miroir.id, analysis.id):
+                options = json.loads(scheduled.options or "{}")
+                # Not started, so it starts after this load committed. One that
+                # would be blocked, or was due longer than an interval ago and
+                # may never run, is not joined.
+                if (
+                    options.get("analysis_receipt") == receipt
+                    and revisions.get(scheduled.connection_id)
+                    == scheduled.config_revision
+                    and "not_before" in options
+                    and datetime.fromisoformat(options["not_before"]) > now - interval
+                ):
+                    return True
+            started = store.last_build_started(miroir.id, analysis.id)
+            if started is None or now >= started + interval:
+                return False
+            due = started + interval
+            build = _new_operation(
+                store,
+                miroir,
+                connection,
+                operation.origin,
+                kind="models",
+                analysis_id=analysis.id,
+                parent_operation_id=operation.id,
+                options=json.dumps(
+                    {"analysis_receipt": receipt, "not_before": due.isoformat()}
+                ),
+            )
+            try:
+                run.defer(build.id, due)
+            except Exception as error:  # noqa: BLE001 - build now instead
+                log.warning(
+                    "Build of %s could not be scheduled: %s",
+                    analysis.id,
+                    type(error).__name__,
+                )
+                _block(
+                    store,
+                    build,
+                    "NotScheduled",
+                    "Could not be scheduled; the load built the analysis instead",
+                )
+                return False
+            return True
+    except (ConnectionBusy, SQLAlchemyError):
+        log.warning("Build of %s could not be deferred; building now", analysis.id)
+        return False
 
 
 def _build(

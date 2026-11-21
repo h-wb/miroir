@@ -20,6 +20,7 @@ from src.integrations.registry import INTEGRATIONS
 if TYPE_CHECKING:
     from src.core.config import ResolvedMiroir
     from src.core.media import ObjectStore
+    from src.core.timeline import TimelineDatabase
 
 DEFAULT_METADATA = "sqlite:///.miroir/metadata.sqlite"
 DEFAULT_ARTIFACTS = ".miroir/artifacts"
@@ -272,6 +273,18 @@ def _object_store(miroir: "ResolvedMiroir") -> "ObjectStore | None":
     )
 
 
+def _timeline_database() -> "TimelineDatabase | None":
+    """The read-only warehouse connection, when configured (decision 040).
+
+    Opening it connects nothing: a warehouse that is down shows on the timeline
+    page, and the rest of the server starts as before.
+    """
+    from src.core.timeline import TimelineDatabase, timeline_database_url
+
+    url = timeline_database_url()
+    return None if url is None else TimelineDatabase(url)
+
+
 def _orchestrate(
     args: argparse.Namespace, miroir: Any, store: Any, secrets: Any
 ) -> int:
@@ -483,6 +496,7 @@ def _serve(args: argparse.Namespace, miroir: Any, store: Any, secrets: Any) -> i
         return 2
     try:
         object_store = _object_store(miroir)
+        timeline = _timeline_database()
     except ConfigurationError as error:
         print(error, file=sys.stderr)
         return 2
@@ -522,6 +536,6 @@ def _serve(args: argparse.Namespace, miroir: Any, store: Any, secrets: Any) -> i
         orchestrator=orchestrator,
         object_store=object_store,
     )
-    app = create_app(service, token, metrics_token=metrics_token)
+    app = create_app(service, token, metrics_token=metrics_token, timeline=timeline)
     uvicorn.run(app, host=args.host, port=args.port)
     return 0

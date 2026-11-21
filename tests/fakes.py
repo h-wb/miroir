@@ -2,13 +2,28 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 from urllib.parse import quote, unquote, urlsplit
 
+from src.core.media import ObjectTooLarge, StoredObject
+
 
 class FakeObjectStore:
     def __init__(self):
         self.objects: dict[str, int] = {}
+        self.bodies: dict[str, tuple[bytes, str]] = {}
 
     def head(self, name: str) -> int | None:
         return self.objects.get(name)
+
+    def get(self, name: str, max_bytes: int) -> StoredObject | None:
+        if name not in self.bodies:
+            return None
+        body, content_type = self.bodies[name]
+        if len(body) > max_bytes:
+            raise ObjectTooLarge(f"Stored object exceeds {max_bytes} bytes")
+        return StoredObject(body, content_type, f'"{len(body)}"')
+
+    def put(self, name: str, body: bytes, content_type: str) -> None:
+        self.bodies[name] = (body, content_type)
+        self.objects[name] = len(body)
 
     def presign_put(self, name: str, content_type: str, expires: int) -> str:
         return (

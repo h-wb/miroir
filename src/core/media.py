@@ -1,6 +1,7 @@
 """Plan, confirm, and sign links for connector media without storing metadata."""
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any, ParamSpec, Protocol, TypeVar
 from unicodedata import category
@@ -50,10 +51,29 @@ CONTENT_TYPES = {
 }
 
 
+@dataclass(frozen=True)
+class StoredObject:
+    body: bytes
+    content_type: str | None
+    etag: str | None
+
+
+class ObjectTooLarge(OperationError):
+    """The object is larger than the caller is prepared to hold in memory."""
+
+
 class ObjectStore(Protocol):
     def head(self, name: str) -> int | None: ...
     def presign_put(self, name: str, content_type: str, expires: int) -> str: ...
     def presign_get(self, name: str, expires: int) -> str: ...
+
+    # For derived files such as thumbnails, made by the worker (decision 040).
+    # The web process signs links and never reads or writes objects itself.
+    def get(self, name: str, max_bytes: int) -> StoredObject | None:
+        """The object, or None if absent; ObjectTooLarge past `max_bytes`."""
+        ...
+
+    def put(self, name: str, body: bytes, content_type: str) -> None: ...
 
 
 _P = ParamSpec("_P")

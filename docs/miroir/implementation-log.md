@@ -2072,3 +2072,68 @@ in the warehouse before the file can be used.
 The saved cursor now holds one entry per in-scope attachment (two digests and a
 time, about 150 bytes each: roughly 1 MB for 7,000 attachments); `status` leaves
 them out. A media pass counts files that are not on disk once, not once per page.
+
+## 2026-11-21 — Timeline groundwork (decision 040, phase 0)
+
+The timeline is a page of the server for moving through screenshots and, later,
+conversations by time. Its design is decision 040. This session built only what
+the later phases stand on; there is no timeline model, thumbnail or page yet.
+
+Built:
+
+- **Static files and a content security policy.** `src/web/static/` is served at
+  `/static/` without the login and revalidated on each use. The stylesheet moved
+  out of `base.html` into `miroir.css`; the inline script of the two copy buttons
+  and of the error page's Back link moved to `miroir.js` (data attributes, one
+  click listener); two inline styles became classes. Every response carries the
+  policy, `Referrer-Policy: same-origin` (not the plan's `no-referrer`, which
+  would post every form with `Origin: null`; the suite's existing check of the
+  setup page caught it) and `X-Content-Type-Options: nosniff`; outbound links
+  gained `noreferrer`.
+- **htmx 2.0.11**, vendored from the npm archive after checking it against the
+  registry's integrity value; version and SHA-256 in `static/VENDORED.md`. The
+  `htmx-config` meta tag in `base.html` turns off eval, script tags in swapped
+  content and injected indicator styles. No page loads it yet.
+- **Read access to the warehouse.** `src/core/timeline.py` opens
+  `MIROIR_TIMELINE_DATABASE_URL` (or `MIROIR_TIMELINE_DATABASE__*` parts) as a
+  small pool of sessions that are read-only and have a 5-second statement limit,
+  whatever the role or the URL's own options say. `GET /timeline` and
+  `GET /api/timeline/health` report not configured, unavailable or ready (one
+  query reading back the session's settings). `serve` opens it lazily, so a
+  warehouse that is down does not stop the server. New import rules for the
+  module in `tests/test_boundaries.py`.
+- **`ObjectStore.get` and `put`**, in the protocol, the S3 adapter and the test
+  fake. `get` refuses an object larger than the size the caller states, by its
+  declared length and by reading one byte past the limit.
+- **A minimum interval between builds.** `Package.min_build_interval`; no package
+  sets it yet. After a load, an analysis with an interval joins a scheduled build
+  that has not started, or schedules one at the end of the interval, or builds at
+  once (decision 040 lists when). The flow passes the runner a callback that
+  schedules the build as a flow run of the same deployment; nothing else
+  schedules, so local and subprocess runs build as before. The disposable
+  Postgres used by the dbt tests moved to `tests/postgres.py` so the timeline
+  tests can start one too.
+
+Validation: new tests for the build interval (several loads inside the interval
+give one scheduled build, which builds once; a load after it builds again; a
+package without an interval builds after every load beside one that defers; no
+scheduler means building every time; a refused schedule builds now and closes
+the planned build; a build still starting is joined and a stale one is not; a
+build planned for older settings is not joined), for the scheduled flow run
+against the real temporary Prefect API, for the warehouse connection against a
+disposable Postgres (read-only even for a role that may write, unable to read
+what the role was not granted, a `pg_sleep` stopped by the limit even when the
+URL tries to lift it, unreachable and invalid settings answered without their
+values), for the headers, static files and templates (none holds an inline
+style or script), for the vendored file's hash, and for `get` and `put` with
+botocore's stubber. The server suite is green (274 tests, including the
+Postgres and Prefect ones), with ruff, format, mypy and the collector's strict
+mypy clean. The server was also started locally on an empty
+configuration: the login, overview, configuration, new connection, new analysis
+and timeline pages load the stylesheet from the file and carry the headers, a
+browser showed no policy violation, and the moved Back link works.
+
+Not done: the read-only role in the installation (home-ops) and its settings; the
+`timeline` package and its models, grants and schema privilege; thumbnails and
+the stored-media table; any timeline page beyond its status. The Safari check of
+`Clear-Site-Data` belongs to the phase that caches images.
