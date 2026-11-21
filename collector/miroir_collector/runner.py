@@ -177,6 +177,7 @@ def _media_counts() -> dict[str, int]:
             "withheld",
             "missing",
             "invalid",
+            "too_large",
             "rejected",
         ),
         0,

@@ -12,13 +12,17 @@ from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Thread
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
+import dlt
+import duckdb
 import uvicorn
 
 from src.core.operations import MetadataStore
 from src.core.service import InlineExecutor, MiroirService
+from src.integrations.apple_messages import DEFINITION as APPLE_MESSAGES
 from src.integrations.apple_messages import formats as apple_formats
 from src.integrations.browser_history.formats import read_rows
 from src.integrations.browser_history.formats import (
@@ -32,8 +36,158 @@ from tests.test_browser_history_batch import snapshot
 _TS = 1795132100
 
 
+def serve_collector_target(test, root, integration):
+    config = root / "miroir.json"
+    config.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "id": "test",
+                "media": {"endpoint": "https://objects.test", "bucket": "media"},
+                "connections": [
+                    {"id": "source", "integration": integration, "settings": {}}
+                ],
+            }
+        )
+    )
+    metadata = MetadataStore(f"sqlite:///{root / 'meta.sqlite'}")
+    test.addCleanup(metadata.engine.dispose)
+    metadata.migrate()
+    objects = ServedObjectStore()
+    test.addCleanup(objects.close)
+    service = MiroirService(
+        config,
+        metadata,
+        root / "artifacts",
+        InlineExecutor(lambda _: None),
+        object_store=objects,
+    )
+    token = service.create_delivery_token("source")
+    listener = socket.socket()
+    test.addCleanup(listener.close)
+    listener.bind(("127.0.0.1", 0))
+    port = listener.getsockname()[1]
+    server = uvicorn.Server(
+        uvicorn.Config(create_app(service, "unused" * 3), log_level="critical")
+    )
+    thread = Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
+
+    def stop():
+        server.should_exit = True
+        thread.join(5)
+
+    thread.start()
+    test.addCleanup(stop)
+    deadline = time.monotonic() + 5
+    while not server.started and thread.is_alive() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    test.assertTrue(server.started)
+    return (
+        token,
+        f"http://127.0.0.1:{port}/api/connections/source/receive",
+        objects,
+        metadata,
+    )
+
+
 @unittest.skipIf(sys.version_info < (3, 12), "collector requires Python 3.12")
 class AppleMessagesContractTests(unittest.TestCase):
+    def test_uploads_attachment_and_loads_collected_contacts(self):
+        collector = Path(__file__).resolve().parents[1] / "collector"
+        with patch.object(sys, "path", [str(collector), *sys.path]):
+            from miroir_collector.cli import main
+
+            fixture = import_module("collector.tests.test_apple_messages_part2")
+
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        home = root / "home"
+        attachments = home / "Library/Messages/Attachments"
+        attachments.mkdir(parents=True)
+        file = attachments / "video.MOV"
+        file.write_bytes(b"video")
+        database = attachments.parent / "chat.db"
+        with closing(sqlite3.connect(database)) as db:
+            db.executescript(
+                fixture.SCHEMA
+                + """
+                INSERT INTO message(guid, date, handle_id) VALUES ('message', 800000000, 1);
+                INSERT INTO handle(id, service) VALUES ('person@example.org', 'iMessage');
+                INSERT INTO attachment(guid, filename) VALUES ('attachment', '~/Library/Messages/Attachments/video.MOV');
+                INSERT INTO message_attachment_join VALUES (1, 1);
+            """
+            )
+        with closing(sqlite3.connect(fixture.address_book(home))) as db:
+            db.executescript(
+                fixture.BOOK_SCHEMA
+                + """
+                INSERT INTO ZABCDRECORD VALUES (1, 'Ada', 'Example', NULL, NULL);
+                INSERT INTO ZABCDEMAILADDRESS VALUES (1, 'Person@example.org', NULL);
+            """
+            )
+        token, url, objects, metadata = serve_collector_target(
+            self, root, "apple_messages"
+        )
+        config = root / "collector.json"
+        config.write_text(
+            json.dumps(
+                {
+                    "state_dir": str(root / "state"),
+                    "sources": [
+                        {
+                            "id": "messages",
+                            "source": "apple_messages",
+                            "token_env": "TEST_TOKEN",
+                            "receive_url": url,
+                            "options": {
+                                "database": str(database),
+                                "home": str(home),
+                                "media": True,
+                            },
+                        }
+                    ],
+                }
+            )
+        )
+        ctime = file.stat().st_ctime
+        with (
+            patch.dict(os.environ, TEST_TOKEN=token),
+            patch(
+                "miroir_collector.sources.apple_messages.time",
+                SimpleNamespace(time=lambda: ctime + 120),
+            ),
+            redirect_stdout(StringIO()),
+        ):
+            self.assertEqual(main(["run", "--config", str(config)]), 0)
+            key = "source/attachments/attachment.mov"
+            self.assertEqual(objects.objects, {key: 5})
+            self.assertEqual(objects.content_types, {key: "video/quicktime"})
+            self.assertEqual(objects.put_count, 1)
+            self.assertEqual(main(["run", "--config", str(config)]), 0)
+            self.assertEqual(objects.put_count, 1)
+
+        (artifact,) = metadata.list_artifacts("test", "source")
+        batch = Path(artifact["storage_path"])
+        (fmt,) = APPLE_MESSAGES.formats
+        fmt.validate(batch)
+        warehouse = root / "warehouse.duckdb"
+        pipeline = dlt.pipeline(
+            pipeline_name="apple_messages_contract",
+            pipelines_dir=str(root / "pipelines"),
+            destination=dlt.destinations.duckdb(credentials=str(warehouse)),
+            dataset_name="apple_rows",
+        )
+        with fmt.open(APPLE_MESSAGES.settings_model(), str(batch), {}) as source:
+            pipeline.run(source)
+        with closing(duckdb.connect(str(warehouse))) as db:
+            self.assertEqual(
+                db.execute(
+                    "SELECT handle, first_name, last_name FROM apple_rows.contacts"
+                ).fetchall(),
+                [("person@example.org", "Ada", "Example")],
+            )
+
     def test_collected_batch_matches_connector_format(self):
         collector = Path(__file__).resolve().parents[1] / "collector"
         with patch.object(sys, "path", [str(collector), *sys.path]):
@@ -83,7 +237,7 @@ class AppleMessagesContractTests(unittest.TestCase):
             self.assertIsNotNone(batch)
             apple_formats.validate_batch(path)
             records = list(apple_formats.read_records(path))
-            # Contacts belong to the format; this version of the source sends none.
+            # This fixture has no address book.
             self.assertEqual(
                 {row["type"] for row in records},
                 {kind for kind in apple_formats.FIELDS if kind != "contact"},

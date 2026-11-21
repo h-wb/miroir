@@ -1,12 +1,15 @@
-"""Collect Apple Messages rows from one read-only snapshot."""
+"""Collect Apple Messages rows, attachment files and address book names."""
 
 import hashlib
 import json
 import math
 import re
 import sqlite3
+import stat
+import time
 from collections import Counter
-from contextlib import closing
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
 from itertools import batched
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any
@@ -17,7 +20,19 @@ from pydantic import BeforeValidator, Field
 from ..batch import BatchWriter
 from ..errors import Failure
 from ..masking import Masker
-from .base import Collected, Cursor, Options, Since, Source, UserPath, Window, nonempty
+from .base import (
+    Collected,
+    Cursor,
+    Media,
+    MediaItem,
+    MediaPage,
+    Options,
+    Since,
+    Source,
+    UserPath,
+    Window,
+    nonempty,
+)
 
 _EPOCH = 978307200
 _MESSAGE = [
@@ -147,6 +162,14 @@ class AppleMessagesOptions(Options):
     since: Annotated[Since | None, BeforeValidator(nonempty)] = None
     settle_seconds: int = Field(default=0, ge=0)
     max_rows: int = Field(default=20000, ge=1, le=200000)
+    media: bool = False
+    home: UserPath = Field(default="~", validate_default=True)
+    media_max_mb: int = Field(default=500, ge=1, le=5000)
+    names: bool = True
+
+    @property
+    def attachments(self) -> Path:
+        return self.home / "Library/Messages/Attachments"
 
 
 class AppleMessagesCursor(Cursor):
@@ -155,6 +178,7 @@ class AppleMessagesCursor(Cursor):
     anchors: list[Anchor] = Field(default_factory=list, max_length=8)
     chats_digest: Digest = ""
     handles_digest: Digest = ""
+    contacts_digest: Digest = ""
     # SHA-256 of (guid, date_edited, date_retracted) of the sent messages that
     # were edited or unsent: when it changes, all of them are sent again.
     edits: Digest = ""
@@ -170,9 +194,21 @@ class AppleMessages(Source[AppleMessagesOptions, AppleMessagesCursor]):
 
     def source_dirs(self, options: AppleMessagesOptions) -> list[Path]:
         try:
-            return [options.database.parent, options.database.resolve().parent]
+            dirs = [options.database.parent, options.database.resolve().parent]
         except (OSError, RuntimeError, ValueError):
             raise Failure("collect", "source") from None
+        if options.media:
+            dirs.append(options.attachments)
+        if options.names:
+            try:
+                for book in _address_books(options.home):
+                    dirs.extend((book.parent.resolve(), book.resolve().parent))
+            except (OSError, RuntimeError, ValueError):
+                pass  # An inaccessible address book must not stop collection.
+        return dirs
+
+    def media(self, options: AppleMessagesOptions) -> Media | None:
+        return Attachments(options) if options.media else None
 
     def collect(
         self,
@@ -186,19 +222,8 @@ class AppleMessages(Source[AppleMessagesOptions, AppleMessagesCursor]):
     ) -> Collected | None:
         self.guard(options, out)
         try:
-            with closing(
-                sqlite3.connect(
-                    f"file:{quote(str(options.database.absolute()))}?mode=ro",
-                    uri=True,
-                    timeout=5,
-                )
-            ) as db:
-                db.row_factory = sqlite3.Row
-                db.text_factory = _decode
-                db.execute("PRAGMA trusted_schema=OFF")
-                db.execute("PRAGMA query_only=ON")
-                db.execute("BEGIN")
-                rows, next_cursor, more, layout_changed = _collect_rows(
+            with _snapshot(options.database) as db:
+                rows, next_cursor, more, diagnostics = _collect_rows(
                     db, options, cursor, now, window
                 )
         except (sqlite3.Error, OSError, OverflowError, ValueError):
@@ -206,9 +231,109 @@ class AppleMessages(Source[AppleMessagesOptions, AppleMessagesCursor]):
         if not rows:
             return None
         counts = _write(out, now, rows, masker)
-        return Collected(
-            next_cursor, {**counts, "layout_changed": layout_changed}, more
+        return Collected(next_cursor, {**counts, **diagnostics}, more)
+
+
+@contextmanager
+def _snapshot(path: Path) -> Iterator[sqlite3.Connection]:
+    with closing(
+        sqlite3.connect(
+            f"file:{quote(str(path.absolute()))}?mode=ro", uri=True, timeout=5
         )
+    ) as db:
+        db.row_factory = sqlite3.Row
+        db.text_factory = _decode
+        db.execute("PRAGMA trusted_schema=OFF")
+        db.execute("PRAGMA query_only=ON")
+        db.execute("BEGIN")
+        yield db
+
+
+class Attachments(Media):
+    kind = "attachments"
+
+    def __init__(self, options: AppleMessagesOptions) -> None:
+        self.options = options
+
+    def start(self) -> int:
+        return 0
+
+    def limit(self, cursor: Cursor | None) -> int | None:
+        return None if cursor is None else 2**62
+
+    def page(self, after: int, upto: int, limit: int) -> MediaPage | None:
+        counts = dict.fromkeys(("examined", "missing", "invalid", "too_large"), 0)
+        upper = min(upto, int(time.time()) - 60)
+        try:
+            with _snapshot(self.options.database) as db:
+                files = self._files(db, after, upper, counts)
+        except (sqlite3.Error, OSError, RuntimeError, ValueError):
+            raise Failure("collect", "source") from None
+        if not files:
+            return None
+        files.sort(key=lambda file: (file[0], file[1] or ""))
+        end = min(limit, len(files))
+        # A cursor identifies a whole second, including rejected files in it.
+        while end < len(files) and files[end][0] == files[end - 1][0]:
+            end += 1
+        items: dict[str, MediaItem] = {}
+        counts["examined"] = end
+        for _, key, path, size in files[:end]:
+            if key is None or size == 0:
+                counts["invalid"] += 1
+            elif size > self.options.media_max_mb * 1024 * 1024:
+                counts["too_large"] += 1
+            else:
+                items.setdefault(key, MediaItem(key, path, size))
+        return MediaPage(
+            list(items.values()), files[end - 1][0], counts, end < len(files)
+        )
+
+    def _files(
+        self, db: sqlite3.Connection, after: int, upper: int, counts: dict[str, int]
+    ) -> list[tuple[int, str | None, Path, int]]:
+        root = self.options.attachments.resolve()
+        columns = {
+            row[0].lower()
+            for row in db.execute("SELECT name FROM pragma_table_info('attachment')")
+        }
+        if "guid" not in columns:
+            raise Failure("collect", "source")
+        if "filename" not in columns:
+            return []
+        transfer = _column("a", "transfer_name", columns, "transfer_name")
+        files = []
+        for guid, filename, name in db.execute(
+            f"SELECT a.guid, a.filename, {transfer} FROM attachment a WHERE a.filename IS NOT NULL"
+        ):
+            key = media_key(guid, name, filename)
+            try:
+                path = _attachment_path(filename, self.options.home, root)
+                info = path.stat()
+            except FileNotFoundError:
+                # Paths with no timestamp are counted during the scan, but
+                # cannot advance a page or count against its file limit.
+                counts["missing" if key is not None else "invalid"] += 1
+                continue
+            except (OSError, RuntimeError, ValueError):
+                counts["invalid"] += 1
+                continue
+            second = int(info.st_ctime)
+            if after < second <= upper:
+                size = info.st_size if stat.S_ISREG(info.st_mode) else 0
+                files.append((second, key, path, size))
+        return files
+
+
+def _attachment_path(filename: object, home: Path, root: Path) -> Path:
+    if not isinstance(filename, str) or not filename:
+        raise ValueError("Invalid attachment path")
+    path = (
+        home / filename[2:] if filename.startswith("~/") else Path(filename)
+    ).resolve()
+    if not path.is_relative_to(root):
+        raise ValueError("Attachment path outside source folder")
+    return path
 
 
 def media_key(guid: object, transfer_name: object, filename: object) -> str | None:
@@ -555,13 +680,108 @@ def _blob_hex(value: bytes) -> dict[str, str]:
     return {"blob": value.hex()}
 
 
+_NAME_FIELDS = ("first_name", "last_name", "nickname", "organization")
+_BOOK_FILE = "AddressBook-v22.abcddb"
+
+
+def _address_books(home: Path) -> list[Path]:
+    root = home / "Library/Application Support/AddressBook"
+    sources = root / "Sources"
+    try:
+        candidates = [
+            folder / _BOOK_FILE for folder in sources.iterdir() if folder.is_dir()
+        ]
+    except FileNotFoundError:
+        candidates = []
+    books = []
+    for path in sorted([root / _BOOK_FILE, *candidates]):
+        try:
+            path.stat()
+        except FileNotFoundError:
+            continue
+        books.append(path)
+    return books
+
+
+def _phone(value: str) -> str | None:
+    digits = "".join(char for char in value if char.isdigit())
+    if len(digits) == 11 and digits.startswith("1"):
+        return digits[1:]
+    return digits if len(digits) >= 7 else None
+
+
+def _address(value: str) -> str | None:
+    return _email(value) if "@" in value else _phone(value)
+
+
+def _email(value: str) -> str | None:
+    return value.lower() if "@" in value else None
+
+
+def _book_matches(
+    db: sqlite3.Connection, addresses: set[str], matches: dict[str, list[Row]]
+) -> None:
+    # A repeated phone/email on the same card is still only one match.
+    owners: dict[int, set[str]] = {}
+    for table, field, normalize in (
+        ("ZABCDPHONENUMBER", "p.ZFULLNUMBER", _phone),
+        ("ZABCDEMAILADDRESS", "coalesce(p.ZADDRESSNORMALIZED, p.ZADDRESS)", _email),
+    ):
+        for owner, value in db.execute(f"SELECT p.ZOWNER, {field} FROM {table} p"):
+            if (
+                isinstance(value, str)
+                and (key := normalize(value)) is not None
+                and key in addresses
+            ):
+                owners.setdefault(owner, set()).add(key)
+    for pk, *values in db.execute(
+        "SELECT Z_PK, ZFIRSTNAME, ZLASTNAME, ZNICKNAME, ZORGANIZATION "
+        "FROM ZABCDRECORD ORDER BY Z_PK"
+    ):
+        if pk not in owners:
+            continue
+        fields = {
+            field: _clean(value) if isinstance(value, str) and value.strip() else None
+            for field, value in zip(_NAME_FIELDS, values, strict=True)
+        }
+        if any(fields.values()):
+            for key in owners[pk]:
+                matches.setdefault(key, []).append(fields)
+
+
+def _contacts(home: Path, handles: list[Row]) -> tuple[list[Row], int, int]:
+    addresses = {
+        handle: _address(handle)
+        for row in handles
+        if isinstance(handle := row["id"], str)
+    }
+    try:
+        books = _address_books(home)
+        if not books:
+            return [], 1, 0
+        keys = {key for key in addresses.values() if key is not None}
+        matches: dict[str, list[Row]] = {}
+        for path in books:
+            with _snapshot(path) as db:
+                _book_matches(db, keys, matches)
+    except (sqlite3.Error, OSError, RuntimeError, ValueError):
+        return [], 1, 0
+    contacts = []
+    ambiguous = 0
+    for handle, key in sorted(addresses.items()):
+        if key is not None and (records := matches.get(key)):
+            contacts.append({"handle": handle, **records[0]})
+            ambiguous += len(records) > 1 and _valid_key(handle)
+    return contacts, 0, ambiguous
+
+
 def _collect_rows(
     db: sqlite3.Connection,
     options: AppleMessagesOptions,
     cursor: AppleMessagesCursor | None,
     now: float,
     window: Window | None,
-) -> tuple[dict[str, list[Row]], AppleMessagesCursor, bool, int]:
+) -> tuple[dict[str, list[Row]], AppleMessagesCursor, bool, dict[str, int]]:
     columns = _columns(db)
     layout = _layout(columns)
     saved_layout = cursor.layout if cursor is not None else ""
@@ -581,6 +801,12 @@ def _collect_rows(
         edits = _edits_digest(edited)
     rows = {"message": sent, **_message_links(db, columns, sent)} if sent else {}
     chats_digest, handles_digest = cursor.chats_digest, cursor.handles_digest
+    contacts_digest = cursor.contacts_digest
+    diagnostics = {
+        "layout_changed": int(bool(saved_layout) and saved_layout != layout),
+        "names_unavailable": 0,
+        "names_ambiguous": 0,
+    }
     if window is None:
         chats, handles = _snapshots(db, columns)
         chats_digest, handles_digest = _digest(chats), _digest(handles)
@@ -588,6 +814,19 @@ def _collect_rows(
             rows.update(chats)
         if handles_digest != cursor.handles_digest:
             rows.update(handles)
+        if options.names:
+            (
+                contacts,
+                diagnostics["names_unavailable"],
+                diagnostics["names_ambiguous"],
+            ) = _contacts(options.home, handles["handle"])
+            valid = [row for row in contacts if _valid_key(row["handle"])]
+            if not diagnostics["names_unavailable"]:
+                contacts_digest = _digest({"contact": valid}) if valid else ""
+            if (valid and contacts_digest != cursor.contacts_digest) or (
+                rows and not valid and contacts
+            ):
+                rows["contact"] = contacts
     return (
         rows,
         AppleMessagesCursor(
@@ -595,11 +834,12 @@ def _collect_rows(
             anchors=_anchors(kept, messages),
             chats_digest=chats_digest,
             handles_digest=handles_digest,
+            contacts_digest=contacts_digest,
             edits=edits,
             layout=layout,
         ),
         more,
-        int(bool(saved_layout) and saved_layout != layout),
+        diagnostics,
     )
 
 

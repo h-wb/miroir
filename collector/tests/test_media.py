@@ -11,6 +11,7 @@ from socket import socket
 from tempfile import TemporaryDirectory
 from threading import Event, Lock, Thread
 from time import sleep
+from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import urlsplit
 
@@ -23,6 +24,7 @@ from miroir_collector.state import State
 from miroir_collector.transport import Client
 
 from .masking_fixtures import MASKER
+from .test_apple_messages_source import SCHEMA as MESSAGES_SCHEMA
 from .test_dates import local_zone
 
 TS = 1700000000
@@ -525,6 +527,7 @@ class MediaTests(unittest.TestCase):
                 "withheld": 2,
                 "missing": 2,
                 "invalid": 1,
+                "too_large": 0,
                 "rejected": 0,
             },
         )
@@ -548,6 +551,63 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(self.media_status()["counts"]["present"], 1)
         self.assertEqual(self.media_status()["counts"]["rejected"], 1)
         self.assertFalse(self.puts or self.confirms)
+
+    def test_apple_messages_upload_and_resend_by_file_time(self) -> None:
+        home = self.root / "home"
+        attachments = home / "Library/Messages/Attachments"
+        attachments.mkdir(parents=True)
+        database = attachments.parent / "chat.db"
+        with closing(sqlite3.connect(database)) as db:
+            db.executescript(
+                MESSAGES_SCHEMA
+                + """
+                INSERT INTO message(guid, date) VALUES ('old-message', 1);
+                INSERT INTO attachment(guid, filename) VALUES
+                    ('new', '~/Library/Messages/Attachments/new.mov'),
+                    ('stored', '~/Library/Messages/Attachments/stored.pdf');
+                INSERT INTO message_attachment_join VALUES (1, 1), (1, 2);
+            """
+            )
+        for name in ("new.mov", "stored.pdf"):
+            (attachments / name).write_bytes(b"data")
+        options = {
+            "source": "apple_messages",
+            "database": str(database),
+            "home": str(home),
+        }
+        self.configure(**options)
+        self.assertEqual(self.run_collector()[0], 0)
+        self.assertEqual(self.row_posts, 1)
+        self.assertFalse(self.media_requests)
+
+        self.configure(**options, media=True)
+        self.mode = "grouped"
+        self.stored.add("stored.pdf")
+        original_stat = Path.stat
+
+        def timed_stat(path, *args, **kwargs):
+            info = original_stat(path, *args, **kwargs)
+            if path.parent == attachments:
+                return SimpleNamespace(
+                    st_ctime=TS, st_mode=info.st_mode, st_size=info.st_size
+                )
+            return info
+
+        with patch.object(Path, "stat", timed_stat):
+            self.assertEqual(self.run_collector()[0], 0)
+            self.assertEqual(self.cursor(), TS)
+            self.assertEqual(self.confirms, [[{"key": "new.mov", "size": 4}]])
+            self.assertEqual(self.media_status()["counts"]["uploaded"], 1)
+            self.assertEqual(self.media_status()["counts"]["present"], 1)
+            self.assertEqual(self.run_collector()[0], 0)
+            self.assertEqual(len(self.plans), 1)
+            self.assertEqual(len(self.puts), 1)
+            code, output = self.resend("--media")
+            self.assertEqual(code, 0)
+            self.assertIn('"present": 2', output)
+            self.assertEqual(self.plans, [self.plans[0]] * 2)
+            self.assertEqual(len(self.puts), 1)
+            self.assertEqual(self.row_posts, 1)
 
     def test_failure_retries_same_page(self) -> None:
         self.configure(media=True, since=START)

@@ -16,9 +16,10 @@ class MediaTests(unittest.TestCase):
             path.write_text(
                 '{"schema_version":1,"id":"test","connections":['
                 '{"id":"screen","integration":"screenmemory","settings":{}},'
-                '{"id":"browser","integration":"browser_history","settings":{}}]}'
+                '{"id":"browser","integration":"browser_history","settings":{}},'
+                '{"id":"messages","integration":"apple_messages","settings":{}}]}'
             )
-            self.screen, self.browser = load_miroir(path).connections
+            self.screen, self.browser, self.messages = load_miroir(path).connections
         self.config = MediaConfig(
             endpoint="http://internal.test", bucket="media", prefix="site"
         )
@@ -28,6 +29,39 @@ class MediaTests(unittest.TestCase):
     def plan(self, objects):
         return media.request_uploads(
             self.config, self.store, self.screen, self.kind, objects
+        )
+
+    def test_apple_messages_attachments(self):
+        (kind,) = self.messages.integration.media
+        self.assertEqual(
+            (kind.name, kind.resource, kind.column),
+            ("attachments", "attachments", "media_key"),
+        )
+        self.assertEqual(kind.max_bytes, 5000 * 1024 * 1024)
+        self.assertTrue(set(kind.extensions) <= media.CONTENT_TYPES.keys())
+        mov, pdf, unsupported, oversize = media.request_uploads(
+            self.config,
+            self.store,
+            self.messages,
+            kind.name,
+            [
+                {"key": "clip.mov", "size": 3},
+                {"key": "print.pdf", "size": kind.max_bytes},
+                {"key": "unsupported.exe", "size": 3},
+                {"key": "large.pdf", "size": kind.max_bytes + 1},
+            ],
+        )
+        self.assertEqual(
+            (mov["status"], mov["content_type"]), ("upload", "video/quicktime")
+        )
+        self.assertEqual(
+            (pdf["status"], pdf["content_type"]), ("upload", "application/pdf")
+        )
+        self.assertEqual(
+            (unsupported["status"], unsupported["reason"]), ("rejected", "bad_type")
+        )
+        self.assertEqual(
+            (oversize["status"], oversize["reason"]), ("rejected", "bad_size")
         )
 
     def test_keys(self):
