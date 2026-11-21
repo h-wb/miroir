@@ -88,6 +88,10 @@ class State:
         return self.directory / "media_cursor.json"
 
     @property
+    def _report(self) -> Path:
+        return self.directory / "report.json"
+
+    @property
     def batch(self) -> Path:
         return self.directory / "spool" / "batch.jsonl.gz"
 
@@ -111,6 +115,7 @@ class State:
             self._cursor,
             self._media,
             self._status,
+            self._report,
         )
 
     def read_cursor(self) -> dict[str, Any] | None:
@@ -146,6 +151,22 @@ class State:
 
     def status(self) -> dict[str, Any] | None:
         return _read(self._status)
+
+    def unreported_runs(self) -> int:
+        value = (_read(self._report) or {}).get("unreported", 0)
+        if type(value) is not int or value < 0:
+            raise StateError("Invalid report counter")
+        return value
+
+    def save_unreported_runs(self, count: int) -> None:
+        _write(self._report, {"unreported": count})
+
+    def record_report(self, status: str) -> None:
+        try:
+            value = self.status() or {}
+        except StateError:
+            value = {}
+        _write(self._status, {**value, "report": status})
 
     def record(self, section: Section, entry: StatusEntry) -> None:
         try:

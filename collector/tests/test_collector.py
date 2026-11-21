@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from kingfisher_sdk import Rules, Scanner
 
+from miroir_collector import __version__
 from miroir_collector.cli import main
 from miroir_collector.config import load_config
 from miroir_collector.errors import ConfigError, Failure
@@ -232,6 +233,14 @@ class MaskingTests(unittest.TestCase):
 
 class _Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
+        if self.path.endswith("/report"):
+            self.server.reports.append(
+                (self.headers, self.rfile.read(int(self.headers["Content-Length"])))
+            )
+            self.send_response(self.server.report_code)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         self.server.posts.append(
             (
                 self.path,
@@ -273,6 +282,8 @@ class CollectorTests(unittest.TestCase):
         server = HTTPServer(("127.0.0.1", 0), _Handler)
         self.server = server
         server.posts = []
+        server.reports = []
+        server.report_code = 204
         server.gets = []
         server.response_code = 201
         server.wait_for_reply = False
@@ -826,6 +837,269 @@ class CollectorTests(unittest.TestCase):
             {p: p.read_bytes() for p in self.state.directory.rglob("*") if p.is_file()},
         )
         self.assertFalse(self.server.posts)
+
+    # ---- Reports (decision 039) ------------------------------------------------
+
+    def _reports(self) -> list[dict]:
+        return [json.loads(body) for _, body in self.server.reports]
+
+    def _status_file(self) -> dict:
+        return json.loads((self.state.directory / "status.json").read_text())
+
+    def _unreported(self) -> int:
+        return json.loads((self.state.directory / "report.json").read_text())[
+            "unreported"
+        ]
+
+    def _nothing(self, *args: object, **kwargs: object) -> None:
+        return None
+
+    def test_each_run_sends_one_report(self) -> None:
+        cases = (
+            ("delivered", self._fake, 201, 0),
+            ("nothing_new", self._nothing, 201, 0),
+            ("failed", self._fake, 500, 1),
+        )
+        for outcome, collect, code, exit_code in cases:
+            with (
+                self.subTest(outcome=outcome),
+                patch.object(SOURCES["screenmemory"], "collect", collect),
+            ):
+                self.server.reports.clear()
+                self.server.response_code = code
+                self.assertEqual(self._cli("run")[0], exit_code)
+                (report,) = self._reports()
+                headers, _ = self.server.reports[0]
+                self.assertEqual(headers["Authorization"], f"Bearer {self.token}")
+                self.assertEqual(headers["Content-Type"], "application/json")
+                self.assertEqual(
+                    set(report),
+                    {
+                        "version",
+                        "collector",
+                        "source",
+                        "started_at",
+                        "finished_at",
+                        "rows",
+                        "media",
+                        "pending",
+                        "unreported",
+                    },
+                )
+                self.assertEqual(
+                    (report["version"], report["collector"], report["source"]),
+                    (1, __version__, "screenmemory"),
+                )
+                for key in ("started_at", "finished_at"):
+                    self.assertRegex(report[key], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+                self.assertLessEqual(report["started_at"], report["finished_at"])
+                self.assertEqual(
+                    set(report["rows"]),
+                    {"outcome", "counts", "step", "reason", "http_status"},
+                )
+                self.assertEqual(report["rows"]["outcome"], outcome)
+                self.assertIsNone(report["media"])
+                self.assertEqual(report["unreported"], 0)
+                self.assertEqual(report["pending"], outcome == "failed")
+                status = self._status_file()
+                self.assertEqual(status["report"], "sent")
+                self.assertEqual(status["outcome"], outcome)
+        self.assertEqual(
+            self._reports()[0]["rows"],
+            {
+                "outcome": "failed",
+                "counts": {"frames": 1},
+                "step": "deliver",
+                "reason": "http",
+                "http_status": 500,
+            },
+        )
+
+    def test_report_shapes_of_delivered_and_nothing_new(self) -> None:
+        with patch.object(SOURCES["screenmemory"], "collect", self._fake):
+            self.assertEqual(self._cli("run")[0], 0)
+        with patch.object(SOURCES["screenmemory"], "collect", self._nothing):
+            self.assertEqual(self._cli("run")[0], 0)
+        self.assertEqual(
+            [report["rows"] for report in self._reports()],
+            [
+                {
+                    "outcome": "delivered",
+                    "counts": {"frames": 1},
+                    "step": None,
+                    "reason": None,
+                    "http_status": 201,
+                },
+                {
+                    "outcome": "nothing_new",
+                    "counts": {},
+                    "step": None,
+                    "reason": None,
+                    "http_status": None,
+                },
+            ],
+        )
+
+    def test_unsent_reports_do_not_change_the_run_and_are_counted(self) -> None:
+        cursor = self.state.directory / "cursor.json"
+        with patch.object(SOURCES["screenmemory"], "collect", self._fake):
+            for unreported in (1, 2):
+                self.server.report_code = 500
+                code, output = self._cli("run")
+                self.assertEqual(code, 0)
+                self.assertRegex(output, r"^screen_macbook delivered \{")
+                self.assertEqual(self._status_file()["report"], "failed")
+                self.assertEqual(self._status_file()["outcome"], "delivered")
+                self.assertFalse(self.state.has_pending())
+                self.assertEqual(
+                    json.loads(cursor.read_text()),
+                    {"frames": unreported, "app_usage": 0},
+                )
+                self.assertEqual(self._unreported(), unreported)
+            self.assertEqual(
+                [report["unreported"] for report in self._reports()], [0, 1]
+            )
+            # Something unexpected inside reporting is still only a failed report.
+            with patch.object(Client, "report", side_effect=RuntimeError("fixture")):
+                code, output = self._cli("run")
+            self.assertEqual(code, 0)
+            self.assertNotIn("fixture", output)
+            self.assertEqual(self._status_file()["report"], "failed")
+            self.assertEqual(self._status_file()["outcome"], "delivered")
+            self.assertEqual(json.loads(cursor.read_text())["frames"], 3)
+            # It is still a run that could not be reported.
+            self.assertEqual(self._unreported(), 3)
+            self.server.report_code = 204
+            self.assertEqual(self._cli("run")[0], 0)
+            self.assertEqual(self._reports()[-1]["unreported"], 3)
+            self.assertEqual(self._status_file()["report"], "sent")
+            self.assertEqual(self._unreported(), 0)
+            self.assertEqual(self._cli("run")[0], 0)
+            self.assertEqual(self._reports()[-1]["unreported"], 0)
+
+    def test_server_down_keeps_the_failed_run_as_it_was(self) -> None:
+        with (
+            closing(socket()) as endpoint,
+            patch.object(SOURCES["screenmemory"], "collect", self._fake),
+        ):
+            endpoint.bind(("127.0.0.1", 0))
+            self.item["receive_url"] = (
+                f"http://127.0.0.1:{endpoint.getsockname()[1]}/receive"
+            )
+            self.path.write_text(json.dumps(self.raw))
+            code, output = self._cli("run")
+        self.assertEqual(code, 1)
+        self.assertIn("failed step=deliver reason=network ", output)
+        self.assertNotIn("report", output)
+        status = self._status_file()
+        self.assertEqual(
+            (status["outcome"], status["step"], status["reason"], status["report"]),
+            ("failed", "deliver", "network", "failed"),
+        )
+        self.assertTrue(self.state.has_pending())
+        self.assertFalse((self.state.directory / "cursor.json").exists())
+        self.assertEqual(self._unreported(), 1)
+
+    def test_a_server_without_reports_is_not_counted(self) -> None:
+        with patch.object(SOURCES["screenmemory"], "collect", self._fake):
+            for code in (401, 404, 405):
+                with self.subTest(code=code):
+                    self.server.report_code = code
+                    self.assertEqual(self._cli("run")[0], 0)
+                    self.assertEqual(self._status_file()["report"], "unsupported")
+                    self.assertFalse((self.state.directory / "report.json").exists())
+        self.assertEqual(len(self.server.reports), 3)
+
+    def test_no_report_outside_a_run_or_without_an_address(self) -> None:
+        with patch.object(SOURCES["screenmemory"], "collect", self._fake):
+            out = self.root / "out"
+            self.assertEqual(
+                self._cli("collect", "--source", "screen_macbook", "--out", str(out))[
+                    0
+                ],
+                0,
+            )
+            self.assertEqual(self._cli("status")[0], 0)
+            self.assertEqual(
+                self._cli(
+                    "resend",
+                    "--source",
+                    "screen_macbook",
+                    "--from",
+                    "2026-01-01",
+                    "--max-batches",
+                    "1",
+                )[0],
+                0,
+            )
+            with self.state.lock():
+                code, output = self._cli("run")
+            self.assertEqual(code, 0)
+            self.assertIn("already_running", output)
+            self.assertFalse(self.server.reports)
+            self.assertEqual(len(self.server.posts), 1)
+            self.item["receive_url"] = self.item["receive_url"].replace(
+                "/receive", "/ingest"
+            )
+            self.path.write_text(json.dumps(self.raw))
+            self.assertEqual(self._cli("run")[0], 0)
+            self.assertEqual(self._status_file()["outcome"], "delivered")
+            self.assertEqual(self._status_file()["report"], "skipped")
+            self.assertEqual(urlsplit(self.server.posts[-1][0]).path, "/ingest")
+            # Without a token, at the usual address: no request at all.
+            self.item["receive_url"] = self.item["receive_url"].replace(
+                "/ingest", "/receive"
+            )
+            self.path.write_text(json.dumps(self.raw))
+            posts = len(self.server.posts)
+            del os.environ["MIROIR_TEST_TOKEN"]
+            self.assertEqual(self._cli("run")[0], 1)
+            self.assertEqual(self._status_file()["report"], "skipped")
+            self.assertEqual(len(self.server.posts), posts)
+        self.assertFalse(self.server.reports)
+        self.assertFalse((self.state.directory / "report.json").exists())
+
+    def test_report_holds_no_source_text_token_or_address(self) -> None:
+        marker = "report-marker-4d1f"
+        data = self._source(f"{marker} visible text", f"{marker} more")
+        self.assertEqual(self._cli("run")[0], 0)
+        ((headers, body),) = self.server.reports
+        self.assertEqual(headers["Authorization"], f"Bearer {self.token}")
+        text = body.decode()
+        rows = json.loads(body)["rows"]
+        self.assertEqual(rows["outcome"], "delivered")
+        self.assertEqual(rows["counts"]["frames"], 2)
+        for value in (
+            marker,
+            self.token,
+            self.item["receive_url"],
+            "127.0.0.1",
+            str(self.server.server_port),
+            str(data),
+            "jpeg",
+        ):
+            self.assertNotIn(value, text)
+        self.assertIn(marker, gzip.decompress(self.server.posts[0][2]).decode())
+
+    def test_a_state_folder_from_before_reports_works(self) -> None:
+        self.state.directory.mkdir(parents=True)
+        (self.state.directory / "cursor.json").write_text(
+            json.dumps({"frames": 4, "app_usage": 0})
+        )
+        (self.state.directory / "status.json").write_text(
+            json.dumps({"time": "2026-11-01T00:00:00+00:00", "outcome": "delivered"})
+        )
+        with patch.object(SOURCES["screenmemory"], "collect", self._fake):
+            self.assertEqual(self._cli("run")[0], 0)
+            code, output = self._cli("status")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.calls, [{"frames": 4, "app_usage": 0}])
+        (report,) = self._reports()
+        self.assertEqual(report["unreported"], 0)
+        self.assertEqual(
+            json.loads(output.split(" ", 1)[1])["status"]["report"], "sent"
+        )
+        self.assertEqual(self._unreported(), 0)
 
 
 class ConfigurationMessageTests(unittest.TestCase):

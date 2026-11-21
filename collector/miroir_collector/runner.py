@@ -2,7 +2,7 @@
 
 import time
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager, nullcontext, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -10,13 +10,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
+from . import __version__
 from .config import SourceConfig
 from .errors import Failure, Reason, Step
 from .masking import Masker
 from .media import upload
 from .sources.base import Collected, Cursor, Media, Window
 from .state import Pending, Section, State, StateError, StatusEntry
-from .transport import Client, Receipt
+from .transport import Client, Receipt, ReportStatus
 
 
 class Outcome(StrEnum):
@@ -32,6 +33,15 @@ class Result:
     outcome: Outcome
     counts: dict[str, Any]
     failure: Failure | None = None
+    http_status: int | None = None
+
+    def report(self) -> dict[str, Any]:
+        details = (
+            self.failure.fields()
+            if self.failure is not None
+            else dict(step=None, reason=None, http_status=self.http_status)
+        )
+        return {"outcome": self.outcome.value, "counts": self.counts, **details}
 
 
 @dataclass
@@ -41,9 +51,10 @@ class _Pass:
     counts: dict[str, Any] = field(default_factory=dict)
     failure: Failure | None = None
     batches: int = 0
+    http_status: int | None = None
 
     def result(self) -> Result:
-        return Result(self.outcome, self.counts, self.failure)
+        return Result(self.outcome, self.counts, self.failure, self.http_status)
 
     def set_step(self, step: Step) -> None:
         self.step = step
@@ -155,6 +166,7 @@ def _rows(
                 break
             progress.counts = pending.counts
             receipt = _deliver_pending(config, state, client, pending, progress)
+            progress.http_status = receipt.status
             progress.batches += 1
             progress.outcome = Outcome.DELIVERED
             _record(
@@ -252,6 +264,50 @@ def _run_media(
     return progress.result()
 
 
+def _instant(value: datetime) -> str:
+    return value.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _report_run(
+    config: SourceConfig,
+    state: State,
+    client: Client,
+    started: datetime,
+    results: tuple[Result, Result | None],
+) -> None:
+    """Send the run's report: fixed words and counts, never source content.
+
+    Nothing here may change the run: its outcome, cursor and spool are settled.
+    """
+    rows, media = results
+    unreported = 0
+    with suppress(Exception):
+        unreported = state.unreported_runs()
+    try:
+        status = client.report(
+            {
+                "version": 1,
+                "collector": __version__,
+                "source": config.source.name,
+                "started_at": _instant(started),
+                "finished_at": _instant(datetime.now(UTC)),
+                "rows": rows.report(),
+                "media": media.report() if media is not None else None,
+                "pending": state.has_pending(),
+                "unreported": min(unreported, 100_000),
+            }
+        )
+    except Exception:  # noqa: BLE001 - last resort: a report never changes a run
+        status = ReportStatus.FAILED
+    with suppress(Exception):
+        if status == ReportStatus.SENT:
+            state.save_unreported_runs(0)
+        elif status == ReportStatus.FAILED:
+            state.save_unreported_runs(unreported + 1)
+    with suppress(Exception):
+        state.record_report(status)
+
+
 def run(
     config: SourceConfig,
     state: State,
@@ -260,6 +316,7 @@ def run(
     max_batches: int,
     max_media_files: int,
 ) -> tuple[Result, Result | None]:
+    started = datetime.now(UTC)
     source = config.source.media(config.options)
     progress = _Pass()
     with progress.capture():
@@ -275,6 +332,7 @@ def run(
                     if source is not None
                     else None
                 )
+                _report_run(config, state, client, started, (rows, media))
                 return rows, media
     media = (
         Result(Outcome.FAILED, _media_counts(), progress.failure)

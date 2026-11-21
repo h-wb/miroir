@@ -497,7 +497,35 @@ class MiroirService:
             )
             if enabled
             else None,
+            "collector": self.store.collector_status(miroir.id, connection_id),
         }
+
+    def record_collector_report(
+        self, connection_id: str, report: dict[str, Any], token: str
+    ) -> bool:
+        """Store a collector's report, already validated (`src.core.reports`).
+
+        The delivery token is checked again as the report is written: False
+        when it no longer verifies (the connection was removed meanwhile).
+        """
+        miroir = self.miroir()
+        try:
+            self._connection(miroir, connection_id)
+        except OperationError:
+            return False  # removed since the request was authorised
+        return self.store.record_collector_report(
+            miroir.id,
+            connection_id,
+            hashlib.sha256(token.encode()).hexdigest(),
+            report,
+        )
+
+    def deliveries(self) -> Iterator[tuple[str, dict[str, Any]]]:
+        """Each connection's delivery status, collector included, for metrics."""
+        miroir = self.miroir()
+        for connection in miroir.connections:
+            connection_id = connection.config.id
+            yield connection_id, self.delivery_status(connection_id, miroir)
 
     def create_delivery_token(self, connection_id: str) -> str:
         miroir = self.miroir()
@@ -793,6 +821,9 @@ class MiroirService:
         connection = self._connection(miroir, connection_id)
         if self.store.secret_metadata(miroir.id, connection_id):
             raise ConfigurationError("Secrets already exist for this connection ID")
+        # A report in flight while a former connection of this ID was removed may
+        # have landed after its cleanup; it does not belong to the new one.
+        self.store.delete_collector_reports(miroir.id, connection_id)
         try:
             for name, value in credentials.items():
                 assert secrets is not None  # checked above
@@ -885,6 +916,7 @@ class MiroirService:
         self._write_config(raw, revision)
         self.store.delete_secrets(miroir.id, connection_id)
         self.store.revoke_delivery_token(miroir.id, connection_id)
+        self.store.delete_collector_reports(miroir.id, connection_id)
 
     # ---- Orchestrator -------------------------------------------------------------
 
