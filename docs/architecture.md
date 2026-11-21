@@ -31,7 +31,7 @@ silently. Decision 031 records why.
 Also: nothing under `src/` imports the agent, and a connector's `formats.py` and
 `contracts.py` never import dlt at module level, so files can be validated
 without the loading stack. The agent imports the Python standard library,
-urllib3 and pydantic, and nothing else; its own parts have import rules too, held
+urllib3, pydantic and a pinned secret scanner, and nothing else; its own parts have import rules too, held
 by `agent/tests/test_boundaries.py` (decision 035).
 
 A new folder under `src/` fails the boundary test until it is given a rule.

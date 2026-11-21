@@ -48,7 +48,8 @@ output.
   `withheld`): the front app is a password manager (`excluded_app`), or the text
   contains a password-manager address such as a web vault or the browser's own
   password page (`marker`). Both lists can be extended in the agent's configuration.
-- **Spans masked** as `[masked:<rule>]`, counted per frame in `masked`:
+- **Spans masked** as `[masked:<rule>]`, counted per frame in `masked`. The
+  agent's own rules, in this order:
   - `private_key`: private key blocks;
   - `token`: known key and token shapes (GitHub, GitLab, AWS, Slack, Google, npm,
     Stripe, Tailscale, age, JSON web tokens, bearer values, `sk-` keys);
@@ -57,9 +58,48 @@ output.
   - `random`: long mixed-case strings with digits. Hex-only strings (commit and
     image digests) are left readable;
   - `card`: card numbers that pass their check digit.
+- **Spans the scanner adds**, as `[masked:scanner]`: credentials of known
+  providers from the Kingfisher scanner's catalogue of about 500 rules, and
+  anything matched by your own rule files (decision 036). It runs on the same
+  original text, and whatever either it or the rules above find is masked. Where
+  both find the same span, it keeps the rule's name, so `scanner` counts what the
+  catalogue adds.
+- **A text the scanner could not check** (it failed, took over five seconds, or
+  the text holds NUL characters) is replaced whole by `[masked:unscanned]` and
+  counted as `unscanned`. If the scanner cannot start at all, nothing is
+  collected and the pass fails with `reason=masking`.
 
 The rules go by shape. A password typed as an ordinary word, or a short code, is not
 caught, so treat these tables as the most sensitive data in the warehouse.
+
+### Your own rules
+
+Name rule files in the agent's configuration, beside `state_dir`:
+
+```json
+"masking": { "rules": ["~/.config/miroir-agent/rules.yml"] }
+```
+
+A rule file is in the scanner's format. Each rule is a pattern whose first
+group is the part to mask, and its `id` must start with `custom.`:
+
+```yaml
+rules:
+  - name: Example internal token
+    id: custom.example-internal
+    pattern: |
+      (?x)
+      \b
+      (
+        exm_[A-Za-z0-9]{24}
+      )
+      \b
+    min_entropy: 3.0
+    confidence: medium
+```
+
+A new or changed rule applies to what is collected from then on. To apply it to
+text already sent, run `resend` over the dates concerned.
 
 Screenshots cannot be masked. With `media` on, the agent uploads the image of
 each frame it sent, and never the image of a frame it withheld. A screenshot can

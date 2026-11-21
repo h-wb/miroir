@@ -1323,13 +1323,17 @@ dev = [
     { name = "black" },
     { name = "dlt", extra = ["duckdb"] },
     { name = "httpx" },
+    { name = "kingfisher-secret-scanner" },
     { name = "marimo" },
     { name = "mypy" },
     { name = "ruff" },
+    { name = "urllib3" },
 ]
 test = [
     { name = "dlt", extra = ["duckdb"] },
     { name = "httpx" },
+    { name = "kingfisher-secret-scanner" },
+    { name = "urllib3" },
 ]
 
 [package.metadata]
@@ -1357,13 +1361,17 @@ dev = [
     { name = "black", specifier = ">=23.0.0" },
     { name = "dlt", extras = ["duckdb"], specifier = ">=1.27.2" },
     { name = "httpx", specifier = ">=0.27,<1" },
+    { name = "kingfisher-secret-scanner", specifier = "==1.6.4" },
     { name = "marimo", specifier = ">=0.16.5" },
     { name = "mypy", specifier = ">=1.5.0" },
     { name = "ruff", specifier = ">=0.1.0" },
+    { name = "urllib3", specifier = ">=2.2,<3" },
 ]
 test = [
     { name = "dlt", extras = ["duckdb"], specifier = ">=1.27.2" },
     { name = "httpx", specifier = ">=0.27,<1" },
+    { name = "kingfisher-secret-scanner", specifier = "==1.6.4" },
+    { name = "urllib3", specifier = ">=2.2,<3" },
 ]
 
 [[package]]
@@ -2163,6 +2171,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/19/74/a633ee74eb36c44aa6d1095e7cc5569bebf04342ee146178e2d36600708b/jsonschema_specifications-2025.9.1.tar.gz", hash = "sha256:b540987f239e745613c7a9176f3edb72b832a4ac465cf02712288397832b5e8d", size = 32855, upload-time = "2025-09-08T01:34:59.186Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/41/45/1a4ed80516f02155c51f51e8cedb3c1902296743db0bbc66608a0db2814f/jsonschema_specifications-2025.9.1-py3-none-any.whl", hash = "sha256:98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe", size = 18437, upload-time = "2025-09-08T01:34:57.871Z" },
+]
+
+[[package]]
+name = "kingfisher-secret-scanner"
+version = "1.6.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5e/9b/396a66e17bbf8db8febc2d7ea4f37e9e764829a00b77956684b4689e1b39/kingfisher_secret_scanner-1.6.4.tar.gz", hash = "sha256:8c134bd343cfb2ce10b9b1967fff9e2914762fbf04a44a77d5aa1f847d7bb99a", size = 1869094, upload-time = "2026-11-17T03:29:07.782Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/85/b1/f2fc02dbcdbba8904b88b6d48cceaf3510cd6437da19a802b3c895befe36/kingfisher_secret_scanner-1.6.4-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:3a9ce7b6c7e351ed247932f6e7129ccc72623d66721de10831107a9ac2076739", size = 15540663, upload-time = "2026-11-17T03:28:51.273Z" },
+    { url = "https://files.pythonhosted.org/packages/55/a8/9d9b9fa1e3bc2f3ca88ced5d9b6be43ed0588996c94620b3f6696c99062f/kingfisher_secret_scanner-1.6.4-cp310-abi3-macosx_11_0_x86_64.whl", hash = "sha256:85e666ca27f7be4096a43e3ccb04bd4228c9baa700fd2c04d2067672db4d0df0", size = 16091705, upload-time = "2026-11-17T03:28:54.55Z" },
+    { url = "https://files.pythonhosted.org/packages/c2/61/a8b61f232a9d16dd66e70d510b4522e06159ea0e54e1e8d3fc75fb8f34e0/kingfisher_secret_scanner-1.6.4-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:a98257077b88e0cf293b38be66018580926a62bdacfb151398c631823070f60a", size = 17121152, upload-time = "2026-11-17T03:28:57.69Z" },
+    { url = "https://files.pythonhosted.org/packages/bc/28/726eaf91d7ce4518d729659f6514de7f0e106a68f30cc0a93a941933224c/kingfisher_secret_scanner-1.6.4-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:31bb27e1a4b9605fde5a00fe4025fd9a297c9cc8f5a703c8b980152ce9a388e2", size = 17803467, upload-time = "2026-11-17T03:28:59.988Z" },
+    { url = "https://files.pythonhosted.org/packages/16/48/a7185055126466fdcfe7d71494e9f30de58fd5b6bc26f5a8d0ed9b55a22a/kingfisher_secret_scanner-1.6.4-cp310-abi3-win_amd64.whl", hash = "sha256:2f020483dadb058e8dd806d2105dc2ffbf0122ad5e05c63a86244e1120df0ea4", size = 27310311, upload-time = "2026-11-17T03:29:02.925Z" },
+    { url = "https://files.pythonhosted.org/packages/0f/c5/aa566bb54489027220ff865c8a96be7d02e38e9752036b3b8324392fb73a/kingfisher_secret_scanner-1.6.4-cp310-abi3-win_arm64.whl", hash = "sha256:43d724a6f50a93f7e736c554a06bc124285b1db37a136a0e7db24f836c943e89", size = 15337959, upload-time = "2026-11-17T03:29:05.878Z" },
 ]
 
 [[package]]

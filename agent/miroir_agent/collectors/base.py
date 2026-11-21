@@ -16,6 +16,7 @@ from pydantic import BeforeValidator, ValidationError
 
 from ..dates import parse_date
 from ..errors import Failure
+from ..masking import Masker
 from ..models import Model
 
 # A resend range in Unix seconds: from inclusive, to exclusive.
@@ -120,11 +121,13 @@ class Collector[O: Options, C: Cursor](ABC):
         out: Path,
         now: float,
         *,
+        masker: Masker,
         window: Window | None = None,
     ) -> Collected | None:
         """Write rows newer than `cursor` to `out`; None when there are none.
 
-        With a window, collect what is dated inside it instead.
+        Use `masker` to redact text before writing it. With a window, collect
+        what is dated inside it instead.
         """
 
     def media(self, options: O) -> MediaSource | None:

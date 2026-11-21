@@ -2,8 +2,9 @@
 
 A small program for a personal machine. It reads sources that exist only
 there, withholds secrets, and delivers what is new to a Miroir connection's
-receiving URL. It needs Python 3.12 or later and two libraries, urllib3 and
-pydantic, and imports no server code. Design: decisions 030, 031 and 035 in
+receiving URL. It needs Python 3.12 or later and three libraries (urllib3,
+pydantic and the Kingfisher secret scanner), and imports no server code.
+Design: decisions 030, 031, 035 and 036 in
 [`docs/miroir/decisions.md`](../docs/miroir/decisions.md).
 
 ## Run it
@@ -74,6 +75,22 @@ midnight or `YYYY-MM-DDTHH:MM:SS` with `Z` or a UTC offset for an exact instant.
 Omit it to start at the beginning. Zen origins and bookmarks are not filtered
 by `since` and are not included in a resend.
 
+## Masking
+
+Text is masked before it is written to a batch, by the agent's fixed rules and
+by the Kingfisher scanner's catalogue of provider credentials. The scanner is
+always on. It starts on the first text that needs it (about four seconds), so
+`status` and a pass with nothing new do not pay for it. To add your own
+patterns, name rule files at the top level of the configuration:
+
+```json
+"masking": { "rules": ["~/.config/miroir-agent/rules.yml"] }
+```
+
+The rule format, the order of the rules and what each one catches are in
+[docs/sources/screenmemory.md](../docs/sources/screenmemory.md). If the scanner
+cannot start, the pass fails with `reason=masking` and nothing is collected.
+
 ## Media
 
 A collector can also upload the files its rows point at. For `screenmemory`, set
@@ -107,7 +124,8 @@ only Miroir.
 | `batch.py` | One batch file: header, records, counted trailer |
 | `collectors/base.py` | What a collector is: the contract every source implements |
 | `collectors/<source>.py` | One source: its options, cursor, source folders and rows |
-| `masking.py` | The fixed rules that mask secrets in text |
+| `masking.py` | What masks secrets in text: the fixed rules, joined with the scanner's findings |
+| `scanner.py` | The Kingfisher scanner: started on first use, closed on failure |
 | `dates.py` | Parse local dates and offset-qualified instants |
 | `errors.py` | The failure a pass reports: a step and a reason |
 

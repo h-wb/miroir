@@ -1,10 +1,12 @@
+import base64
+import gzip
 import io
 import json
 import os
 import sqlite3
 import stat
 import unittest
-from contextlib import closing, redirect_stdout
+from contextlib import closing, redirect_stderr, redirect_stdout
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from socket import socket
@@ -13,29 +15,89 @@ from threading import Event, Thread
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
+from kingfisher_sdk import Rules, Scanner
+
 from miroir_agent.cli import main
 from miroir_agent.collectors import COLLECTORS
 from miroir_agent.collectors.base import Collected
 from miroir_agent.collectors.screenmemory import ScreenMemoryCursor
 from miroir_agent.config import load_config
 from miroir_agent.errors import ConfigError, Failure
-from miroir_agent.masking import mask, mask_tokens, mask_url
+from miroir_agent.masking import Masker
 from miroir_agent.state import State
 from miroir_agent.transport import Client
 
+from .masking_fixtures import MASKER, github_token
+
+
+class NativePanic(BaseException):
+    pass
+
 
 class MaskingTests(unittest.TestCase):
+    def test_interrupts_propagate_during_start_and_scan(self) -> None:
+        for error in (KeyboardInterrupt, SystemExit):
+            with (
+                self.subTest(error=error),
+                patch("kingfisher_sdk.Rules", side_effect=error),
+                self.assertRaises(error),
+            ):
+                Masker().text("ordinary")
+            MASKER.text("ordinary")
+            with (
+                self.subTest(error=error),
+                patch.object(Scanner, "scan", side_effect=error),
+                self.assertRaises(error),
+            ):
+                MASKER.text("ordinary")
+
+    def test_scanner_preserves_unicode_and_ignores_allow_comments(self) -> None:
+        for comment in ("", " # gitleaks:allow", " # kingfisher:ignore"):
+            with self.subTest(comment=comment):
+                prefix = "caf\u00e9 \U0001f600 "
+                suffix = " \U0001f680 d\u00e9j\u00e0" + comment
+                self.assertEqual(
+                    MASKER.text(prefix + github_token() + suffix),
+                    (prefix + "[masked:token]" + suffix, {"token": 1}),
+                )
+
+    def test_scanner_masks_base64(self) -> None:
+        encoded = base64.b64encode(github_token().encode()).decode()
+        self.assertEqual(MASKER.tokens(encoded), ("[masked:scanner]", {"scanner": 1}))
+
+    def test_custom_rule_and_lazy_reuse(self) -> None:
+        token = "exm_" + "u9g4LmCHp0MaQxYoI8r1VTkZ"
+        with TemporaryDirectory() as directory:
+            rules = Path(directory) / "internal.yml"
+            rules.write_text(
+                "rules:\n"
+                "  - name: Example internal token\n"
+                "    id: custom.example-internal\n"
+                "    pattern: '\\b(exm_[A-Za-z0-9]{24})\\b'\n"
+                "    min_entropy: 3.0\n"
+                "    confidence: low\n"
+            )
+            with patch("kingfisher_sdk.Scanner", wraps=Scanner) as start:
+                masker = Masker([rules])
+                self.assertEqual(masker.text(" \n"), (" \n", {}))
+                start.assert_not_called()
+                expected = ("[masked:scanner]", {"scanner": 1})
+                self.assertEqual(masker.text(token), expected)
+                self.assertEqual(masker.tokens(token), expected)
+                start.assert_called_once()
+        self.assertEqual(MASKER.text(token), (token, {}))
+
     def test_mask_tokens_skips_assignments_and_long_random_strings(self) -> None:
         token = "gh" + "p_" + "a1B2" * 9
         opaque = "aA91bX87zD0" * 4
         self.assertEqual(
-            mask_tokens(f"password={opaque} {token}"),
+            MASKER.tokens(f"password={opaque} {token}"),
             (
                 f"password={opaque} [masked:token]",
                 {"token": 1},
             ),
         )
-        self.assertEqual(mask_tokens(opaque), (opaque, {}))
+        self.assertEqual(MASKER.tokens(opaque), (opaque, {}))
 
     def test_mask_url_preserves_encoding_and_masks_by_parameter_name(self) -> None:
         token = "gh" + "p_" + "a1B2" * 9
@@ -44,7 +106,7 @@ class MaskingTests(unittest.TestCase):
             + token
         )
         self.assertEqual(
-            mask_url(url),
+            MASKER.url(url),
             (
                 (
                     "https://reader:[masked:url_userinfo]@[::1]/a%2Fb?q=a+b&SAMLResponse=[masked:url_param]"
@@ -54,14 +116,14 @@ class MaskingTests(unittest.TestCase):
             ),
         )
         self.assertEqual(
-            mask_url("https://example.org/#token=a?b"),
+            MASKER.url("https://example.org/#token=a?b"),
             (
                 "https://example.org/#token=[masked:url_param]",
                 {"url_param": 1},
             ),
         )
         public = "https://reader@example.org/a%2Fb?q=a+b#anchor"
-        self.assertEqual(mask_url(public), (public, {}))
+        self.assertEqual(MASKER.url(public), (public, {}))
 
     def test_prefixed_assignments(self) -> None:
         for prefix, value in (
@@ -71,7 +133,7 @@ class MaskingTests(unittest.TestCase):
             ("AWS_SECRET_ACCESS_KEY=", "abc/" * 10),
         ):
             self.assertEqual(
-                mask(prefix + value),
+                MASKER.text(prefix + value),
                 (prefix + "[masked:assignment]", {"assignment": 1}),
             )
 
@@ -85,7 +147,7 @@ class MaskingTests(unittest.TestCase):
             + "PRIVATE KEY-----"
         )
         self.assertEqual(
-            mask(f"{inline}\n{following}"),
+            MASKER.text(f"{inline}\n{following}"),
             (f"[masked:private_key]\n{following}", {"private_key": 1}),
         )
 
@@ -96,13 +158,13 @@ class MaskingTests(unittest.TestCase):
             "AK" + "IA" + "A" * 17,
             "AS" + "IA" + "A" * 17,
         ):
-            self.assertNotIn("token", mask(value)[1])
+            self.assertNotIn("token", MASKER.text(value)[1])
 
     def test_card_is_not_part_of_a_longer_number(self) -> None:
         card = "4" + "1" * 15
         for separator in ("", " ", "-"):
             for value in (f"{card}{separator}2", f"2{separator}{card}"):
-                self.assertEqual(mask(value), (value, {}))
+                self.assertEqual(MASKER.text(value), (value, {}))
 
     def test_token_shapes(self) -> None:
         tokens = [
@@ -130,39 +192,42 @@ class MaskingTests(unittest.TestCase):
         ]
         for i, token in enumerate(tokens):
             with self.subTest(case=i):
-                self.assertEqual(mask(f"<{token}>"), ("<[masked:token]>", {"token": 1}))
+                self.assertEqual(
+                    MASKER.text(f"<{token}>"), ("<[masked:token]>", {"token": 1})
+                )
         bearer = "bEaReR " + "x+/=" * 5
-        self.assertEqual(mask(bearer), ("bEaReR [masked:token]", {"token": 1}))
+        self.assertEqual(MASKER.text(bearer), ("bEaReR [masked:token]", {"token": 1}))
 
     def test_other_rules_and_determinism(self) -> None:
         key = "-----BEGIN RSA " + "PRIVATE KEY-----\n" + "a+/=" * 5
         with_end = key + "\n-----END RSA " + "PRIVATE KEY-----"
         self.assertEqual(
-            mask(key + "\nnext line"),
+            MASKER.text(key + "\nnext line"),
             ("[masked:private_key]\nnext line", {"private_key": 1}),
         )
-        assignment = 'client-secret: "' + "unusual" + "2" + '"'
+        assignment = 'POSTGRES_PASSWORD="' + "unusual" + "2" + '"'
         random = "Ab3_dEf6" + "GhIj9kLm-NoPqRsTuVwXyZ012345"
         card = "4" + "1" * 3 + "-" + "1111-" * 2 + "1" * 4
         text = f"{with_end}\n{assignment}\n{random}\n{card}"
         expected = (
-            '[masked:private_key]\nclient-secret: "[masked:assignment]"\n[masked:random]\n[masked:card]',
+            '[masked:private_key]\nPOSTGRES_PASSWORD="[masked:assignment]"\n[masked:random]\n[masked:card]',
             {"private_key": 1, "assignment": 1, "random": 1, "card": 1},
         )
-        self.assertEqual(mask(text), expected)
-        self.assertEqual(mask(text), expected)
+        self.assertEqual(MASKER.text(text), expected)
+        self.assertEqual(MASKER.text(text), expected)
 
     def test_preserves_ordinary_text(self) -> None:
         for value in (
             "abcde01234" * 4,
             "ABCDabcd01234567" * 4,
+            "e7c8a52f54bde093c751ac3db713651611fc06ba",
             "aabbccdd-1234-4321-9876-abcdef012345",
             "a-long-kebab-case-name-for-a-local-application",
             "token: counting",
             "password: required",
             "1234567890123",
         ):
-            self.assertEqual(mask(value), (value, {}))
+            self.assertEqual(MASKER.text(value), (value, {}))
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -251,6 +316,7 @@ class AgentTests(unittest.TestCase):
         out: Path,
         now: float,
         *,
+        masker: Masker,
         window: tuple[int, int] | None = None,
     ) -> Collected:
         self.calls.append(cursor.model_dump() if cursor else None)
@@ -258,6 +324,160 @@ class AgentTests(unittest.TestCase):
         out.write_bytes(f"fixture text {step}".encode())
         return Collected(
             ScreenMemoryCursor(frames=step, app_usage=0), {"frames": 1}, True
+        )
+
+    def _source(self, *texts: str) -> Path:
+        data = self.root / "source"
+        data.mkdir()
+        self.item["options"]["data_dir"] = str(data)
+        self.path.write_text(json.dumps(self.raw))
+        with closing(sqlite3.connect(data / "text.sqlite")) as db, db:
+            db.execute("CREATE TABLE ocrresults(imagetimestamp, imagepath, imagetext)")
+            db.executemany(
+                "INSERT INTO ocrresults VALUES (?, ?, ?)",
+                [(1795132100 + i, f"{i}.jpeg", text) for i, text in enumerate(texts)],
+            )
+        with closing(sqlite3.connect(data / "usage.sqlite")) as db, db:
+            db.execute("CREATE TABLE usage(timestamp, identifier)")
+        return data
+
+    def test_status_and_no_new_rows_do_not_start_scanner(self) -> None:
+        self._source()
+        with patch("kingfisher_sdk.Scanner", wraps=Scanner) as start:
+            self.assertEqual(self._cli("status")[0], 0)
+            code, output = self._cli("run")
+            self.assertEqual(code, 0)
+            self.assertIn("nothing_new", output)
+            start.assert_not_called()
+
+    def test_rule_paths_are_validated_and_may_be_inside_source(self) -> None:
+        data = self._source()
+        rules = data / "private-rules.yml"
+        self.raw["masking"] = {"rules": ["~/source/private-rules.yml"]}
+        self.path.write_text(json.dumps(self.raw))
+        with patch.dict(os.environ, HOME=str(self.root)):
+            self.assertEqual(
+                self._cli("status"),
+                (1, "Invalid agent configuration: masking.rules.0: file not found\n"),
+            )
+            rules.touch()
+            self.assertEqual(load_config(self.path).masking_rules, (rules,))
+            self.assertEqual(self._cli("run")[0], 0)
+
+    def test_bad_rule_fails_closed_without_leaking_details(self) -> None:
+        self._source("source fixture text")
+        rules = self.root / "private-rules.yml"
+        pattern = "(private fixture"
+        rules.write_text(
+            "rules:\n  - name: Broken rule\n    id: custom.broken\n"
+            f"    pattern: '{pattern}'\n    confidence: medium\n"
+        )
+        self.raw["masking"] = {"rules": [str(rules)]}
+        self.path.write_text(json.dumps(self.raw))
+        self.state.directory.mkdir(parents=True)
+        cursor = self.state.directory / "cursor.json"
+        cursor.write_text('{"frames": 1795132099, "app_usage": 0}')
+        before = cursor.read_bytes()
+        with redirect_stderr(io.StringIO()) as stderr:
+            code, stdout = self._cli("run")
+        self.assertEqual(code, 1)
+        self.assertIn("step=collect reason=masking", stdout)
+        status = (self.state.directory / "status.json").read_text()
+        self.assertEqual(json.loads(status)["reason"], "masking")
+        for value in (str(rules), pattern, "source fixture text"):
+            self.assertNotIn(value, stdout + status + stderr.getvalue())
+        self.assertEqual(cursor.read_bytes(), before)
+        self.assertEqual(list(self.state.batch.parent.iterdir()), [])
+        self.assertFalse(self.server.posts)
+
+    def test_non_custom_rule_id_fails_collection(self) -> None:
+        self._source("ordinary text")
+        rules = self.root / "internal.yml"
+        rules.write_text(
+            "rules:\n  - name: Example rule\n    id: betterleaks.github-pat\n"
+            "    pattern: '(example_[A-Za-z0-9]{24})'\n    confidence: low\n"
+        )
+        self.raw["masking"] = {"rules": [str(rules)]}
+        self.path.write_text(json.dumps(self.raw))
+        with patch("kingfisher_sdk.Rules", wraps=Rules) as load:
+            code, output = self._cli("run")
+        self.assertEqual(code, 1)
+        self.assertIn("step=collect reason=masking", output)
+        load.assert_called_once_with(
+            paths=(rules,), builtins=False, confidence="low", cache=False
+        )
+        self.assertFalse(self.server.posts)
+
+    def test_start_panic_is_sanitized_and_remembered_across_collectors(self) -> None:
+        self._source("ordinary text")
+        self.raw["collectors"].append(self.item | {"id": "second"})
+        self.path.write_text(json.dumps(self.raw))
+        with (
+            patch(
+                "kingfisher_sdk.Rules", side_effect=NativePanic("private panic")
+            ) as load,
+            redirect_stderr(io.StringIO()) as stderr,
+        ):
+            code, stdout = self._cli("run")
+        self.assertEqual(code, 1)
+        for collector in (self.item["id"], "second"):
+            self.assertIn(f"{collector} failed step=collect reason=masking", stdout)
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertNotIn("private panic", stdout)
+        load.assert_called_once()
+        self.assertFalse(self.server.posts)
+
+    def test_scan_errors_mask_whole_frame_and_allow_delivery(self) -> None:
+        private_text = "private source text"
+        key = "-----BEGIN PRIVATE KEY-----\n" + "a+/=" * 5
+        self._source(
+            github_token(),
+            key + "\n" + private_text,
+            "timeout source text",
+            "panic source text",
+        )
+        scan = Scanner.scan
+
+        def flaky(scanner, text, *, timeout):
+            self.assertEqual(timeout, 5)
+            if private_text in text:
+                raise RuntimeError("private fixture")
+            if text == "timeout source text":
+                raise TimeoutError("timeout fixture")
+            if text == "panic source text":
+                raise NativePanic("panic fixture")
+            return scan(scanner, text, timeout=timeout)
+
+        with (
+            patch.object(Scanner, "scan", flaky),
+            patch("miroir_agent.cli.Masker", return_value=MASKER),
+            redirect_stderr(io.StringIO()) as stderr,
+        ):
+            code, stdout = self._cli("run")
+        self.assertEqual(code, 0)
+        self.assertIn("delivered", stdout)
+        self.assertEqual(len(self.server.posts), 1)
+        raw = gzip.decompress(self.server.posts[0][2]).decode()
+        document = [json.loads(line) for line in raw.splitlines()]
+        self.assertEqual(
+            [frame["text"] for frame in document[1:-1]],
+            ["[masked:token]"] + ["[masked:unscanned]"] * 3,
+        )
+        self.assertEqual(document[-1]["masked"], {"token": 1, "unscanned": 3})
+        self.assertEqual(stderr.getvalue(), "")
+        status = (self.state.directory / "status.json").read_text()
+        for value in (
+            private_text,
+            "timeout source text",
+            "panic source text",
+            "private fixture",
+            "timeout fixture",
+            "panic fixture",
+            key,
+        ):
+            self.assertNotIn(value, raw + stdout + status + stderr.getvalue())
+        self.assertEqual(
+            self.state.read_cursor(), {"frames": 1795132103, "app_usage": 0}
         )
 
     def test_config(self) -> None:

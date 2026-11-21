@@ -38,8 +38,9 @@ Miroir (decision 014); history keeps its own words.
   that test until it is given a rule.
 - `agent/` — `miroir-agent`, its own package (decisions 030, 031, 035): the
   local agent for device-only sources. Collectors, masking, spool and delivery
-  to a connection's receiving URL. **Standard library plus urllib3 and
-  pydantic, nothing else**; the server never imports it and it never imports
+  to a connection's receiving URL. **Standard library plus urllib3, pydantic
+  and the Kingfisher scanner (pinned, imported by `scanner.py` only), nothing
+  else** (decision 036); the server never imports it and it never imports
   `src/`. A collector is one module under `agent/miroir_agent/collectors/`
   that implements the contract in `collectors/base.py`; no other module names
   a collector. `agent/tests/test_boundaries.py` holds the agent's import rules

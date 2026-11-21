@@ -39,6 +39,7 @@ class ZenHistoryContractTests(unittest.TestCase):
                 ZenHistory,
                 ZenHistoryOptions,
             )
+            from miroir_agent.masking import Masker
 
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -52,6 +53,7 @@ class ZenHistoryContractTests(unittest.TestCase):
                     None,
                     out,
                     _TS,
+                    masker=Masker(),
                 )
             )
             validate_zen_batch(out)
@@ -198,9 +200,13 @@ class ScreenMemoryContractTests(unittest.TestCase):
                 ScreenMemory,
                 ScreenMemoryOptions,
             )
+            from miroir_agent.masking import Masker
 
-        token = "gh" + "p_" + "a1B2" * 9
-        paths = [f"date/{i}.jpeg" for i in range(5)]
+        # Standard base64 can overlap the agent's random-string rule. Use a
+        # scanner-only URI credential instead to exercise the scanner label.
+        token = "https://reader:p%40ss@[::1]/"
+        paths = [f"date/{i}.jpeg" for i in range(6)]
+        unscannable = "private unscannable text"
         self._source(
             [
                 (_TS + i, paths[i], text)
@@ -210,20 +216,36 @@ class ScreenMemoryContractTests(unittest.TestCase):
                         token,
                         "app fixture text",
                         "ABOUT:logins",
+                        unscannable,
                         "too recent",
                     )
                 )
             ][:-1]
-            + [(_TS + 41, paths[4], "too recent")],
+            + [(_TS + 41, paths[5], "too recent")],
             [
                 (_TS, "app.example.browser"),
                 (_TS + 2, "com.apple.Passwords"),
                 (_TS + 41, "app.example.new"),
             ],
         )
-        batch = ScreenMemory().collect(
-            ScreenMemoryOptions.model_validate(self.options), None, self.out, self.now
-        )
+        masker = Masker()
+        from kingfisher_sdk import Scanner
+
+        scan = Scanner.scan
+
+        def scan_fixture(scanner, text, *, timeout):
+            if text == unscannable:
+                raise TimeoutError("private fixture")
+            return scan(scanner, text, timeout=timeout)
+
+        with patch.object(Scanner, "scan", scan_fixture):
+            batch = ScreenMemory().collect(
+                ScreenMemoryOptions.model_validate(self.options),
+                None,
+                self.out,
+                self.now,
+                masker=masker,
+            )
         assert batch is not None
         validate_batch(self.out)
         with gzip.open(self.out, "rt", encoding="utf-8") as gz:
@@ -232,34 +254,43 @@ class ScreenMemoryContractTests(unittest.TestCase):
         self.assertNotIn("app fixture text", raw)
         self.assertNotIn("ABOUT:logins", raw)
         self.assertNotIn("too recent", raw)
+        self.assertNotIn(unscannable, raw)
         lines = [json.loads(line) for line in raw.splitlines()]
         records = list(read_records(self.out))
         self.assertEqual(records, lines[1:-1])
-        frames = records[:4]
-        self.assertEqual([row["image_path"] for row in frames], paths[:4])
+        frames = records[:5]
+        self.assertEqual([row["image_path"] for row in frames], paths[:5])
         self.assertEqual(
-            [row["text"] for row in frames], ["ordinary", "[masked:token]", None, None]
+            [row["text"] for row in frames],
+            [
+                "ordinary",
+                "https://reader:[masked:scanner]@[::1]/",
+                None,
+                None,
+                "[masked:unscanned]",
+            ],
         )
         self.assertEqual(
-            [row["withheld"] for row in frames], [None, None, "excluded_app", "marker"]
+            [row["withheld"] for row in frames],
+            [None, None, "excluded_app", "marker", None],
         )
-        self.assertEqual([row["masked"] for row in frames], [0, 1, 0, 0])
+        self.assertEqual([row["masked"] for row in frames], [0, 1, 0, 0, 1])
         self.assertEqual(
-            [row["bundle_id"] for row in records[4:]],
+            [row["bundle_id"] for row in records[5:]],
             ["app.example.browser", "com.apple.Passwords"],
         )
         self.assertEqual(
             lines[-1],
             {
                 "type": "trailer",
-                "frames": 4,
+                "frames": 5,
                 "app_usage": 2,
-                "masked": {"token": 1},
+                "masked": {"scanner": 1, "unscanned": 1},
                 "withheld": {"excluded_app": 1, "marker": 1},
             },
         )
         self.assertEqual(
-            batch.cursor.model_dump(), {"frames": _TS + 3, "app_usage": _TS + 2}
+            batch.cursor.model_dump(), {"frames": _TS + 4, "app_usage": _TS + 2}
         )
         self.assertIsNone(
             ScreenMemory().collect(
@@ -267,6 +298,7 @@ class ScreenMemoryContractTests(unittest.TestCase):
                 batch.cursor,
                 self.root / "second.gz",
                 self.now,
+                masker=masker,
             )
         )
         self.assertFalse((self.root / "second.gz").exists())

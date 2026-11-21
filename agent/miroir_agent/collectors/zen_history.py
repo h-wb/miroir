@@ -15,7 +15,7 @@ from pydantic import BeforeValidator, Field
 
 from ..batch import BatchWriter
 from ..errors import Failure
-from ..masking import mask_tokens, mask_url
+from ..masking import Masker
 from .base import (
     Collected,
     Collector,
@@ -71,13 +71,10 @@ class ZenHistory(Collector[ZenHistoryOptions, ZenHistoryCursor]):
         out: Path,
         now: float,
         *,
+        masker: Masker,
         window: Window | None = None,
     ) -> Collected | None:
-        source = _source(options)
-        temp_root = Path(gettempdir())
-        # Resolve the source once so the guarded file is the one copied.
-        self.guard_paths(_source_dirs(source), out, temp_root)
-        return _collect(source, options, cursor, out, now, window)
+        return _collect(options, cursor, out, now, masker, window)
 
 
 def _source_dirs(source: Path) -> list[Path]:
@@ -333,27 +330,30 @@ def _pages(
     )
 
 
-def _redact(table: str, row: Row, masked: Counter[str]) -> None:
+def _redact(table: str, row: Row, masked: Counter[str], masker: Masker) -> None:
     if table == "moz_places":
         for key in ("url", "preview_image_url"):
             if isinstance(value := row.get(key), str):
-                row[key], counts = mask_url(value)
+                row[key], counts = masker.url(value)
                 masked.update(counts)
     titles = {"moz_places": ("title", "description"), "moz_bookmarks": ("title",)}
     for key in titles.get(table, ()):
         if isinstance(value := row.get(key), str):
-            row[key], counts = mask_tokens(value)
+            row[key], counts = masker.tokens(value)
             masked.update(counts)
 
 
 def _collect(
-    source: Path,
     options: ZenHistoryOptions,
     cursor: ZenHistoryCursor | None,
     out_path: Path,
     now: float,
+    masker: Masker,
     window: Window | None,
 ) -> Collected | None:
+    source = _source(options)
+    # Resolve the source once so the guarded file is the one copied.
+    ZenHistory.guard_paths(_source_dirs(source), out_path, Path(gettempdir()))
     since = options.since if window is None else None
     if cursor is None:
         start = window[0] if window is not None else since
@@ -387,7 +387,7 @@ def _collect(
         for table, items in rows.items():
             for row in items:
                 if options.mask_urls:
-                    _redact(table, row, masked)
+                    _redact(table, row, masked, masker)
                 batch.write({"type": "row", "table": table, "row": row})
         batch.finish({"rows": counts, "masked": dict(masked)})
     return Collected(next_cursor, {"rows": counts, "masked": dict(masked)}, more)

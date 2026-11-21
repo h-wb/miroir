@@ -1,3 +1,4 @@
+import base64
 import gzip
 import json
 import os
@@ -17,6 +18,8 @@ from miroir_agent.collectors.zen_history import (
 )
 from miroir_agent.config import load_config
 from miroir_agent.errors import ConfigError, Failure
+
+from .masking_fixtures import MASKER, github_token
 
 _REQUIRED = """
 CREATE TABLE moz_places(id INTEGER PRIMARY KEY, url TEXT, title TEXT, description TEXT, preview_image_url TEXT);
@@ -52,7 +55,11 @@ class ZenHistoryTests(unittest.TestCase):
         if isinstance(cursor, dict):
             cursor = ZenHistoryCursor.model_validate(cursor)
         return ZenHistory().collect(
-            ZenHistoryOptions.model_validate(raw), cursor, self.out, 1795186800
+            ZenHistoryOptions.model_validate(raw),
+            cursor,
+            self.out,
+            1795186800,
+            masker=MASKER,
         )
 
     def batch(self):
@@ -228,6 +235,7 @@ class ZenHistoryTests(unittest.TestCase):
                 self.out,
                 20,
                 window=(10, 12),
+                masker=MASKER,
             )
             assert batch is not None
             cursor = batch.cursor.model_copy(update={"visit_date": 0})
@@ -247,6 +255,7 @@ class ZenHistoryTests(unittest.TestCase):
                 self.out,
                 20,
                 window=(10, 12),
+                masker=MASKER,
             )
         )
 
@@ -372,11 +381,14 @@ class ZenHistoryTests(unittest.TestCase):
                 None,
                 new_profile / "batch.gz",
                 1795186800,
+                masker=MASKER,
             )
 
     def test_masks_urls_and_titles_and_can_disable_masking(self):
         self.sql(_REQUIRED + _OPTIONAL)
         token = "gh" + "p_" + "a1B2" * 9
+        provider = base64.b64encode(github_token().encode()).decode()
+        provider_url = "https://example.org/?q=" + provider
         unchanged = "https://example.org/" + "aA91bX87zD0" * 4 + "?q=ordinary"
         with closing(sqlite3.connect(self.source)) as db, db:
             db.executemany(
@@ -392,6 +404,7 @@ class ZenHistoryTests(unittest.TestCase):
                         "https://example.org/?code=private",
                     ),
                     (4, unchanged, None, None, None),
+                    (5, provider_url, provider, None, None),
                 ],
             )
             db.execute("INSERT INTO moz_bookmarks VALUES (1, ?)", (token,))
@@ -404,17 +417,20 @@ class ZenHistoryTests(unittest.TestCase):
                 "https://example.org/#access-token=[masked:url_param]",
                 "https://reader:[masked:url_userinfo]@example.org/",
                 unchanged,
+                "https://example.org/?q=[masked:scanner]",
             ],
         )
         self.assertEqual(rows["moz_places"][0]["title"], "[masked:token]")
         self.assertEqual(rows["moz_places"][1]["description"], "[masked:token]")
+        self.assertEqual(rows["moz_places"][4]["title"], "[masked:scanner]")
         self.assertEqual(
             rows["moz_places"][2]["preview_image_url"],
             "https://example.org/?code=[masked:url_param]",
         )
         self.assertEqual(rows["moz_bookmarks"][0]["title"], "[masked:token]")
         self.assertEqual(
-            trailer["masked"], {"url_param": 3, "url_userinfo": 1, "token": 3}
+            trailer["masked"],
+            {"url_param": 3, "url_userinfo": 1, "token": 3, "scanner": 2},
         )
         self.run_collect(mask_urls=False)
         rows, trailer = self.batch()
@@ -422,6 +438,8 @@ class ZenHistoryTests(unittest.TestCase):
             rows["moz_places"][0]["url"], "https://example.org/?API_Key=private&q=ok"
         )
         self.assertEqual(rows["moz_bookmarks"][0]["title"], token)
+        self.assertEqual(rows["moz_places"][4]["url"], provider_url)
+        self.assertEqual(rows["moz_places"][4]["title"], provider)
         self.assertEqual(trailer["masked"], {})
 
     def test_config_validates_options(self):

@@ -1891,3 +1891,43 @@ machine.
 
 Not done: CI still lints and type-checks `src tests scripts` only; the agent's
 stricter rules are enforced there once the workflow lists `agent`.
+
+## 2026-11-21 — A secret scanner beside the agent's rules (decision 036)
+
+The agent's token rule knew about a dozen providers, in one hand-written
+expression. Four secret scanners were tried on the same invented samples.
+Kingfisher's Python package fit: it runs in the agent's process, reports exact
+positions, loads the user's own rule files and carries 503 rules. It finds no
+assignment, unknown random string or card number, so the agent's rules stay.
+
+Built: `masking.py` becomes a `Masker` that the command line creates once and
+hands to each collector; `scanner.py` wraps the scanner, started on first use. The
+agent's own spans are computed on the original text as before, the scanner scans
+the same text once, and the union is masked. A region only the scanner found is
+`[masked:scanner]`. Rule files are named under `masking.rules` in the
+configuration; their ids must start with `custom.`.
+
+It fails closed. If the scanner cannot start, the pass fails with
+`reason=masking`. A text it cannot answer for (an error, a native panic, more than
+five seconds, or NUL characters in the text) is replaced whole by
+`[masked:unscanned]` and the pass goes on.
+
+The first version was wrong, and an independent review showed it. The scanner ran
+as a stage before the token rule; where it reported part of a longer run, the rest
+no longer matched the agent's rules and would have left in clear (a long GitLab
+token lost its last 16 characters). The union design replaced it. The same review
+found that the scanner hides 47 rules from its own reports, some of them secrets
+such as an AWS secret access key, so every finding is masked; that a native panic
+would have escaped every handler; and that a user rule could silently never fire
+or replace a built-in one. A second review compared old and new masking character
+by character over 14,000 generated texts and found no character the old rules
+masked that the new code leaves, and no other defect.
+
+Validation: the agent suite (97 tests, 46 seconds with the scanner) and the
+contract tests are green, with ruff and `mypy --strict` clean. Run by hand on
+invented screen text with and without a rule file.
+
+Not done: never run on the real machine. Scanning is documented as offline and
+opened no socket in a check on Linux; a run on macOS with network access denied to
+the process is still owed. The agent's random-string rule still stops at `/` and
+`+`, as before.

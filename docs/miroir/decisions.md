@@ -1351,3 +1351,104 @@ Considered and left out:
   needed while a failed pass costs an hour and loses nothing.
 - *A shared package for the batch formats*, as in 031: still not worth a second
   thing to release.
+
+## 036 — A secret scanner beside the agent's own masking rules
+
+Status: accepted, 2026-11-21. Refines 030 and 035.
+
+Decision 030 masks secrets "by fixed rules, never by a model". The rules were all
+written here: private key blocks, a value after a name such as `password`, long
+random strings, card numbers, and one expression for the token formats of about
+a dozen providers. That last rule is the weak one. Providers number in the
+hundreds, their formats change, and a format that is short or all hexadecimal
+escapes the generic rules, which leave hex alone so that commit hashes and image
+digests stay readable.
+
+Maintained catalogues of such formats exist. Four tools were tried on the same
+invented samples, with the agent's rules as the baseline:
+
+- *detect-secrets* reports the line a secret is on, not where it is: for a GitHub
+  token it records the prefix, for a private key the header line. It looks for
+  random strings only inside quotes, and its last release was in May 2024.
+- *gitleaks* is in maintenance, and a separate binary; its author's successor
+  project is where most of the next tool's rules come from.
+- *trufflehog* checks what it finds against the provider over the network unless
+  told not to.
+- *Kingfisher* has a Python package that runs in the agent's process, returns the
+  exact position of each finding, loads the user's own rule files, and carries
+  about 500 rules.
+
+On the samples Kingfisher found every well-formed provider token, including one
+with a single misread character, and left hashes, digests, identifiers and prose
+alone. It found no `PASSWORD=...` assignment, no unknown random string and no
+card number, at any confidence setting. The agent's rules found those. Neither
+replaces the other.
+
+**The agent masks the union of both.** Its own rules run on the original text
+exactly as they did before the scanner existed. The scanner runs once on the
+same original text. Whatever either marks is masked, so the scanner can only add:
+nothing the agent's rules catch can be lost to it. Where the two overlap, the
+region keeps the name of the agent's rule; a region only the scanner found
+becomes `[masked:scanner]` and is counted under `scanner`, so the warehouse shows
+what the catalogue adds. The batch formats do not change: the counts already
+accept any rule name.
+
+A first version ran the scanner as a stage before the token rule, and a review
+showed why that was wrong. The scanner often reports part of a longer run, for
+example the first 26 characters of a long GitLab token, and what was left no
+longer matched any of the agent's rules and would have left in clear. Running
+both on the original text and taking the union removes the interaction.
+
+**Every finding is masked, including those the scanner hides in its own
+reports.** It marks 47 rules as not visible because they are one half of a pair.
+Some are identifiers, but some are the secret half, such as an AWS secret access
+key. Masking them all costs a few account names and hostnames and is the only
+choice that does not need a hand-kept list.
+
+**The user can add rules.** The agent's configuration names rule files in the
+scanner's format. They are fixed patterns like the rest, so "never by a model"
+holds, and the same text gives the same output at a pinned version. A rule's id
+must start with `custom.`, so a file cannot silently replace a built-in rule, and
+rules load at the lowest confidence setting, so a rule marked low still fires.
+
+**Always on, and closed on failure.** There is no switch and no fallback to the
+agent's rules alone. If the scanner cannot start, the pass fails and says
+`reason=masking`. If it cannot answer for one text, that text is replaced whole by
+`[masked:unscanned]` and the pass goes on, so one frame can neither leak nor block
+the cursor.
+
+What this costs:
+
+- A third dependency, and a native one of about 40 MB, in the process that reads
+  screen text. Decision 035 closed the list at two; this decision opens it by
+  one. It is pinned to an exact version, because its Python interface was first
+  published in October 2026 and still moves.
+- The package also contains code that checks or revokes a found credential
+  through the provider's API. The agent imports the scanner and the rule loader
+  only, and a test fails if `masking` names anything else from it.
+- About four seconds to start the scanner in a pass that has text to mask.
+- The catalogue changes with the pinned version, so an upgrade can mask old text
+  differently. `resend` (decision 034) applies a new version to a past range.
+
+Open:
+
+- Scanning is documented as offline, and no socket was opened during a scan in
+  a check on Linux. A traced run on macOS, with network access denied to the
+  process, is still owed before this is relied on.
+- The scanner can cache its compiled rules on disk and start faster. It is off:
+  the agent writes nothing outside its state folder.
+
+Considered and left out:
+
+- *Replacing the agent's rules.* The measurements above: the generic rules carry
+  what no catalogue knows.
+- *Vendoring a rule catalogue as data and matching it with Python's `re`.* About
+  one rule in twenty does not compile there, and most rely on filters that would
+  have to be reimplemented, so the bare patterns would mask too much.
+- *Masking only the findings the scanner shows.* That was the first choice and
+  it drops real secrets; see above.
+- *Checking each reported position against the secret it claims to hold.* The
+  scanner is run with secrets redacted from its results, so the agent never holds
+  a finding's value. Text that looks like UTF-16 would make the scanner report
+  positions in its own decoded copy, so a text holding NUL characters counts as
+  one it cannot answer for, and is masked whole.

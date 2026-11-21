@@ -22,6 +22,7 @@ from miroir_agent.media import upload
 from miroir_agent.state import State
 from miroir_agent.transport import Client
 
+from .masking_fixtures import MASKER
 from .test_dates import local_zone
 
 TS = 1700000000
@@ -239,6 +240,7 @@ class MediaTests(unittest.TestCase):
         self, *extra: str, command: str = "run", token: str = "testing"
     ) -> tuple[int, str]:
         with (
+            patch("miroir_agent.cli.Masker", return_value=MASKER),
             patch.dict(os.environ, TEST_TOKEN=token),
             redirect_stdout(io.StringIO()) as out,
         ):

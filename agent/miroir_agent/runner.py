@@ -13,6 +13,7 @@ from typing import Any
 from .collectors.base import Collected, Cursor, MediaSource, Window
 from .config import CollectorConfig
 from .errors import Failure, Reason, Step
+from .masking import Masker
 from .media import upload
 from .state import Pending, Section, State, StateError, StatusEntry
 from .transport import Client, Receipt
@@ -86,10 +87,11 @@ def _collect(
     config: CollectorConfig,
     cursor: Cursor | None,
     path: Path,
+    masker: Masker,
     window: Window | None = None,
 ) -> Collected | None:
     return config.collector.collect(
-        config.options, cursor, path, time.time(), window=window
+        config.options, cursor, path, time.time(), masker=masker, window=window
     )
 
 
@@ -107,12 +109,14 @@ def _record(state: State, section: Section, progress: _Pass, **fields: Any) -> N
     )
 
 
-def _next_pending(config: CollectorConfig, state: State) -> Pending | None:
+def _next_pending(
+    config: CollectorConfig, state: State, masker: Masker
+) -> Pending | None:
     pending = state.pending()
     if pending is not None:
         return pending
     state.prepare_spool()
-    batch = _collect(config, _cursor(config, state), state.batch)
+    batch = _collect(config, _cursor(config, state), state.batch, masker)
     if batch is None:
         return None
     pending = Pending(
@@ -138,7 +142,7 @@ def _deliver_pending(
 
 
 def _rows(
-    config: CollectorConfig, state: State, client: Client, maximum: int
+    config: CollectorConfig, state: State, client: Client, masker: Masker, maximum: int
 ) -> Result:
     progress = _Pass()
     with progress.capture():
@@ -146,7 +150,7 @@ def _rows(
             state.clear_spool()
         for _ in range(maximum):
             progress.step = "collect"
-            pending = _next_pending(config, state)
+            pending = _next_pending(config, state, masker)
             if pending is None:
                 if not progress.batches:
                     _record(state, "rows", progress)
@@ -251,7 +255,12 @@ def _run_media(
 
 
 def run(
-    config: CollectorConfig, state: State, *, max_batches: int, max_media_files: int
+    config: CollectorConfig,
+    state: State,
+    *,
+    masker: Masker,
+    max_batches: int,
+    max_media_files: int,
 ) -> tuple[Result, Result | None]:
     source = config.collector.media(config.options)
     progress = _Pass()
@@ -262,7 +271,7 @@ def run(
                 result = Result(Outcome.ALREADY_RUNNING, {})
                 return result, result if source is not None else None
             with _client(config) as client:
-                rows = _rows(config, state, client, max_batches)
+                rows = _rows(config, state, client, masker, max_batches)
                 media = (
                     _run_media(config, state, client, source, max_media_files)
                     if source is not None
@@ -286,7 +295,12 @@ def _output(config: CollectorConfig, state: State, out: Path) -> Path:
 
 
 def preview(
-    config: CollectorConfig, state: State, out: Path, *, max_batches: int
+    config: CollectorConfig,
+    state: State,
+    out: Path,
+    *,
+    masker: Masker,
+    max_batches: int,
 ) -> Result:
     progress = _Pass()
     with progress.capture():
@@ -296,7 +310,7 @@ def preview(
         for i in range(1, max_batches + 1):
             path = out / f"batch-{i:04}.jsonl.gz"
             _guard(config, path)
-            batch = _collect(config, cursor, path)
+            batch = _collect(config, cursor, path, masker)
             if batch is None:
                 break
             cursor = batch.cursor
@@ -316,17 +330,19 @@ def _add_counts(total: dict[str, Any], counts: dict[str, Any]) -> None:
 
 
 @dataclass(frozen=True)
-class _Resend:
+class Resend:
     window: Window
     out: Path | None
     maximum: int | None
+    media: bool
 
 
 def _resend_rows(
     config: CollectorConfig,
     state: State,
     client: Client,
-    selection: _Resend,
+    masker: Masker,
+    selection: Resend,
     progress: _Pass,
 ) -> None:
     out = selection.out
@@ -344,7 +360,7 @@ def _resend_rows(
             progress.step = "collect"
             path = Path(folder) / f"batch-{progress.batches + 1:04}.jsonl.gz"
             _guard(config, path)
-            batch = _collect(config, cursor, path, selection.window)
+            batch = _collect(config, cursor, path, masker, selection.window)
             if batch is None:
                 break
             if out is None:
@@ -362,17 +378,18 @@ def _resend_pass(
     config: CollectorConfig,
     state: State,
     client: Client,
-    selection: _Resend,
-    source: MediaSource | None,
+    masker: Masker,
+    selection: Resend,
     progress: _Pass,
 ) -> None:
+    source = config.collector.media(config.options) if selection.media else None
     media_counts = _media_counts()
     if source is not None:
         progress.counts["media"] = media_counts
         progress.step = "links"
         client.require_token("links")
     progress.step = "collect"
-    _resend_rows(config, state, client, selection, progress)
+    _resend_rows(config, state, client, masker, selection, progress)
     progress.step = "collect"
     if source is not None:
         upper = source.limit(_cursor(config, state))
@@ -389,11 +406,9 @@ def _resend_pass(
 def resend(
     config: CollectorConfig,
     state: State,
-    window: Window,
+    selection: Resend,
     *,
-    out: Path | None,
-    max_batches: int | None,
-    media: bool,
+    masker: Masker,
 ) -> Result:
     progress = _Pass()
     with progress.capture():
@@ -402,21 +417,20 @@ def resend(
             if not locked:
                 return Result(Outcome.ALREADY_RUNNING, {})
             with _client(config) as client, progress.capture():
-                source = config.collector.media(config.options) if media else None
                 _resend_pass(
                     config,
                     state,
                     client,
-                    _Resend(window, out, max_batches),
-                    source,
+                    masker,
+                    selection,
                     progress,
                 )
-            if out is None:
+            if selection.out is None:
                 _record(
                     state,
                     "resend",
                     progress,
-                    window=list(window),
+                    window=list(selection.window),
                     batches=progress.batches,
                 )
     return progress.result()
