@@ -1,0 +1,15 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "deb8bfe4fd6a54fecad932b1bdb9bf30f474580d",
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": false,
+  "packages": {
+    "collector": {
+      "release-type": "python",
+      "package-name": "miroir-collector",
+      "component": "collector",
+      "include-component-in-tag": true,
+      "extra-files": ["miroir_collector/__init__.py"]
+    }
+  }
+}

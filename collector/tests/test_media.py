@@ -62,6 +62,7 @@ class MediaTests(unittest.TestCase):
         self.row_batches: list[list[dict]] = []
         self.row_queries: list[str] = []
         self.fail_row_post = 0
+        self.reports: list[dict] = []
         fixture = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -81,6 +82,11 @@ class MediaTests(unittest.TestCase):
                 if self.headers.get("Authorization") != "Bearer testing":
                     self.send_response(401)
                     self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                if url.path.endswith("/report"):
+                    fixture.reports.append(json.loads(body))
+                    self.send_response(204)
                     self.end_headers()
                     return
                 if url.path.endswith("/receive"):
@@ -506,6 +512,11 @@ class MediaTests(unittest.TestCase):
         code, output = self.run_collector()
         self.assertEqual(code, 0)
         self.assertEqual(self.row_posts, 1)
+        (report,) = self.reports
+        self.assertEqual(report["media"]["outcome"], "delivered")
+        self.assertEqual(report["media"]["counts"], self.media_status()["counts"])
+        self.assertNotIn(TEXT, json.dumps(report))
+        self.assertNotIn(KEY, json.dumps(report))
         expected = [{"key": KEY, "size": 5}, {"key": "last.jpg", "size": 4}]
         self.assertEqual(self.plans, [expected])
         self.assertEqual(self.confirms, [expected])

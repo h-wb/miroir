@@ -471,11 +471,15 @@ def _serve(args: argparse.Namespace, miroir: Any, store: Any, secrets: Any) -> i
     import uvicorn
 
     from src.core.service import MiroirService, SubprocessExecutor
-    from src.web.app import create_app
+    from src.web.app import METRICS_TOKEN_REUSED, create_app
 
     token = os.environ.get("MIROIR_API_TOKEN", "")
     if len(token) < 16:
         print("Set MIROIR_API_TOKEN (16+ characters) to serve", file=sys.stderr)
+        return 2
+    metrics_token = os.environ.get("MIROIR_METRICS_TOKEN") or None
+    if metrics_token == token:
+        print(METRICS_TOKEN_REUSED, file=sys.stderr)
         return 2
     try:
         object_store = _object_store(miroir)
@@ -518,5 +522,6 @@ def _serve(args: argparse.Namespace, miroir: Any, store: Any, secrets: Any) -> i
         orchestrator=orchestrator,
         object_store=object_store,
     )
-    uvicorn.run(create_app(service, token), host=args.host, port=args.port)
+    app = create_app(service, token, metrics_token=metrics_token)
+    uvicorn.run(app, host=args.host, port=args.port)
     return 0

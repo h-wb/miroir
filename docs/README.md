@@ -27,6 +27,8 @@ Roadmap: [Miroir implementation plan](product-plan.md).
 Which part of the code does what, who may import whom, and the ways data gets
 in: [architecture](architecture.md).
 
+How the collector is versioned and released: [releases](releases.md).
+
 ## Sources
 
 Since 2026-11-11 every source loads through a Miroir connection bound to its
@@ -120,4 +122,6 @@ Source page template: status & schedule · where the data comes from (and any
 code outside this repo) · extraction (resources, keys, cursors) · tables → dbt →
 dashboards · secrets & config · backfills and history · quirks.
 
-See also: [operations runbook](operations.md).
+See also: [operations runbook](operations.md), and
+[observability](observability.md): what Miroir knows about each connection, its
+Prometheus metrics and example alerts.

@@ -9,3 +9,17 @@
   <td>{{ badge(a.transformation) }}{% if a.transformation_detail %}<div class="muted">{{ a.transformation_detail }}</div>{% endif %}</td>
   <td>{% if a.error_message %}<span class="failed">{{ a.error_type.rsplit(".", 1)[-1] }}</span>: <span class="muted">{{ a.error_message }}</span>{% endif %}</td>
 {%- endmacro %}
+{% macro report_counts(counts) -%}
+  {%- for name, value in counts.items() -%}
+    {%- if value is mapping -%}{%- for inner, number in value.items() %}{{ name }}.{{ inner }} {{ number }}{% if not loop.last %}, {% endif %}{% endfor -%}
+    {%- else %}{{ name }} {{ value }}{% endif -%}
+    {%- if not loop.last %}, {% endif -%}
+  {%- else %}<span class="muted">no counts</span>{%- endfor -%}
+{%- endmacro %}
+{% macro report_pass(label, result) -%}
+  {%- set steps = {"collect": "reading the source", "deliver": "delivering rows", "links": "asking for upload links", "put": "uploading files", "confirm": "confirming uploads"} -%}
+  <p>{{ label }} {{ badge(result.outcome) }} {{ report_counts(result.counts) }}</p>
+  {%- if result.outcome == "failed" %}
+  <p class="failed">Stopped while {{ steps.get(result.step, (result.step or "running") | replace("_", " ")) }}: {{ (result.reason or "unknown reason") | replace("_", " ") }}{% if result.http_status %} (HTTP {{ result.http_status }}){% endif %}.</p>
+  {%- endif %}
+{%- endmacro %}

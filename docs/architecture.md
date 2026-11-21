@@ -52,7 +52,10 @@ There are two ways, and a connector declares which it supports (decision 021):
 Programs that push to the receiving URL are *senders*. They live outside the
 server: the Health Auto Export app is one, and the collector is another, for sources
 that exist only on a device. The collector is therefore not a fourth transport. It
-is a client of one that already exists.
+is a client of one that already exists. After each run it also reports, with the
+same token, what happened on the device (fixed words and counts, never data), so
+Miroir can tell a quiet source from a broken one ([observability](observability.md),
+decision 039).
 
 ## Media
 

@@ -2016,3 +2016,44 @@ macOS 26. A dry run of 189 screen frames inside a sandbox that denies all networ
 access succeeded, so scanning does not need a connection. The system log showed
 no denied connection for it; a control run to prove that log query sees denials
 has not been reported yet.
+
+## 2026-11-21 — The collector reports every run (decision 039)
+
+A failed run used to sit in a status file on the machine, and Miroir could not
+tell a source with nothing new from one that was broken or switched off.
+
+Built:
+
+- **Collector.** After each `run` of a source, it posts a small report to the
+  connection's own address (`.../receive` becomes `.../report`) with its delivery
+  token: times, version, the rows and media results with their counts and any
+  failure step and reason, whether a batch is waiting, and how many earlier runs
+  it could not report. Reporting never changes a run. `status.json` records
+  `report` as `sent`, `failed`, `unsupported` or `skipped`. An older Miroir
+  (401, 404 or 405) is `unsupported` and is not counted.
+- **Server.** `POST /api/connections/{id}/report` validates a strict shape of
+  fixed words and bounded counts and stores it. The metadata store goes to schema
+  version 7 with two tables: `collector_reports` (the newest 500 per connection)
+  and `collector_summaries` (last report, last success, failure streak), written
+  in one transaction that checks the delivery token again. The connection and
+  overview pages show the last report.
+- **Metrics.** `GET /metrics` in the Prometheus text format, off unless
+  `MIROIR_METRICS_TOKEN` is set, and never opened by the admin token; the server
+  refuses to start when the two are equal. `docs/observability.md` lists the
+  metrics and three example alert rules.
+
+Two independent reviews found twelve defects between them, all fixed with tests.
+The ones worth remembering: an unbounded count made the whole metrics page fail;
+a dot in a count name collided with the separator used for nested counts; with
+only 500 reports kept, a long failure streak lost its last success, which is why
+the summary table exists; a report in flight across the removal and re-creation
+of a connection landed on the new one, which is why the token is checked inside
+the insert; and the store's engine now hides bound values, so a failed insert
+cannot put a report in a traceback.
+
+Validation: the collector suite (106 tests) and the server suite (241 tests) are
+green, with ruff, format and mypy clean. Not yet deployed.
+
+Not done: the scrape configuration and alert rules belong to the installation
+(home-ops), and nothing sets `MIROIR_METRICS_TOKEN` there yet. The pages show a
+UTC time, not an age.

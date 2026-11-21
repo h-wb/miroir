@@ -6,6 +6,7 @@ import re
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from types import TracebackType
 from typing import Annotated, Any, BinaryIO, Literal, Self
@@ -24,6 +25,13 @@ from .models import Model
 _MAX_REPLY = 2 * 1024**2
 _RECEIPT_LIMIT = 65536
 PUT_WORKERS = 4
+
+
+class ReportStatus(StrEnum):
+    SENT = "sent"
+    FAILED = "failed"
+    UNSUPPORTED = "unsupported"
+    SKIPPED = "skipped"
 
 
 def check_url(url: str) -> str:
@@ -125,7 +133,7 @@ class _Body:
 
 
 class Client:
-    """Every request the collector sends. Each method returns or raises `Failure`."""
+    """Every request the collector sends; reports are best effort."""
 
     def __init__(self, receive_url: str, token_env: str, timeout: int) -> None:
         self.receive_url = receive_url
@@ -159,6 +167,44 @@ class Client:
 
     def require_token(self, step: Step) -> None:
         self._token(step)
+
+    def report(self, payload: dict[str, Any]) -> ReportStatus:
+        """Tell Miroir how a run went; never raises and ignores the reply's body."""
+        try:
+            base = urlsplit(self.receive_url)
+            if not base.path.endswith("/receive"):
+                return ReportStatus.SKIPPED
+            try:
+                token = self._token("deliver")
+            except Failure:
+                return ReportStatus.SKIPPED
+            url = base._replace(
+                path=base.path.removesuffix("/receive") + "/report", query=""
+            ).geturl()
+            response = self.pool.request(
+                "POST",
+                url,
+                body=json.dumps(payload).encode(),
+                headers={
+                    "User-Agent": f"miroir-collector/{__version__}",
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                redirect=False,
+                preload_content=False,
+            )
+            status = response.status
+            response.close()
+            response.release_conn()
+        except (HTTPError, OSError, ValueError, TypeError, OverflowError):
+            return ReportStatus.FAILED
+        if 200 <= status < 300:
+            return ReportStatus.SENT
+        # An older Miroir has no report route; its login guard answers 401. A
+        # bad token is not diagnosed here: the row delivery already says so.
+        if status in (401, 404, 405):
+            return ReportStatus.UNSUPPORTED
+        return ReportStatus.FAILED
 
     def _request(
         self, step: Step, url: str, body: Any, headers: dict[str, str]
