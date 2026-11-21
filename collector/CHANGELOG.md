@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/h-wb/pipelines/compare/collector-v0.2.0...collector-v0.3.0) (2026-11-21)
+
+
+### Features
+
+* **collector:** upload Apple Messages attachments and send contact names ([#40](https://github.com/h-wb/pipelines/issues/40)) ([df9609e](https://github.com/h-wb/pipelines/commit/df9609e1052114507cb4f199812f6013cc1232af))
+
 ## [0.2.0](https://github.com/h-wb/pipelines/compare/collector-v0.1.0...collector-v0.2.0) (2026-11-21)
 
 
