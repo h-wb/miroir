@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import badge, when, attempt_cells %}
+{% from "_macros.html" import badge, when, attempt_cells, report_pass %}
 {% from "_connection_forms.html" import upload %}
 {% block title %}{{ c.id }}{% endblock %}
 {% block body %}
@@ -33,6 +33,20 @@
 <p>Last export received {{ when(c.delivery.last_received_at) }}.</p>
 {% else %}<p>Waiting for the first export.</p>{% endif %}
 <p>Automatic delivery {% if c.delivery.enabled %}enabled{% else %}not enabled{% endif %} · <a href="/connections/{{ c.id }}/settings#delivery">Manage data delivery</a></p>
+{% set collector = c.delivery.collector %}
+{% if collector %}
+{% set report = collector.last_report %}
+<section class="setting-block" id="collector">
+<h2>Collector</h2>
+<p>Last report {{ when(report.received_at) }}, version {{ report.collector }} <span class="muted">· source {{ report.source }}</span></p>
+{{ report_pass("Rows", report.rows) }}
+{% if report.media %}{{ report_pass("Media", report.media) }}{% endif %}
+{% if report.pending %}<p class="muted">A batch is waiting on the device to be delivered.</p>{% endif %}
+{% if report.unreported > 0 %}<p>{{ report.unreported }} run{{ "s" if report.unreported != 1 }} could not be reported before this one.</p>{% endif %}
+{% if collector.consecutive_failures > 1 %}<p class="failed">{{ collector.consecutive_failures }} failed runs in a row.</p>{% endif %}
+{% if report.failed %}<p class="muted">Last run that did not fail: {{ when(collector.last_success_at) }}</p>{% endif %}
+</section>
+{% endif %}
 <h2 id="upload">Upload an export</h2>
 {{ upload(c) }}
 

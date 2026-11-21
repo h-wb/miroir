@@ -1596,3 +1596,64 @@ step, and the keys above are chosen for it.
 
 Contact names are a separate source: the database holds numbers and addresses,
 and names live in the address book.
+
+## 039 — The collector reports every run, and Miroir is where a source's health is seen
+
+Status: accepted, 2026-11-21. Refines 030 and 035.
+
+Decision 030 gave the collector delivery state only, and said the connection's
+last-received time is the machine's delivery health. That turned out to be too
+little. A failed run sits in a status file on the machine. Miroir sees what
+arrives and nothing else, so it cannot tell a source with nothing new from one
+that is broken or switched off, and the first real failure (a stalled screenshot
+upload) was diagnosed by asking the machine's owner to paste output.
+
+The question is sharper for sources that read another program's undocumented
+files. An update of that program can change them, and the collector then either
+fails or, worse, sends less than before while every run still succeeds.
+
+**After every run the collector sends Miroir a small report.** It holds what the
+status file holds: when, which version, the outcome of rows and of media, the
+counts, and for a failure its step and reason. It is sent after runs that
+delivered, runs with nothing new and runs that failed. All of it is fixed words
+and counts, which decision 035 made safe to print and which is therefore safe to
+send.
+
+- The report goes to the connection's own address with its delivery token. No new
+  credential and no new place to reach.
+- It is one-way. Decision 030's rule stands: the server never sends the collector
+  instructions, and the collector ignores what the reply says.
+- It never changes a run. A report that cannot be sent leaves the outcome, the
+  cursor and the spool alone; the collector counts it and says so in the next
+  report, so failures that happened out of reach are still learnt of.
+- A server that does not know reports is not an error.
+
+This adds an endpoint, which 030 said was not needed. The receiving URL carries
+data; this carries the account of how collecting went, and nothing else did.
+
+**Miroir stores the reports and shows them** beside what it already knows: last
+report, last delivery, last import. One line per source, from the device to the
+warehouse.
+
+**Miroir exposes them as metrics, and alerting is left to what the installation
+already runs.** Three conditions cover the cases: no report for longer than a
+source should be quiet, several failed runs in a row, and a jump in a count such
+as unreadable or skipped rows. Silence can only be noticed from the server, which
+is the reason reports go there. The metrics page has its own token, so a scraper
+holds no admin credential, and it is off unless that token is set.
+
+Considered and left out:
+
+- *A notification from each machine on failure.* No history, a notification
+  credential on every machine, and nothing notices a machine that is off.
+- *A dead man's switch service.* It answers "did it run" and knows nothing of
+  counts or reasons; one more service to run and to look at.
+- *Pushing metrics from the machine into the monitoring system.* It exposes
+  monitoring to laptops, needs another credential, and ties the collector to one
+  installation's monitoring instead of to Miroir.
+- *Deriving health from the batches that arrive.* A run with nothing new and a
+  run that failed both send none.
+
+Not in this decision: the alert rules themselves, which belong to the
+installation; checks in the warehouse on what was loaded; and a fingerprint of a
+source's layout in its counts, which the Apple Messages source adds (038).

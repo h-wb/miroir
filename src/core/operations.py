@@ -20,9 +20,10 @@ from typing import Any, Literal
 
 import sqlalchemy as sa
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 POSTGRES_SCHEMA = "miroir_meta"
 LOCK_POLL_SECONDS = 1.0
+COLLECTOR_REPORTS_KEPT = 500
 
 log = logging.getLogger(__name__)
 
@@ -153,6 +154,45 @@ delivery_tokens = sa.Table(
     sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
 )
 
+collector_reports = sa.Table(
+    "collector_reports",
+    metadata,
+    sa.Column("id", sa.Integer, primary_key=True),
+    sa.Column("miroir_id", sa.String(24), nullable=False),
+    sa.Column("connection_id", sa.String(24), nullable=False),
+    sa.Column("received_at", sa.DateTime(timezone=True), nullable=False),
+    sa.Column("collector", sa.String(40), nullable=False),
+    sa.Column("source", sa.String(40), nullable=False),
+    sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
+    sa.Column("finished_at", sa.DateTime(timezone=True), nullable=False),
+    sa.Column("rows_outcome", sa.String(16), nullable=False),
+    sa.Column("media_outcome", sa.String(16)),
+    sa.Column("failed", sa.Boolean, nullable=False),
+    sa.Column("pending", sa.Boolean, nullable=False),
+    sa.Column("unreported", sa.Integer, nullable=False),
+    sa.Column("report", sa.Text, nullable=False),
+    sa.Index(
+        "ix_collector_reports_connection_received",
+        "miroir_id",
+        "connection_id",
+        "received_at",
+    ),
+)
+
+# Per connection, kept beside the bounded history so that retention never
+# shortens a failure streak or forgets the last success.
+collector_summaries = sa.Table(
+    "collector_summaries",
+    metadata,
+    sa.Column("miroir_id", sa.String(24), primary_key=True),
+    sa.Column("connection_id", sa.String(24), primary_key=True),
+    # The latest report by insertion order, and when it was received.
+    sa.Column("last_report_id", sa.Integer, nullable=False),
+    sa.Column("last_report_at", sa.DateTime(timezone=True), nullable=False),
+    sa.Column("last_success_at", sa.DateTime(timezone=True)),
+    sa.Column("consecutive_failures", sa.Integer, nullable=False),
+)
+
 connection_checks = sa.Table(
     "connection_checks",
     metadata,
@@ -212,7 +252,8 @@ def _aware(value: datetime | None) -> datetime | None:
 
 class MetadataStore:
     def __init__(self, url: str):
-        engine = sa.create_engine(url)
+        # Bound values (report bodies, token hashes) never reach errors or logs.
+        engine = sa.create_engine(url, hide_parameters=True)
         if engine.dialect.name == "postgresql":
             engine = engine.execution_options(
                 schema_translate_map={None: POSTGRES_SCHEMA}
@@ -377,6 +418,10 @@ class MetadataStore:
                     )
                     .values(analysis_id=operations.c.connection_id)
                 )
+            if version < 7:
+                # Collector reports (decision 039): new tables, nothing else changes.
+                collector_reports.create(db, checkfirst=True)
+                collector_summaries.create(db, checkfirst=True)
             db.execute(schema_info.update().values(version=SCHEMA_VERSION))
 
     def create_operation(self, **values: Any) -> Operation:
@@ -734,6 +779,152 @@ class MetadataStore:
                 )
             ).scalar()
         return _iso(_aware(received))
+
+    def record_collector_report(
+        self,
+        miroir_id: str,
+        connection_id: str,
+        token_hash: str,
+        report: dict[str, Any],
+    ) -> bool:
+        """Store a validated report and update the connection's summary.
+
+        The delivery token is checked again in the same transaction, so a report
+        authorised before its connection was removed (or re-created) is dropped.
+        Only the newest reports are kept; the summary keeps the last success and
+        the failure streak however long it grows. Returns whether it was stored.
+        """
+        table = collector_reports
+        rows = report["rows"]["outcome"]
+        media = report["media"]["outcome"] if report["media"] is not None else None
+        failed = "failed" in (rows, media)
+        key = (miroir_id, connection_id)
+        with self.engine.begin() as db:
+            # A write on the token row: it verifies the token and serialises the
+            # connection's reports (and a revocation) until this commits.
+            verified = db.execute(
+                delivery_tokens.update()
+                .where(
+                    delivery_tokens.c.miroir_id == miroir_id,
+                    delivery_tokens.c.connection_id == connection_id,
+                    delivery_tokens.c.token_hash == token_hash,
+                )
+                .values(token_hash=delivery_tokens.c.token_hash)
+            ).rowcount
+            if verified != 1:
+                return False
+            received = _now()
+            inserted = db.execute(
+                table.insert().values(
+                    miroir_id=miroir_id,
+                    connection_id=connection_id,
+                    received_at=received,
+                    collector=report["collector"],
+                    source=report["source"],
+                    started_at=_instant(report["started_at"]),
+                    finished_at=_instant(report["finished_at"]),
+                    rows_outcome=rows,
+                    media_outcome=media,
+                    failed=failed,
+                    pending=report["pending"],
+                    unreported=report["unreported"],
+                    report=json.dumps(report),
+                )
+            ).inserted_primary_key
+            assert inserted is not None
+            report_id = inserted[0]
+            self._update_collector_summary(db, key, report_id, received, failed)
+            scope = (
+                table.c.miroir_id == miroir_id,
+                table.c.connection_id == connection_id,
+            )
+            newest = (
+                sa.select(table.c.id)
+                .where(*scope)
+                .order_by(table.c.id.desc())
+                .limit(COLLECTOR_REPORTS_KEPT)
+            )
+            db.execute(table.delete().where(*scope, table.c.id.not_in(newest)))
+        return True
+
+    @staticmethod
+    def _update_collector_summary(
+        db: sa.Connection,
+        key: tuple[str, str],
+        report_id: int,
+        received: datetime,
+        failed: bool,
+    ) -> None:
+        summary = collector_summaries
+        where = (summary.c.miroir_id == key[0], summary.c.connection_id == key[1])
+        previous = db.execute(summary.select().where(*where)).mappings().first()
+        values = {
+            "last_report_id": report_id,
+            "last_report_at": received,
+            "last_success_at": None if failed else received,
+            "consecutive_failures": 1 if failed else 0,
+        }
+        if previous is None:
+            db.execute(
+                summary.insert().values(
+                    miroir_id=key[0], connection_id=key[1], **values
+                )
+            )
+            return
+        if failed:
+            values["last_success_at"] = previous["last_success_at"]
+            values["consecutive_failures"] = previous["consecutive_failures"] + 1
+        db.execute(summary.update().where(*where).values(**values))
+
+    def delete_collector_reports(self, miroir_id: str, connection_id: str) -> None:
+        with self.engine.begin() as db:
+            for table in (collector_reports, collector_summaries):
+                db.execute(
+                    table.delete().where(
+                        table.c.miroir_id == miroir_id,
+                        table.c.connection_id == connection_id,
+                    )
+                )
+
+    def collector_status(self, miroir_id: str, connection_id: str) -> dict | None:
+        """The latest report, the last that did not fail, and failures since.
+
+        One statement, so the report and the streak come from the same write.
+        """
+        summary = collector_summaries
+        table = collector_reports
+        with self.engine.connect() as db:
+            row = (
+                db.execute(
+                    sa.select(
+                        table.c.report,
+                        table.c.received_at,
+                        table.c.failed,
+                        summary.c.last_success_at,
+                        summary.c.consecutive_failures,
+                    )
+                    .select_from(
+                        summary.join(table, table.c.id == summary.c.last_report_id)
+                    )
+                    .where(
+                        summary.c.miroir_id == miroir_id,
+                        summary.c.connection_id == connection_id,
+                    )
+                )
+                .mappings()
+                .first()
+            )
+        if row is None:
+            return None
+        return {
+            "last_report": {
+                **json.loads(row["report"]),
+                "received_at": _iso(_aware(row["received_at"])),
+                "failed": row["failed"],
+            },
+            "last_success_at": _iso(_aware(row["last_success_at"])),
+            "consecutive_failures": row["consecutive_failures"],
+        }
 
     def put_secret(
         self, miroir_id: str, connection_id: str, name: str, ciphertext: bytes
@@ -1230,6 +1421,13 @@ def _lock_key(name: str) -> int:
 
 def _utc(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def _instant(value: str) -> datetime:
+    # Python 3.10's fromisoformat does not read a trailing Z.
+    return datetime.fromisoformat(
+        value.removesuffix("Z") + "+00:00" if value.endswith("Z") else value
+    )
 
 
 def _iso(value: datetime | None) -> str | None:

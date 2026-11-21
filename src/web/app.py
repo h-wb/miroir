@@ -24,9 +24,16 @@ from starlette.concurrency import run_in_threadpool
 
 from src.core.config import ConfigurationConflict, ConfigurationError
 from src.core.operations import OperationError, OrchestratorUnavailable
+from src.core.reports import (
+    INVALID_REPORT,
+    MAX_REPORT_BYTES,
+    InvalidReport,
+    parse_report,
+)
 from src.core.secrets import SecretKeyError, SecretResolutionError
 from src.core.service import MiroirService
 from src.integrations.validation import InvalidArtifact
+from src.web.metrics import render_metrics
 
 SESSION_COOKIE = "miroir_session"
 DEFAULT_MAX_UPLOAD = 512 * 1024 * 1024
@@ -35,6 +42,14 @@ MULTIPART_SLACK = 1024 * 1024  # form fields and part headers around the file
 MAX_MEDIA_BODY = 1024 * 1024
 MEDIA_POST_PATH = re.compile(
     r"/api/connections/[a-z][a-z0-9_]{0,23}/media/(uploads|confirm)"
+)
+DELIVERY_POST_PATH = re.compile(
+    r"/api/connections/[a-z][a-z0-9_]{0,23}/(receive|report)"
+)
+METRICS_CONTENT_TYPE = "text/plain; version=0.0.4"
+METRICS_TOKEN_REUSED = (
+    "MIROIR_METRICS_TOKEN must differ from MIROIR_API_TOKEN: "
+    "a scraper must not hold the admin token"
 )
 # Query parameters of the upload API that are not import options.
 UPLOAD_PARAMETERS = {"import", "name", "format"}
@@ -103,10 +118,18 @@ def resource_selection(value: Any) -> list[str] | None:
 
 
 def create_app(
-    service: MiroirService, token: str, max_upload_bytes: int = DEFAULT_MAX_UPLOAD
+    service: MiroirService,
+    token: str,
+    max_upload_bytes: int = DEFAULT_MAX_UPLOAD,
+    metrics_token: str | None = None,
 ) -> FastAPI:
+    """`metrics_token` enables `/metrics` for a scraper that holds only it."""
     if len(token) < 16:
         raise ValueError("MIROIR_API_TOKEN must be at least 16 characters")
+    if metrics_token is not None and hmac.compare_digest(
+        metrics_token.encode(), token.encode()
+    ):
+        raise ValueError(METRICS_TOKEN_REUSED)
     session = hmac.new(token.encode(), b"miroir-session", hashlib.sha256).hexdigest()
     app = FastAPI(title="Miroir", docs_url=None, redoc_url=None)
 
@@ -148,13 +171,12 @@ def create_app(
     async def require_login(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        if request.url.path in ("/login", "/healthz"):
+        # /metrics checks its own token and never accepts the admin's.
+        if request.url.path in ("/login", "/healthz", "/metrics"):
             return await call_next(request)
         # These routes authenticate their connection-scoped bearer before reading bytes.
         if request.method == "POST" and (
-            re.fullmatch(
-                r"/api/connections/[a-z][a-z0-9_]{0,23}/receive", request.url.path
-            )
+            DELIVERY_POST_PATH.fullmatch(request.url.path)
             or MEDIA_POST_PATH.fullmatch(request.url.path)
         ):
             return await call_next(request)
@@ -327,10 +349,12 @@ def create_app(
         )
         return JSONResponse(result, status_code=201 if result["new"] else 200)
 
-    def delivery_authorized(request: Request, connection_id: str) -> bool:
+    def bearer_token(request: Request) -> str:
         header = request.headers.get("authorization", "")
-        bearer = header[7:].strip() if header.lower().startswith("bearer ") else ""
-        return service.verify_delivery_token(connection_id, bearer)
+        return header[7:].strip() if header.lower().startswith("bearer ") else ""
+
+    def delivery_authorized(request: Request, connection_id: str) -> bool:
+        return service.verify_delivery_token(connection_id, bearer_token(request))
 
     @app.post("/api/connections/{connection_id}/receive")
     async def receive(request: Request, connection_id: str) -> JSONResponse:
@@ -392,6 +416,44 @@ def create_app(
     @app.post("/api/connections/{connection_id}/media/confirm")
     async def media_confirm(request: Request, connection_id: str) -> Response:
         return await deliver_media(request, connection_id, service.confirm_media)
+
+    @app.post("/api/connections/{connection_id}/report", status_code=204)
+    async def report(request: Request, connection_id: str) -> Response:
+        """A collector's account of one run (decision 039): stored, never answered."""
+        if not delivery_authorized(request, connection_id):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        body = bytearray()
+        async for chunk in request.stream():
+            if len(body) + len(chunk) > MAX_REPORT_BYTES:
+                raise UploadTooLarge(f"Report exceeds {MAX_REPORT_BYTES} bytes")
+            body.extend(chunk)
+        try:
+            parsed = parse_report(bytes(body))
+        except InvalidReport:
+            return JSONResponse({"error": INVALID_REPORT}, status_code=422)
+        stored = await run_in_threadpool(
+            service.record_collector_report,
+            connection_id,
+            parsed,
+            bearer_token(request),
+        )
+        if not stored:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return Response(status_code=204)
+
+    @app.get("/metrics")
+    def metrics(request: Request) -> Response:
+        if not metrics_token:
+            return Response(status_code=404)
+        if not hmac.compare_digest(
+            bearer_token(request).encode(), metrics_token.encode()
+        ):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        # Set as is: Starlette would append a charset to a text media type.
+        return Response(
+            render_metrics(service.deliveries()),
+            headers={"Content-Type": METRICS_CONTENT_TYPE},
+        )
 
     @app.get("/media/{connection_id}/{kind}/{key:path}")
     def media_view(connection_id: str, kind: str, key: str) -> Response:

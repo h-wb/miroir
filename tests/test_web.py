@@ -759,7 +759,7 @@ class SubprocessExecutorTests(unittest.TestCase):
                 with (
                     patch.dict(os.environ, {"MIROIR_API_TOKEN": TOKEN}),
                     patch("uvicorn.run"),
-                    patch("src.web.app.create_app", lambda s, t: served.append(s)),
+                    patch("src.web.app.create_app", lambda s, t, **_: served.append(s)),
                     contextlib.redirect_stderr(io.StringIO()),
                 ):
                     code = main(
@@ -781,6 +781,44 @@ class SubprocessExecutorTests(unittest.TestCase):
             arguments[arguments.index("--metadata") + 1],
             f"sqlite:///{root / '.miroir' / 'metadata.sqlite'}",
         )
+
+    def test_serve_refuses_the_admin_token_as_metrics_token(self):
+        import contextlib
+        import io
+
+        from src.cli.main import main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            (root / "miroir.json").write_text(json.dumps(example()))
+            errors = io.StringIO()
+            with (
+                patch.dict(
+                    os.environ,
+                    {"MIROIR_API_TOKEN": TOKEN, "MIROIR_METRICS_TOKEN": TOKEN},
+                ),
+                patch("uvicorn.run") as run,
+                contextlib.redirect_stderr(errors),
+            ):
+                code = main(
+                    [
+                        "--config",
+                        str(root / "miroir.json"),
+                        "serve",
+                        "--duckdb",
+                        str(root / "w.duckdb"),
+                        "--metadata",
+                        f"sqlite:///{root / 'metadata.sqlite'}",
+                    ]
+                )
+        self.assertEqual(code, 2)
+        run.assert_not_called()
+        self.assertIn("MIROIR_METRICS_TOKEN", errors.getvalue())
+        self.assertIn("MIROIR_API_TOKEN", errors.getvalue())
+        self.assertNotIn(TOKEN, errors.getvalue())
+        with self.assertRaises(ValueError) as caught:
+            create_app(Mock(), TOKEN, metrics_token=TOKEN)
+        self.assertNotIn(TOKEN, str(caught.exception))
 
 
 if __name__ == "__main__":

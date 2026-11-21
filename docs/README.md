@@ -120,4 +120,6 @@ Source page template: status & schedule · where the data comes from (and any
 code outside this repo) · extraction (resources, keys, cursors) · tables → dbt →
 dashboards · secrets & config · backfills and history · quirks.
 
-See also: [operations runbook](operations.md).
+See also: [operations runbook](operations.md), and
+[observability](observability.md): what Miroir knows about each connection, its
+Prometheus metrics and example alerts.

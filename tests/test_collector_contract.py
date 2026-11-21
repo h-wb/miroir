@@ -14,10 +14,12 @@ from tempfile import TemporaryDirectory
 from threading import Thread
 from typing import Any
 from unittest.mock import patch
+from urllib.request import Request, urlopen
 
+import sqlalchemy as sa
 import uvicorn
 
-from src.core.operations import MetadataStore
+from src.core.operations import MetadataStore, collector_reports
 from src.core.service import InlineExecutor, MiroirService
 from src.integrations.apple_messages import formats as apple_formats
 from src.integrations.browser_history.formats import read_rows
@@ -310,6 +312,33 @@ class ScreenMemoryContractTests(unittest.TestCase):
             self.assertEqual(objects.put_count, 2)
             self.assertEqual(main(["run", "--config", str(config)]), 0)
             self.assertEqual(objects.put_count, 2)
+        # Each run reported itself (decision 039); the API returns the latest.
+        request = Request(
+            f"http://127.0.0.1:{port}/api/connections/screen",
+            headers={"Authorization": f"Bearer {'unused' * 3}"},
+        )
+        with urlopen(request, timeout=5) as response:
+            collector = json.load(response)["delivery"]["collector"]
+        last = collector["last_report"]
+        self.assertEqual((last["source"], last["failed"]), ("screenmemory", False))
+        self.assertEqual(last["rows"]["outcome"], "nothing_new")
+        self.assertEqual(last["media"]["outcome"], "nothing_new")
+        self.assertEqual((last["pending"], last["unreported"]), (False, 0))
+        self.assertEqual(collector["consecutive_failures"], 0)
+        with metadata.engine.connect() as db:
+            outcomes = db.execute(
+                sa.select(
+                    collector_reports.c.rows_outcome, collector_reports.c.media_outcome
+                ).order_by(collector_reports.c.id)
+            ).all()
+        self.assertEqual(
+            [tuple(row) for row in outcomes],
+            [("delivered", "delivered"), ("nothing_new", "nothing_new")],
+        )
+        status = json.loads(
+            (self.root / "state" / "screen" / "status.json").read_text()
+        )
+        self.assertEqual(status["report"], "sent")
 
     def test_mask_exclude_and_connector_contract(self) -> None:
         collector = Path(__file__).resolve().parents[1] / "collector"

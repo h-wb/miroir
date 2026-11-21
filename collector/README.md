@@ -4,7 +4,7 @@ A small program for a personal machine. It reads sources that exist only
 there, withholds secrets, and delivers what is new to a Miroir connection's
 receiving URL. It needs Python 3.12 or later and three libraries (urllib3,
 pydantic and the Kingfisher secret scanner), and imports no server code.
-Design: decisions 030, 031, 035 and 036 in
+Design: decisions 030, 031, 035, 036 and 039 in
 [`docs/miroir/decisions.md`](../docs/miroir/decisions.md).
 
 ## Run it
@@ -48,6 +48,28 @@ None of them prints source content. A line for a failed pass names the step
 (`collect`, `deliver`, `links`, `put`, `confirm`) and a reason, for example
 `screen_macbook failed step=deliver reason=network {...}`, and the same fields
 are in `status`.
+
+## Reports
+
+After each `run` of a source, once rows and media are done (delivered, nothing
+new, or failed), the collector tells Miroir how the run went. The report goes
+to the connection's own address, with `/receive` replaced by `/report`, and the
+same delivery token. It holds what `status` already shows: each pass's outcome,
+counts, step, reason and HTTP status, plus the run's start and end times, the
+collector's version, the source's name, whether a batch is waiting in the
+spool, and how many earlier runs could not be reported. Nothing from the
+source, no token and no address.
+
+Reporting never affects a run: a report that cannot be sent leaves the
+outcome, the exit code, the saved positions and the spool exactly as they
+were, and is not retried. `collect`, `status`, `resend` and a run that found
+the source already running send nothing, nor does a source without a token or
+whose `receive_url` does not end in `/receive`. Miroir's answer is ignored.
+
+`status` shows the last report's fate as `"report"`: `sent`, `failed` (counted
+in `report.json` and carried by the next report), `unsupported` (a Miroir
+without reports, answering 401, 404 or 405; not counted, as a bad token shows
+in the row delivery anyway) or `skipped`.
 
 ## Configuration
 
@@ -123,8 +145,8 @@ only Miroir.
 | `cli.py` | Arguments, printing, exit code |
 | `runner.py` | The passes for one source: run, preview, resend, status |
 | `config.py` | The configuration file as typed values |
-| `state.py` | The state folder: cursor, spool, media position, status, lock |
-| `transport.py` | Every request the collector sends, through one connection pool |
+| `state.py` | The state folder: cursor, spool, media position, status, unreported runs, lock |
+| `transport.py` | Every request the collector sends, through one connection pool, reports included |
 | `media.py` | Upload a page of files in groups |
 | `batch.py` | One batch file: header, records, counted trailer |
 | `sources/base.py` | The contract every source implements |
