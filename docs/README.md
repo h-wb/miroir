@@ -27,6 +27,8 @@ Roadmap: [Miroir implementation plan](product-plan.md).
 Which part of the code does what, who may import whom, and the ways data gets
 in: [architecture](architecture.md).
 
+How the collector is versioned and released: [releases](releases.md).
+
 ## Sources
 
 Since 2026-11-11 every source loads through a Miroir connection bound to its

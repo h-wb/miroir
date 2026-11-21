@@ -9,16 +9,25 @@ Design: decisions 030, 031, 035 and 036 in
 
 ## Run it
 
-Install it as a command, from this folder of the repository at a pinned commit
-or tag:
+Install a release. Releases are tags named `collector-vX.Y.Z` on this
+repository ([how they are made](../docs/releases.md)).
+
+With [mise](https://mise.jdx.dev), as one pinned tool:
+
+```toml
+[tools]
+"pipx:git+https://github.com/h-wb/pipelines#subdirectory=collector" = "collector-vX.Y.Z"
+```
+
+Or with uv alone:
 
 ```bash
-uv tool install "git+https://github.com/h-wb/pipelines@<ref>#subdirectory=collector"
+uv tool install "git+https://github.com/h-wb/pipelines@collector-vX.Y.Z#subdirectory=collector"
 miroir-collector --version
 ```
 
-Add `--force` to move an installed collector to another commit. It carries on from
-its saved state.
+Moving to another release is changing that tag (`--force` with uv). The collector
+carries on from its saved state.
 
 ## Commands
 
