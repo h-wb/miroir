@@ -8,17 +8,17 @@ from urllib.parse import urlsplit
 
 from pydantic import AfterValidator, Field, ValidationError
 
-from .collectors import COLLECTORS
-from .collectors.base import Collector, Nonempty, Options, UserPath
 from .errors import ConfigError
 from .models import Model
+from .sources import SOURCES
+from .sources.base import Nonempty, Options, Source, UserPath
 from .transport import check_url
 
 
 @dataclass(frozen=True)
-class CollectorConfig:
+class SourceConfig:
     id: str
-    collector: Collector[Any, Any]
+    source: Source[Any, Any]
     receive_url: str
     token_env: str
     timeout_seconds: int
@@ -28,13 +28,13 @@ class CollectorConfig:
 @dataclass(frozen=True)
 class Config:
     state_dir: Path
-    collectors: list[CollectorConfig]
+    sources: list[SourceConfig]
     masking_rules: tuple[Path, ...]
 
 
 class _Entry(Model):
     id: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,23}$")]
-    collector: Nonempty
+    source: Nonempty
     receive_url: Annotated[Nonempty, AfterValidator(check_url)]
     token_env: Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")]
     timeout_seconds: int = Field(default=120, ge=1)
@@ -58,7 +58,7 @@ class _Masking(Model):
 
 class _Document(Model):
     state_dir: UserPath
-    collectors: list[_Entry]
+    sources: list[_Entry]
     masking: _Masking = Field(default_factory=_Masking)
 
 
@@ -101,24 +101,24 @@ def _validate[M: Model](model: type[M], raw: object, prefix: str = "") -> M:
         raise ConfigError(f"{path}: {message}") from None
 
 
-def _collector(entry: _Entry, index: int, ids: set[str]) -> CollectorConfig:
-    prefix = f"collectors.{index}"
+def _source(entry: _Entry, index: int, ids: set[str]) -> SourceConfig:
+    prefix = f"sources.{index}"
     if entry.id in ids:
-        raise ConfigError(f"{prefix}.id: duplicate collector id")
+        raise ConfigError(f"{prefix}.id: duplicate source id")
     ids.add(entry.id)
-    collector = COLLECTORS.get(entry.collector)
-    if collector is None:
-        raise ConfigError(f"{prefix}.collector: unknown collector")
-    options = _validate(collector.options_model, entry.options, f"{prefix}.options")
-    if collector.media(options) is not None and not urlsplit(
+    source = SOURCES.get(entry.source)
+    if source is None:
+        raise ConfigError(f"{prefix}.source: unknown source")
+    options = _validate(source.options_model, entry.options, f"{prefix}.options")
+    if source.media(options) is not None and not urlsplit(
         entry.receive_url
     ).path.endswith("/receive"):
         raise ConfigError(
             f"{prefix}.receive_url: Media requires a URL ending in /receive"
         )
-    return CollectorConfig(
+    return SourceConfig(
         entry.id,
-        collector,
+        source,
         entry.receive_url,
         entry.token_env,
         entry.timeout_seconds,
@@ -133,13 +133,12 @@ def load_config(path: Path) -> Config:
         raise ConfigError(
             "top level: cannot read the file, or it is not valid JSON"
         ) from None
+    if isinstance(raw, dict) and "collectors" in raw:
+        raise ConfigError("top level: unknown key collectors")
     document = _validate(_Document, raw)
     ids: set[str] = set()
     return Config(
         document.state_dir,
-        [
-            _collector(entry, index, ids)
-            for index, entry in enumerate(document.collectors)
-        ],
+        [_source(entry, index, ids) for index, entry in enumerate(document.sources)],
         tuple(document.masking.rules),
     )

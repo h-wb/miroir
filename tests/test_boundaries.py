@@ -56,10 +56,10 @@ class BoundaryTests(unittest.TestCase):
                     continue
                 for name in _import_names(node, package):
                     location = f"src/{relative}:{node.lineno}"
-                    if _within(name, "miroir_agent") or name.split(".", 2)[:2] == [
-                        "src",
-                        "agent",
-                    ]:
+                    if any(
+                        _within(name, prefix)
+                        for prefix in ("miroir_collector", "miroir_agent", "src.agent")
+                    ):
                         errors.append(f"{location}: server must not import {name}")
                     elif part in _ALLOWED and name.startswith("src."):
                         allowed = (f"src.{part}", *_ALLOWED[part])

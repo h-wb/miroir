@@ -17,15 +17,15 @@ from urllib.parse import parse_qs, urlsplit
 
 from kingfisher_sdk import Rules, Scanner
 
-from miroir_agent.cli import main
-from miroir_agent.collectors import COLLECTORS
-from miroir_agent.collectors.base import Collected
-from miroir_agent.collectors.screenmemory import ScreenMemoryCursor
-from miroir_agent.config import load_config
-from miroir_agent.errors import ConfigError, Failure
-from miroir_agent.masking import Masker
-from miroir_agent.state import State
-from miroir_agent.transport import Client
+from miroir_collector.cli import main
+from miroir_collector.config import load_config
+from miroir_collector.errors import ConfigError, Failure
+from miroir_collector.masking import Masker
+from miroir_collector.sources import SOURCES
+from miroir_collector.sources.base import Collected
+from miroir_collector.sources.screenmemory import ScreenMemoryCursor
+from miroir_collector.state import State
+from miroir_collector.transport import Client
 
 from .masking_fixtures import MASKER, github_token
 
@@ -265,7 +265,7 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
 
-class AgentTests(unittest.TestCase):
+class CollectorTests(unittest.TestCase):
     def setUp(self) -> None:
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -293,12 +293,12 @@ class AgentTests(unittest.TestCase):
         self.path = self.root / "config.json"
         self.item = {
             "id": "screen_macbook",
-            "collector": "screenmemory",
+            "source": "screenmemory",
             "receive_url": f"http://127.0.0.1:{server.server_port}/receive",
             "token_env": "MIROIR_TEST_TOKEN",
             "options": {"data_dir": "~/ScreenMemoryData"},
         }
-        self.raw = {"state_dir": str(self.root / "state"), "collectors": [self.item]}
+        self.raw = {"state_dir": str(self.root / "state"), "sources": [self.item]}
         self.path.write_text(json.dumps(self.raw))
         self.state = State(self.root / "state" / "screen_macbook")
         self.calls = []
@@ -358,7 +358,10 @@ class AgentTests(unittest.TestCase):
         with patch.dict(os.environ, HOME=str(self.root)):
             self.assertEqual(
                 self._cli("status"),
-                (1, "Invalid agent configuration: masking.rules.0: file not found\n"),
+                (
+                    1,
+                    "Invalid collector configuration: masking.rules.0: file not found\n",
+                ),
             )
             rules.touch()
             self.assertEqual(load_config(self.path).masking_rules, (rules,))
@@ -408,9 +411,9 @@ class AgentTests(unittest.TestCase):
         )
         self.assertFalse(self.server.posts)
 
-    def test_start_panic_is_sanitized_and_remembered_across_collectors(self) -> None:
+    def test_start_panic_is_sanitized_and_remembered_across_sources(self) -> None:
         self._source("ordinary text")
-        self.raw["collectors"].append(self.item | {"id": "second"})
+        self.raw["sources"].append(self.item | {"id": "second"})
         self.path.write_text(json.dumps(self.raw))
         with (
             patch(
@@ -420,8 +423,8 @@ class AgentTests(unittest.TestCase):
         ):
             code, stdout = self._cli("run")
         self.assertEqual(code, 1)
-        for collector in (self.item["id"], "second"):
-            self.assertIn(f"{collector} failed step=collect reason=masking", stdout)
+        for source in (self.item["id"], "second"):
+            self.assertIn(f"{source} failed step=collect reason=masking", stdout)
         self.assertEqual(stderr.getvalue(), "")
         self.assertNotIn("private panic", stdout)
         load.assert_called_once()
@@ -450,7 +453,7 @@ class AgentTests(unittest.TestCase):
 
         with (
             patch.object(Scanner, "scan", flaky),
-            patch("miroir_agent.cli.Masker", return_value=MASKER),
+            patch("miroir_collector.cli.Masker", return_value=MASKER),
             redirect_stderr(io.StringIO()) as stderr,
         ):
             code, stdout = self._cli("run")
@@ -486,33 +489,34 @@ class AgentTests(unittest.TestCase):
         )
         example = {
             **self.raw,
-            "state_dir": "~/Library/Application Support/miroir-agent",
+            "state_dir": "~/Library/Application Support/miroir-collector",
         }
         self.path.write_text(json.dumps(example))
         config = load_config(self.path)
         self.assertEqual(
-            config.state_dir, Path.home() / "Library/Application Support/miroir-agent"
+            config.state_dir,
+            Path.home() / "Library/Application Support/miroir-collector",
         )
-        self.assertEqual(config.collectors[0].timeout_seconds, 120)
+        self.assertEqual(config.sources[0].timeout_seconds, 120)
         self.assertEqual(
-            config.collectors[0].options.data_dir,
+            config.sources[0].options.data_dir,
             Path.home() / "ScreenMemoryData",
         )
         for changes in (
             {"wat": True},
             {"id": "Bad-id"},
-            {"collector": "unknown"},
+            {"source": "unknown"},
             {"receive_url": "http://miroir.example/receive"},
             {"timeout_seconds": True},
             {"options": {"data_dir": "data", "max_rows": 200001}},
         ):
             self.path.write_text(
-                json.dumps({**self.raw, "collectors": [{**self.item, **changes}]})
+                json.dumps({**self.raw, "sources": [{**self.item, **changes}]})
             )
             with self.assertRaises(ConfigError):
                 load_config(self.path)
         self.path.write_text(
-            json.dumps({**self.raw, "collectors": [self.item, self.item]})
+            json.dumps({**self.raw, "sources": [self.item, self.item]})
         )
         with self.assertRaises(ConfigError):
             load_config(self.path)
@@ -540,7 +544,7 @@ class AgentTests(unittest.TestCase):
                 INSERT INTO moz_places VALUES (1, 'https://example.org/');
                 INSERT INTO moz_origins VALUES (1, 'example.org');
             """)
-        self.item.update(collector="zen_history", options={"places_path": str(source)})
+        self.item.update(source="zen_history", options={"places_path": str(source)})
         self.path.write_text(json.dumps(self.raw))
 
         self.server.response_code = 503
@@ -589,8 +593,8 @@ class AgentTests(unittest.TestCase):
             replace(source, destination)
 
         with (
-            patch("miroir_agent.files.os.fsync", side_effect=sync),
-            patch("miroir_agent.files.os.replace", side_effect=rename),
+            patch("miroir_collector.files.os.fsync", side_effect=sync),
+            patch("miroir_collector.files.os.replace", side_effect=rename),
         ):
             State(path.parent).save_cursor({"frames": 1, "app_usage": 0})
         self.assertEqual(steps, ["file", "replace", "directory"])
@@ -600,7 +604,7 @@ class AgentTests(unittest.TestCase):
             "?format=wrong&filter=a%2Fb&f%6Frmat=also-wrong&filter="
         )
         self.path.write_text(json.dumps(self.raw))
-        config = load_config(self.path).collectors[0]
+        config = load_config(self.path).sources[0]
         body = self.root / "batch.gz"
         body.write_bytes(b"batch body")
         for code in (201, 500, 302):
@@ -624,12 +628,12 @@ class AgentTests(unittest.TestCase):
             )
             self.assertEqual(headers["Authorization"], f"Bearer {self.token}")
             self.assertEqual(headers["Content-Type"], "application/gzip")
-            self.assertRegex(headers["User-Agent"], r"^miroir-agent/\d")
+            self.assertRegex(headers["User-Agent"], r"^miroir-collector/\d")
             self.assertEqual(contents, body.read_bytes())
         self.assertEqual(config.receive_url, self.item["receive_url"])
 
     def test_retry_lock_limit_and_status(self) -> None:
-        with patch.object(COLLECTORS["screenmemory"], "collect", self._fake):
+        with patch.object(SOURCES["screenmemory"], "collect", self._fake):
             self.state.batch.parent.mkdir(parents=True)
             self.state.batch.write_bytes(b"incomplete batch")
             self.server.response_code = 500
@@ -672,7 +676,7 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(status["status"]["artifact_id"], "artifact-one")
 
     def test_missing_token_preserves_pending_batch(self) -> None:
-        with patch.object(COLLECTORS["screenmemory"], "collect", self._fake):
+        with patch.object(SOURCES["screenmemory"], "collect", self._fake):
             del os.environ["MIROIR_TEST_TOKEN"]
             self.assertEqual(self._cli("run")[0], 1)
             self.assertTrue(self.state.has_pending())
@@ -688,7 +692,7 @@ class AgentTests(unittest.TestCase):
         url = self.item["receive_url"]
         with (
             closing(socket()) as endpoint,
-            patch.object(COLLECTORS["screenmemory"], "collect", self._fake),
+            patch.object(SOURCES["screenmemory"], "collect", self._fake),
         ):
             endpoint.bind(("127.0.0.1", 0))
             refused_url = f"http://127.0.0.1:{endpoint.getsockname()[1]}/receive"
@@ -734,7 +738,7 @@ class AgentTests(unittest.TestCase):
         self.server.stall_receipt = True
         self.item["timeout_seconds"] = 1
         self.path.write_text(json.dumps(self.raw))
-        with patch.object(COLLECTORS["screenmemory"], "collect", self._fake):
+        with patch.object(SOURCES["screenmemory"], "collect", self._fake):
             code, output = self._cli("run")
         self.assertEqual(code, 1)
         self.assertIn("failed step=deliver reason=timeout ", output)
@@ -763,7 +767,7 @@ class AgentTests(unittest.TestCase):
                         (step, "timeout"),
                     )
 
-    def test_unknown_cursor_key_and_unexpected_collector_error_are_distinct(
+    def test_unknown_cursor_key_and_unexpected_source_error_are_distinct(
         self,
     ) -> None:
         self.state.directory.mkdir(parents=True)
@@ -774,7 +778,7 @@ class AgentTests(unittest.TestCase):
         self.assertIn("step=collect reason=state ", output)
         cursor.unlink()
         with patch.object(
-            COLLECTORS["screenmemory"],
+            SOURCES["screenmemory"],
             "collect",
             side_effect=RuntimeError("private fixture"),
         ):
@@ -799,12 +803,12 @@ class AgentTests(unittest.TestCase):
             p: p.read_bytes() for p in self.state.directory.rglob("*") if p.is_file()
         }
         out = self.root / "out"
-        with patch.object(COLLECTORS["screenmemory"], "collect", self._fake):
+        with patch.object(SOURCES["screenmemory"], "collect", self._fake):
             del os.environ["MIROIR_TEST_TOKEN"]
             self.assertEqual(
                 self._cli(
                     "collect",
-                    "--collector",
+                    "--source",
                     "screen_macbook",
                     "--out",
                     str(out),
@@ -827,7 +831,7 @@ class AgentTests(unittest.TestCase):
 class ConfigurationMessageTests(unittest.TestCase):
     def run_status(self, document: object) -> str:
         with TemporaryDirectory() as tmp:
-            path = Path(tmp) / "agent.json"
+            path = Path(tmp) / "collector.json"
             path.write_text(
                 document if isinstance(document, str) else json.dumps(document)
             )
@@ -837,74 +841,89 @@ class ConfigurationMessageTests(unittest.TestCase):
             self.assertEqual(code, 1)
             return output.getvalue()
 
-    def collector(self, **changes: object) -> dict[str, object]:
+    def source(self, **changes: object) -> dict[str, object]:
         base: dict[str, object] = {
             "id": "screen",
-            "collector": "screenmemory",
+            "source": "screenmemory",
             "receive_url": "https://miroir.example/api/connections/screen/receive",
             "token_env": "MIROIR_TOKEN",
             "options": {"data_dir": "/nowhere"},
         }
         return base | changes
 
+    def test_legacy_configuration_keys_are_rejected(self) -> None:
+        entry = self.source()
+        entry["collector"] = entry.pop("source")
+        self.assertEqual(
+            self.run_status({"state_dir": "/tmp/x", "collectors": [entry]}),
+            "Invalid collector configuration: top level: unknown key collectors\n",
+        )
+        self.assertIn(
+            "sources.0.collector: unknown key",
+            self.run_status(
+                {
+                    "state_dir": "/tmp/x",
+                    "sources": [self.source(collector="screenmemory")],
+                }
+            ),
+        )
+
     def test_the_message_says_what_is_wrong_and_never_echoes_a_value(self):
         cases = {
-            "collectors.0.media: unknown key": {
+            "sources.0.media: unknown key": {
                 "state_dir": "/tmp/x",
-                "collectors": [self.collector(media="marker-value")],
+                "sources": [self.source(media="marker-value")],
             },
-            "collectors.0.options.cutoff: unknown key": {
+            "sources.0.options.cutoff: unknown key": {
                 "state_dir": "/tmp/x",
-                "collectors": [
-                    self.collector(options={"data_dir": "/nowhere", "cutoff": 0})
+                "sources": [self.source(options={"data_dir": "/nowhere", "cutoff": 0})],
+            },
+            "source: unknown key": {
+                "state_dir": "/tmp/x",
+                "source": [],
+                "sources": [],
+            },
+            "sources.0.options.media: expected a boolean": {
+                "state_dir": "/tmp/x",
+                "sources": [
+                    self.source(options={"data_dir": "/nowhere", "media": "true"})
                 ],
             },
-            "collector: unknown key": {
+            "sources.0.receive_url: Invalid receiving URL": {
                 "state_dir": "/tmp/x",
-                "collector": [],
-                "collectors": [],
+                "sources": [self.source(receive_url="ftp://private-host/x")],
             },
-            "collectors.0.options.media: expected a boolean": {
+            "sources.0.source: unknown source": {
                 "state_dir": "/tmp/x",
-                "collectors": [
-                    self.collector(options={"data_dir": "/nowhere", "media": "true"})
-                ],
+                "sources": [self.source(source="marker-value")],
             },
-            "collectors.0.receive_url: Invalid receiving URL": {
+            "sources.0.options.max_rows: expected an integer": {
                 "state_dir": "/tmp/x",
-                "collectors": [self.collector(receive_url="ftp://private-host/x")],
-            },
-            "collectors.0.collector: unknown collector": {
-                "state_dir": "/tmp/x",
-                "collectors": [self.collector(collector="marker-value")],
-            },
-            "collectors.0.options.max_rows: expected an integer": {
-                "state_dir": "/tmp/x",
-                "collectors": [
-                    self.collector(
+                "sources": [
+                    self.source(
                         options={"data_dir": "/nowhere", "max_rows": "marker-value"}
                     )
                 ],
             },
-            "collectors.0.options.max_rows: number out of range": {
+            "sources.0.options.max_rows: number out of range": {
                 "state_dir": "/tmp/x",
-                "collectors": [
-                    self.collector(options={"data_dir": "/nowhere", "max_rows": 200001})
+                "sources": [
+                    self.source(options={"data_dir": "/nowhere", "max_rows": 200001})
                 ],
             },
-            "collectors.0.options.since: Invalid date or offset-qualified instant": {
+            "sources.0.options.since: Invalid date or offset-qualified instant": {
                 "state_dir": "/tmp/x",
-                "collectors": [
-                    self.collector(
+                "sources": [
+                    self.source(
                         options={"data_dir": "/nowhere", "since": "marker-value"}
                     )
                 ],
             },
-            "not valid JSON": '{"state_dir": "/tmp/x", "collectors": [',
+            "not valid JSON": '{"state_dir": "/tmp/x", "sources": [',
         }
         for expected, document in cases.items():
             output = self.run_status(document)
-            self.assertIn("Invalid agent configuration: ", output, expected)
+            self.assertIn("Invalid collector configuration: ", output, expected)
             self.assertIn(expected, output)
             self.assertNotIn("private-host", output)
             self.assertNotIn("/nowhere", output)

@@ -18,10 +18,10 @@ from ..errors import Failure
 from ..masking import Masker
 from .base import (
     Collected,
-    Collector,
     Cursor,
     Options,
     Since,
+    Source,
     UserPath,
     Window,
     nonempty,
@@ -55,14 +55,14 @@ class ZenHistoryCursor(Cursor):
     bookmarks_digest: Digest = ""
 
 
-class ZenHistory(Collector[ZenHistoryOptions, ZenHistoryCursor]):
+class ZenHistory(Source[ZenHistoryOptions, ZenHistoryCursor]):
     name = "zen_history"
     format_id = "firefox_places_batch"
     options_model = ZenHistoryOptions
     cursor_model = ZenHistoryCursor
 
     def source_dirs(self, options: ZenHistoryOptions) -> list[Path]:
-        return _source_dirs(_source(options))
+        return _places_dirs(_places_file(options))
 
     def collect(
         self,
@@ -77,14 +77,14 @@ class ZenHistory(Collector[ZenHistoryOptions, ZenHistoryCursor]):
         return _collect(options, cursor, out, now, masker, window)
 
 
-def _source_dirs(source: Path) -> list[Path]:
+def _places_dirs(source: Path) -> list[Path]:
     try:
         return [source.parent, source.resolve().parent]
     except (OSError, ValueError, RuntimeError):
         raise Failure("collect", "source") from None
 
 
-def _source(options: ZenHistoryOptions) -> Path:
+def _places_file(options: ZenHistoryOptions) -> Path:
     try:
         source = options.places_path or max(
             options.profiles_dir.glob("*/places.sqlite"),
@@ -351,9 +351,9 @@ def _collect(
     masker: Masker,
     window: Window | None,
 ) -> Collected | None:
-    source = _source(options)
+    source = _places_file(options)
     # Resolve the source once so the guarded file is the one copied.
-    ZenHistory.guard_paths(_source_dirs(source), out_path, Path(gettempdir()))
+    ZenHistory.guard_paths(_places_dirs(source), out_path, Path(gettempdir()))
     since = options.since if window is None else None
     if cursor is None:
         start = window[0] if window is not None else since

@@ -7,19 +7,19 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from miroir_agent.collectors.screenmemory import (
+from miroir_collector.errors import Failure
+from miroir_collector.sources.screenmemory import (
     ScreenMemory,
     ScreenMemoryCursor,
     ScreenMemoryOptions,
 )
-from miroir_agent.errors import Failure
 
 from .masking_fixtures import MASKER
 
 _TS = 1795132100
 
 
-class ScreenMemoryCollectorTests(unittest.TestCase):
+class ScreenMemorySourceTests(unittest.TestCase):
     def setUp(self) -> None:
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

@@ -4,9 +4,9 @@ import unittest
 from pathlib import Path
 
 
-@unittest.skipIf(sys.version_info < (3, 12), "agent requires Python 3.12")
-class AgentPackageTests(unittest.TestCase):
-    def test_agent_suite_with_same_interpreter(self) -> None:
+@unittest.skipIf(sys.version_info < (3, 12), "collector requires Python 3.12")
+class CollectorPackageTests(unittest.TestCase):
+    def test_collector_suite_with_same_interpreter(self) -> None:
         result = subprocess.run(
             [
                 sys.executable,
@@ -18,7 +18,7 @@ class AgentPackageTests(unittest.TestCase):
                 "-t",
                 ".",
             ],
-            cwd=Path(__file__).resolve().parents[1] / "agent",
+            cwd=Path(__file__).resolve().parents[1] / "collector",
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,

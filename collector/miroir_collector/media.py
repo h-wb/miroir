@@ -3,8 +3,8 @@
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
-from .collectors.base import MediaItem
 from .errors import Failure, Step
+from .sources.base import MediaItem
 from .transport import PUT_WORKERS, Client, Upload
 
 _GROUP_SIZE = 25

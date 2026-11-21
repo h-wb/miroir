@@ -16,14 +16,14 @@ from ..errors import Failure
 from ..masking import Masker
 from .base import (
     Collected,
-    Collector,
     Cursor,
+    Media,
     MediaItem,
     MediaPage,
-    MediaSource,
     Nonblank,
     Options,
     Since,
+    Source,
     UserPath,
     Window,
     nonempty,
@@ -82,7 +82,7 @@ class ScreenMemoryCursor(Cursor):
     app_usage: int
 
 
-class ScreenMemory(Collector[ScreenMemoryOptions, ScreenMemoryCursor]):
+class ScreenMemory(Source[ScreenMemoryOptions, ScreenMemoryCursor]):
     name = "screenmemory"
     format_id = "screenmemory_batch"
     options_model = ScreenMemoryOptions
@@ -108,11 +108,11 @@ class ScreenMemory(Collector[ScreenMemoryOptions, ScreenMemoryCursor]):
         self.guard(options, out)
         return _collect(options, cursor, out, now, masker=masker, window=window)
 
-    def media(self, options: ScreenMemoryOptions) -> MediaSource | None:
+    def media(self, options: ScreenMemoryOptions) -> Media | None:
         return Screenshots(options) if options.media else None
 
 
-class Screenshots(MediaSource):
+class Screenshots(Media):
     kind = "screenshots"
 
     def __init__(self, options: ScreenMemoryOptions) -> None:

@@ -1,4 +1,4 @@
-"""ScreenMemory batches delivered by the Miroir agent."""
+"""ScreenMemory batches delivered by the Miroir collector."""
 
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -41,7 +41,7 @@ DEFINITION = IntegrationDefinition(
         FileFormat(
             id=FORMAT_ID,
             version=VERSION,
-            label="ScreenMemory batch (Miroir agent)",
+            label="ScreenMemory batch (Miroir collector)",
             accept=".jsonl.gz,.gz,application/gzip",
             content_type="application/gzip",
             sender_instructions="Send one gzip-compressed JSON Lines batch as the raw HTTP body.",
@@ -49,7 +49,7 @@ DEFINITION = IntegrationDefinition(
             validate=validate_batch,
             open=open_batch_source,
             default_pattern="*.jsonl.gz",
-            sender="Miroir agent",
+            sender="Miroir collector",
             received_name="screenmemory-batch.jsonl.gz",
         ),
     ),

@@ -2,7 +2,7 @@ import random
 import string
 import zlib
 
-from miroir_agent.masking import Masker
+from miroir_collector.masking import Masker
 
 MASKER = Masker()
 

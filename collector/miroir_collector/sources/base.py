@@ -1,7 +1,7 @@
-"""What a collector is: the contract every source implements.
+"""What a source is: the contract every source implements.
 
-A collector reads one local source and writes what is new as one batch file.
-Everything else in the agent asks a collector through this contract and names
+A source reads one local application's data and writes what is new as one batch file.
+Everything else in the collector asks a source through this contract and names
 none.
 """
 
@@ -49,11 +49,11 @@ Nonempty = Annotated[str, BeforeValidator(nonempty)]
 
 
 class Options(Model):
-    """A collector's options. Their defaults live in the model and nowhere else."""
+    """A source's options. Their defaults live in the model and nowhere else."""
 
 
 class Cursor(Model):
-    """How far a collector's rows have been acknowledged."""
+    """How far a source's rows have been acknowledged."""
 
     @classmethod
     def parse(cls, value: object) -> Cursor:
@@ -85,8 +85,8 @@ class MediaPage:
     more: bool
 
 
-class MediaSource(ABC):
-    """The files a collector's rows point at, walked by an integer position."""
+class Media(ABC):
+    """The files a source's rows point at, walked by an integer position."""
 
     kind: ClassVar[str]
 
@@ -103,7 +103,7 @@ class MediaSource(ABC):
         """Files for positions in (after, upto], or None when there are none."""
 
 
-class Collector[O: Options, C: Cursor](ABC):
+class Source[O: Options, C: Cursor](ABC):
     name: ClassVar[str]
     format_id: ClassVar[str]
     options_model: ClassVar[type[Options]]
@@ -111,7 +111,7 @@ class Collector[O: Options, C: Cursor](ABC):
 
     @abstractmethod
     def source_dirs(self, options: O) -> list[Path]:
-        """Folders the source application owns. The agent never writes in them."""
+        """Folders the source application owns. The collector never writes in them."""
 
     @abstractmethod
     def collect(
@@ -130,8 +130,8 @@ class Collector[O: Options, C: Cursor](ABC):
         what is dated inside it instead.
         """
 
-    def media(self, options: O) -> MediaSource | None:
-        """The collector's files, when it has any and they are enabled."""
+    def media(self, options: O) -> Media | None:
+        """The source's files, when it has any and they are enabled."""
         return None
 
     def guard(self, options: O, *paths: Path) -> None:

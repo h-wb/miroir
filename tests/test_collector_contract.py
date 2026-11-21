@@ -30,16 +30,16 @@ from tests.test_browser_history_batch import snapshot
 _TS = 1795132100
 
 
-@unittest.skipIf(sys.version_info < (3, 12), "agent requires Python 3.12")
+@unittest.skipIf(sys.version_info < (3, 12), "collector requires Python 3.12")
 class ZenHistoryContractTests(unittest.TestCase):
     def test_collected_batch_matches_connector_format(self):
-        agent = Path(__file__).resolve().parents[1] / "agent"
-        with patch.object(sys, "path", [str(agent), *sys.path]):
-            from miroir_agent.collectors.zen_history import (
+        collector = Path(__file__).resolve().parents[1] / "collector"
+        with patch.object(sys, "path", [str(collector), *sys.path]):
+            from miroir_collector.masking import Masker
+            from miroir_collector.sources.zen_history import (
                 ZenHistory,
                 ZenHistoryOptions,
             )
-            from miroir_agent.masking import Masker
 
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -73,7 +73,7 @@ class ZenHistoryContractTests(unittest.TestCase):
             )
 
 
-@unittest.skipIf(sys.version_info < (3, 12), "agent requires Python 3.12")
+@unittest.skipIf(sys.version_info < (3, 12), "collector requires Python 3.12")
 class ScreenMemoryContractTests(unittest.TestCase):
     def setUp(self) -> None:
         temporary = TemporaryDirectory()
@@ -94,9 +94,9 @@ class ScreenMemoryContractTests(unittest.TestCase):
             db.executemany("INSERT INTO usage VALUES (?, ?)", apps)
 
     def test_uploads_media_to_real_app(self) -> None:
-        agent = Path(__file__).resolve().parents[1] / "agent"
-        with patch.object(sys, "path", [str(agent), *sys.path]):
-            from miroir_agent.cli import main
+        collector = Path(__file__).resolve().parents[1] / "collector"
+        with patch.object(sys, "path", [str(collector), *sys.path]):
+            from miroir_collector.cli import main
 
         self._source(
             [
@@ -161,15 +161,15 @@ class ScreenMemoryContractTests(unittest.TestCase):
             time.sleep(0.01)
         self.assertTrue(server.started)
 
-        config = self.root / "agent.json"
+        config = self.root / "collector.json"
         config.write_text(
             json.dumps(
                 {
                     "state_dir": str(self.root / "state"),
-                    "collectors": [
+                    "sources": [
                         {
                             "id": "screen",
-                            "collector": "screenmemory",
+                            "source": "screenmemory",
                             "token_env": "TEST_TOKEN",
                             "receive_url": f"http://127.0.0.1:{port}/api/connections/screen/receive",
                             "options": {
@@ -194,15 +194,15 @@ class ScreenMemoryContractTests(unittest.TestCase):
             self.assertEqual(objects.put_count, 2)
 
     def test_mask_exclude_and_connector_contract(self) -> None:
-        agent = Path(__file__).resolve().parents[1] / "agent"
-        with patch.object(sys, "path", [str(agent), *sys.path]):
-            from miroir_agent.collectors.screenmemory import (
+        collector = Path(__file__).resolve().parents[1] / "collector"
+        with patch.object(sys, "path", [str(collector), *sys.path]):
+            from miroir_collector.masking import Masker
+            from miroir_collector.sources.screenmemory import (
                 ScreenMemory,
                 ScreenMemoryOptions,
             )
-            from miroir_agent.masking import Masker
 
-        # Standard base64 can overlap the agent's random-string rule. Use a
+        # Standard base64 can overlap the collector's random-string rule. Use a
         # scanner-only URI credential instead to exercise the scanner label.
         token = "https://reader:p%40ss@[::1]/"
         paths = [f"date/{i}.jpeg" for i in range(6)]

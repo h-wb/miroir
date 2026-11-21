@@ -1,4 +1,4 @@
-"""Run the passes of one configured collector."""
+"""Run the passes of one configured source."""
 
 import time
 from collections.abc import Callable, Iterator
@@ -10,11 +10,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from .collectors.base import Collected, Cursor, MediaSource, Window
-from .config import CollectorConfig
+from .config import SourceConfig
 from .errors import Failure, Reason, Step
 from .masking import Masker
 from .media import upload
+from .sources.base import Collected, Cursor, Media, Window
 from .state import Pending, Section, State, StateError, StatusEntry
 from .transport import Client, Receipt
 
@@ -63,34 +63,34 @@ class _Pass:
                 self.failure = Failure(self.step, reason)
 
 
-def _client(config: CollectorConfig) -> Client:
+def _client(config: SourceConfig) -> Client:
     return Client(config.receive_url, config.token_env, config.timeout_seconds)
 
 
-def _guard(config: CollectorConfig, *paths: Path) -> None:
-    config.collector.guard(config.options, *paths)
+def _guard(config: SourceConfig, *paths: Path) -> None:
+    config.source.guard(config.options, *paths)
 
 
-def _parse_cursor(config: CollectorConfig, raw: dict[str, Any]) -> Cursor:
+def _parse_cursor(config: SourceConfig, raw: dict[str, Any]) -> Cursor:
     try:
-        return config.collector.cursor_model.parse(raw)
+        return config.source.cursor_model.parse(raw)
     except ValueError:
         raise StateError("Invalid saved cursor") from None
 
 
-def _cursor(config: CollectorConfig, state: State) -> Cursor | None:
+def _cursor(config: SourceConfig, state: State) -> Cursor | None:
     raw = state.read_cursor()
     return _parse_cursor(config, raw) if raw is not None else None
 
 
 def _collect(
-    config: CollectorConfig,
+    config: SourceConfig,
     cursor: Cursor | None,
     path: Path,
     masker: Masker,
     window: Window | None = None,
 ) -> Collected | None:
-    return config.collector.collect(
+    return config.source.collect(
         config.options, cursor, path, time.time(), masker=masker, window=window
     )
 
@@ -109,9 +109,7 @@ def _record(state: State, section: Section, progress: _Pass, **fields: Any) -> N
     )
 
 
-def _next_pending(
-    config: CollectorConfig, state: State, masker: Masker
-) -> Pending | None:
+def _next_pending(config: SourceConfig, state: State, masker: Masker) -> Pending | None:
     pending = state.pending()
     if pending is not None:
         return pending
@@ -127,7 +125,7 @@ def _next_pending(
 
 
 def _deliver_pending(
-    config: CollectorConfig,
+    config: SourceConfig,
     state: State,
     client: Client,
     pending: Pending,
@@ -135,14 +133,14 @@ def _deliver_pending(
 ) -> Receipt:
     cursor = _parse_cursor(config, pending.cursor)
     progress.step = "deliver"
-    receipt = client.post_batch(state.batch, config.collector.format_id)
+    receipt = client.post_batch(state.batch, config.source.format_id)
     state.save_cursor(cursor.model_dump(exclude_unset=True))
     state.clear_spool()
     return receipt
 
 
 def _rows(
-    config: CollectorConfig, state: State, client: Client, masker: Masker, maximum: int
+    config: SourceConfig, state: State, client: Client, masker: Masker, maximum: int
 ) -> Result:
     progress = _Pass()
     with progress.capture():
@@ -185,7 +183,7 @@ def _media_counts() -> dict[str, int]:
     )
 
 
-def _media_position(state: State, source: MediaSource) -> int:
+def _media_position(state: State, source: Media) -> int:
     saved = state.media_position()
     return source.start() if saved is None else saved
 
@@ -200,7 +198,7 @@ class _MediaRange:
 
 def _media_pages(
     client: Client,
-    source: MediaSource,
+    source: Media,
     span: _MediaRange,
     counts: dict[str, int],
     progress: _Pass,
@@ -231,10 +229,10 @@ def _media_pages(
 
 
 def _run_media(
-    config: CollectorConfig,
+    config: SourceConfig,
     state: State,
     client: Client,
-    source: MediaSource,
+    source: Media,
     maximum: int,
 ) -> Result:
     counts = _media_counts()
@@ -255,14 +253,14 @@ def _run_media(
 
 
 def run(
-    config: CollectorConfig,
+    config: SourceConfig,
     state: State,
     *,
     masker: Masker,
     max_batches: int,
     max_media_files: int,
 ) -> tuple[Result, Result | None]:
-    source = config.collector.media(config.options)
+    source = config.source.media(config.options)
     progress = _Pass()
     with progress.capture():
         _guard(config, *state.paths)
@@ -286,7 +284,7 @@ def run(
     return progress.result(), media
 
 
-def _output(config: CollectorConfig, state: State, out: Path) -> Path:
+def _output(config: SourceConfig, state: State, out: Path) -> Path:
     out = out.resolve()
     _guard(config, out)
     if out.is_relative_to(state.directory.parent.resolve()):
@@ -295,7 +293,7 @@ def _output(config: CollectorConfig, state: State, out: Path) -> Path:
 
 
 def preview(
-    config: CollectorConfig,
+    config: SourceConfig,
     state: State,
     out: Path,
     *,
@@ -338,7 +336,7 @@ class Resend:
 
 
 def _resend_rows(
-    config: CollectorConfig,
+    config: SourceConfig,
     state: State,
     client: Client,
     masker: Masker,
@@ -365,7 +363,7 @@ def _resend_rows(
                 break
             if out is None:
                 progress.step = "deliver"
-                client.post_batch(path, config.collector.format_id)
+                client.post_batch(path, config.source.format_id)
                 path.unlink()
             progress.batches += 1
             cursor = batch.cursor
@@ -375,14 +373,14 @@ def _resend_rows(
 
 
 def _resend_pass(
-    config: CollectorConfig,
+    config: SourceConfig,
     state: State,
     client: Client,
     masker: Masker,
     selection: Resend,
     progress: _Pass,
 ) -> None:
-    source = config.collector.media(config.options) if selection.media else None
+    source = config.source.media(config.options) if selection.media else None
     media_counts = _media_counts()
     if source is not None:
         progress.counts["media"] = media_counts
@@ -404,7 +402,7 @@ def _resend_pass(
 
 
 def resend(
-    config: CollectorConfig,
+    config: SourceConfig,
     state: State,
     selection: Resend,
     *,
@@ -436,14 +434,14 @@ def resend(
     return progress.result()
 
 
-def status(config: CollectorConfig, state: State) -> dict[str, Any]:
+def status(config: SourceConfig, state: State) -> dict[str, Any]:
     saved = _cursor(config, state)
     result: dict[str, Any] = {
         "cursor": saved.model_dump(exclude_unset=True) if saved is not None else None,
         "pending": state.has_pending(),
         "status": state.status(),
     }
-    source = config.collector.media(config.options)
+    source = config.source.media(config.options)
     if source is not None:
         try:
             result["media_cursor"] = {"ts": _media_position(state, source)}

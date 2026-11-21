@@ -14,7 +14,7 @@ silently. Decision 031 records why.
 | `src/pipelines/` | The flow entry points the scheduler runs | Hold product logic; they call core |
 | `src/adapters/` | Talk to the scheduler (Prefect): plan and apply deployments, submit, observe | Decide what a load is |
 | `src/web/`, `src/cli/` | Transport and presentation; both call the same core services | Contain logic of their own |
-| `agent/` (`miroir-agent`) | On a personal machine: read a local source, withhold secrets, deliver to a receiving URL, remember what was acknowledged | Parse or load anything, or import any server code |
+| `collector/` (`miroir-collector`) | On a personal machine: read a local source, withhold secrets, deliver to a receiving URL, remember what was acknowledged | Parse or load anything, or import any server code |
 
 ## Who may import whom
 
@@ -28,11 +28,11 @@ silently. Decision 031 records why.
 | `web` | `core`, `integrations` |
 | `cli` | `core`, `integrations`, `adapters`, `web` |
 
-Also: nothing under `src/` imports the agent, and a connector's `formats.py` and
+Also: nothing under `src/` imports the collector, and a connector's `formats.py` and
 `contracts.py` never import dlt at module level, so files can be validated
-without the loading stack. The agent imports the Python standard library,
+without the loading stack. The collector imports the Python standard library,
 urllib3, pydantic and a pinned secret scanner, and nothing else; its own parts have import rules too, held
-by `agent/tests/test_boundaries.py` (decision 035).
+by `collector/tests/test_boundaries.py` (decision 035).
 
 A new folder under `src/` fails the boundary test until it is given a rule.
 
@@ -50,8 +50,8 @@ There are two ways, and a connector declares which it supports (decision 021):
    - **a watched folder**, when Miroir picks up a file something left there.
 
 Programs that push to the receiving URL are *senders*. They live outside the
-server: the Health Auto Export app is one, and the agent is another, for sources
-that exist only on a device. The agent is therefore not a fourth transport. It
+server: the Health Auto Export app is one, and the collector is another, for sources
+that exist only on a device. The collector is therefore not a fourth transport. It
 is a client of one that already exists.
 
 ## Media
@@ -67,9 +67,9 @@ with the links and never holds a storage credential.
 
 - A new service with an API: a connector with a fetch.
 - A new export file: a file format on a connector.
-- A source that exists only on a device: a collector in `agent/`, and a file
+- A source that exists only on a device: a source in `collector/`, and a file
   format on a connector for what it sends. A contract test ties the two.
 - Files that rows point at: a media kind on the connector, and a media function
-  on the collector.
+  on the source.
 - A new way to schedule or run, or a new place to store: an adapter.
 - A new screen or command: `web` or `cli`, calling a core service.
