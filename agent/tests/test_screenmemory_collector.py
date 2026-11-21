@@ -14,6 +14,8 @@ from miroir_agent.collectors.screenmemory import (
 )
 from miroir_agent.errors import Failure
 
+from .masking_fixtures import MASKER
+
 _TS = 1795132100
 
 
@@ -52,7 +54,11 @@ class ScreenMemoryCollectorTests(unittest.TestCase):
         self.options["max_rows"] = 3
         # The second page is also exactly full, so conservatively advertises more.
         first = ScreenMemory().collect(
-            ScreenMemoryOptions.model_validate(self.options), None, self.out, self.now
+            ScreenMemoryOptions.model_validate(self.options),
+            None,
+            self.out,
+            self.now,
+            masker=MASKER,
         )
         assert first is not None
         self.assertTrue(first.more)
@@ -63,6 +69,7 @@ class ScreenMemoryCollectorTests(unittest.TestCase):
             first.cursor,
             self.out,
             self.now,
+            masker=MASKER,
         )
         assert second is not None
         self.assertTrue(second.more)
@@ -73,6 +80,7 @@ class ScreenMemoryCollectorTests(unittest.TestCase):
             second.cursor,
             self.out,
             self.now,
+            masker=MASKER,
         )
         assert third is not None
         self.assertFalse(third.more)
@@ -93,7 +101,11 @@ class ScreenMemoryCollectorTests(unittest.TestCase):
             [(_TS, ""), (_TS + 2, "app.example.browser")],
         )
         batch = ScreenMemory().collect(
-            ScreenMemoryOptions.model_validate(self.options), None, self.out, self.now
+            ScreenMemoryOptions.model_validate(self.options),
+            None,
+            self.out,
+            self.now,
+            masker=MASKER,
         )
         assert batch is not None
         self.assertEqual(batch.counts["skipped"], 3)
@@ -107,6 +119,7 @@ class ScreenMemoryCollectorTests(unittest.TestCase):
                 batch.cursor,
                 self.out,
                 self.now,
+                masker=MASKER,
             )
         )
 
@@ -121,6 +134,7 @@ class ScreenMemoryCollectorTests(unittest.TestCase):
             self.out,
             _TS + 301,
             window=(_TS, _TS + 3),
+            masker=MASKER,
         )
         assert batch is not None
         self.assertEqual(
@@ -139,7 +153,11 @@ class ScreenMemoryCollectorTests(unittest.TestCase):
         )
         now = _TS + 300.3
         batch = ScreenMemory().collect(
-            ScreenMemoryOptions.model_validate(self.options), None, self.out, now
+            ScreenMemoryOptions.model_validate(self.options),
+            None,
+            self.out,
+            now,
+            masker=MASKER,
         )
         assert batch is not None
         self.assertEqual(batch.cursor, ScreenMemoryCursor(frames=_TS, app_usage=_TS))
@@ -155,6 +173,7 @@ class ScreenMemoryCollectorTests(unittest.TestCase):
                 batch.cursor,
                 self.out,
                 now,
+                masker=MASKER,
             )
         )
 
@@ -171,6 +190,7 @@ class ScreenMemoryCollectorTests(unittest.TestCase):
                 None,
                 self.out,
                 self.now,
+                masker=MASKER,
             )
         )
         self.assertEqual(
@@ -184,7 +204,11 @@ class ScreenMemoryCollectorTests(unittest.TestCase):
             [(_TS + i / 10, f"app.example.{i}") for i in range(3)],
         )
         batch = ScreenMemory().collect(
-            ScreenMemoryOptions.model_validate(self.options), None, self.out, self.now
+            ScreenMemoryOptions.model_validate(self.options),
+            None,
+            self.out,
+            self.now,
+            masker=MASKER,
         )
         assert batch is not None
         self.assertTrue(batch.more)
@@ -203,6 +227,7 @@ class ScreenMemoryCollectorTests(unittest.TestCase):
                 batch.cursor,
                 self.out,
                 self.now,
+                masker=MASKER,
             )
         )
 
@@ -223,6 +248,7 @@ class ScreenMemoryCollectorTests(unittest.TestCase):
                 None,
                 self.out,
                 self.now,
+                masker=MASKER,
             )
         )
         self.assertFalse(self.out.exists())
@@ -237,6 +263,7 @@ class ScreenMemoryCollectorTests(unittest.TestCase):
                     None,
                     self.out,
                     self.now,
+                    masker=MASKER,
                 )
             self.assertEqual(
                 (raised.exception.step, raised.exception.reason), ("collect", "source")

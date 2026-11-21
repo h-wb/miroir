@@ -1,9 +1,12 @@
-"""Deterministic masking for screen text."""
+"""Masking for screen text and browser history."""
 
 import math
 import re
 from collections import Counter
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from pathlib import Path
+
+from .scanner import ScannerLayer, Span, Unscanned
 
 _BEGIN = re.compile(r"\bBEGIN\s+(?:[\w-]+\s+)*PRIVATE KEY\b")
 _END = re.compile(r"\bEND\s+(?:[\w-]+\s+)*PRIVATE KEY\b")
@@ -126,78 +129,118 @@ def _matches(
             yield match.span(group)
 
 
-def mask(text: str) -> tuple[str, dict[str, int]]:
-    # Replacements are separate from unmasked fragments, so no rule touches them.
-    parts = [(text, False)]
-    counts: Counter[str] = Counter()
-    rules: tuple[tuple[str, Callable[[str], Iterator[tuple[int, int]]]], ...] = (
-        ("private_key", _private_keys),
-        ("token", lambda s: _matches(s, _TOKEN)),
-        ("assignment", lambda s: _matches(s, _ASSIGNMENT, _assignment)),
-        ("random", lambda s: _matches(s, _RANDOM, _random)),
-        ("card", lambda s: _matches(s, _CARD, _luhn)),
-    )
+MaskSpan = tuple[int, int, str]
+_Rule = tuple[str, Callable[[str], Iterable[Span]]]
+_TOKEN_RULE: _Rule = ("token", lambda s: _matches(s, _TOKEN))
+_TEXT_RULES: tuple[_Rule, ...] = (
+    ("private_key", _private_keys),
+    _TOKEN_RULE,
+    ("assignment", lambda s: _matches(s, _ASSIGNMENT, _assignment)),
+    ("random", lambda s: _matches(s, _RANDOM, _random)),
+    ("card", lambda s: _matches(s, _CARD, _luhn)),
+)
+
+
+def _own_spans(text: str, rules: Sequence[_Rule]) -> list[MaskSpan]:
+    remaining = [(0, len(text))]
+    spans: list[MaskSpan] = []
     for rule, find in rules:
         updated = []
-        for part, masked in parts:
-            if masked:
-                updated.append((part, True))
-                continue
-            offset = 0
-            for start, end in find(part):
-                updated.extend(
-                    ((part[offset:start], False), (f"[masked:{rule}]", True))
-                )
-                counts[rule] += 1
-                offset = end
-            updated.append((part[offset:], False))
-        parts = updated
-    return "".join(part for part, _ in parts), dict(counts)
+        for lower, upper in remaining:
+            offset = lower
+            for start, end in find(text[lower:upper]):
+                updated.append((offset, lower + start))
+                spans.append((lower + start, lower + end, rule))
+                offset = lower + end
+            updated.append((offset, upper))
+        remaining = updated
+    return spans
 
 
-def mask_tokens(text: str) -> tuple[str, dict[str, int]]:
+def _union(spans: Iterable[MaskSpan]) -> list[MaskSpan]:
+    merged: list[MaskSpan] = []
+    for start, end, rule in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            lower, upper, label = merged[-1]
+            merged[-1] = (lower, max(upper, end), rule if label == "scanner" else label)
+        else:
+            merged.append((start, end, rule))
+    return merged
+
+
+def _render(text: str, spans: Iterable[MaskSpan]) -> tuple[str, dict[str, int]]:
     parts: list[str] = []
-    offset = count = 0
-    for start, end in _matches(text, _TOKEN):
-        parts.extend((text[offset:start], "[masked:token]"))
-        offset = end
-        count += 1
-    parts.append(text[offset:])
-    return "".join(parts), {"token": count} if count else {}
-
-
-def mask_url(text: str) -> tuple[str, dict[str, int]]:
     counts: Counter[str] = Counter()
+    offset = 0
+    for start, end, rule in spans:
+        parts.extend((text[offset:start], f"[masked:{rule}]"))
+        counts[rule] += 1
+        offset = end
+    parts.append(text[offset:])
+    return "".join(parts), dict(counts)
+
+
+def _url_userinfo(text: str) -> Iterator[Span]:
     if match := _AUTHORITY.match(text):
         userinfo, at, _ = match[1].rpartition("@")
         _, colon, password = userinfo.partition(":")
         if at and colon and password:
             end = match.start(1) + len(userinfo)
-            text = text[: end - len(password)] + "[masked:url_userinfo]" + text[end:]
-            counts["url_userinfo"] += 1
+            yield end - len(password), end
 
-    def redact(params: str) -> str:
-        parts = re.split(r"([&;])", params)
-        for i in range(0, len(parts), 2):
-            name, equals, value = parts[i].partition("=")
+
+def _url_params(text: str) -> Iterator[Span]:
+    before_fragment, hash_, fragment = text.partition("#")
+    base, question, query = before_fragment.partition("?")
+    route, separator, fragment_query = fragment.partition("?")
+    offset = len(before_fragment) + len(hash_)
+    if separator and "=" not in route:
+        offset += len(route) + len(separator)
+        fragment = fragment_query
+    for params, start in ((query, len(base) + len(question)), (fragment, offset)):
+        for param in re.split(r"[&;]", params):
+            name, equals, value = param.partition("=")
             normal = name.lower().replace("-", "").replace("_", "")
+            end = start + len(param)
             if (
                 equals
                 and value
                 and (normal in _SECRET_NAMES or normal.endswith(_SECRET_SUFFIXES))
             ):
-                parts[i] = name + "=[masked:url_param]"
-                counts["url_param"] += 1
-        return "".join(parts)
+                yield end - len(value), end
+            start = end + 1
 
-    before_fragment, hash_, fragment = text.partition("#")
-    base, question, query = before_fragment.partition("?")
-    route, separator, fragment_query = fragment.partition("?")
-    if separator and "=" not in route:
-        fragment = route + separator + redact(fragment_query)
-    else:
-        fragment = redact(fragment)
-    text = base + question + redact(query) + hash_ + fragment
-    text, tokens = mask_tokens(text)
-    counts.update(tokens)
-    return text, dict(counts)
+
+_URL_RULES: tuple[_Rule, ...] = (
+    ("url_userinfo", _url_userinfo),
+    ("url_param", _url_params),
+    _TOKEN_RULE,
+)
+
+
+class Masker:
+    """The fixed rules, plus the scanner's catalogue and the user's rule files."""
+
+    def __init__(self, rule_files: Sequence[Path] = ()) -> None:
+        self._scanner = ScannerLayer(rule_files)
+
+    def _spans(self, text: str, rules: Sequence[_Rule]) -> list[MaskSpan]:
+        own = _own_spans(text, rules)
+        try:
+            scanner = self._scanner.spans(text)
+        except Unscanned:
+            return [(0, len(text), "unscanned")]
+        return _union([*own, *((start, end, "scanner") for start, end in scanner)])
+
+    def spans(self, text: str) -> list[MaskSpan]:
+        """Masking regions in original-text character offsets, with their labels."""
+        return self._spans(text, _TEXT_RULES)
+
+    def text(self, text: str) -> tuple[str, dict[str, int]]:
+        return _render(text, self.spans(text))
+
+    def tokens(self, text: str) -> tuple[str, dict[str, int]]:
+        return _render(text, self._spans(text, (_TOKEN_RULE,)))
+
+    def url(self, text: str) -> tuple[str, dict[str, int]]:
+        return _render(text, self._spans(text, _URL_RULES))

@@ -5,6 +5,7 @@ from typing import Literal
 Step = Literal["collect", "deliver", "links", "put", "confirm"]
 Reason = Literal[
     "source",
+    "masking",
     "state",
     "token",
     "http",

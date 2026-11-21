@@ -12,16 +12,27 @@ _SOURCES = {"collectors.screenmemory", "collectors.zen_history"}
 _ALLOWED = {
     "": set(),
     "__main__": {"cli"},
-    **dict.fromkeys(("errors", "models", "masking", "dates", "files"), set()),
+    **dict.fromkeys(("errors", "models", "dates", "files"), set()),
+    "masking": {"scanner"},
+    "scanner": {"errors"},
     "batch": {"errors", "files"},
     "transport": {"errors", "models", ""},
-    "collectors.base": {"errors", "models", "dates"},
+    "collectors.base": {"errors", "models", "dates", "masking"},
     **dict.fromkeys(_SOURCES, {"collectors.base", "batch", "masking", "errors"}),
     "collectors": {"collectors.base", *_SOURCES},
     "state": {"errors", "models", "files"},
     "media": {"transport", "collectors.base", "errors"},
     "config": {"collectors", "collectors.base", "transport", "errors", "models"},
-    "cli": {"runner", "config", "errors", "collectors.base", "dates", "", "state"},
+    "cli": {
+        "runner",
+        "config",
+        "errors",
+        "collectors.base",
+        "dates",
+        "",
+        "state",
+        "masking",
+    },
 }
 _ALLOWED["runner"] = set(_ALLOWED) - {"cli", "__main__", *_SOURCES}
 _EXTERNAL = {
@@ -35,6 +46,7 @@ _EXTERNAL = {
         "transport",
     },
     "urllib3": {"transport"},
+    "kingfisher_sdk": {"scanner"},
 }
 
 
@@ -98,5 +110,22 @@ class BoundaryTests(unittest.TestCase):
             (_AGENT / "pyproject.toml").read_text(encoding="utf-8")
         )["project"]
         self.assertCountEqual(
-            project["dependencies"], ["urllib3>=2.2,<3", "pydantic>=2.10,<3"]
+            project["dependencies"],
+            [
+                "urllib3>=2.2,<3",
+                "pydantic>=2.10,<3",
+                "kingfisher-secret-scanner==1.6.4",
+            ],
+        )
+
+    def test_only_scanner_and_rules_are_imported_from_kingfisher(self) -> None:
+        path = _AGENT / "miroir_agent" / "scanner.py"
+        imports = {
+            (source, symbol)
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+            for source, symbol in _imports(node, "miroir_agent", set())
+            if source.split(".")[0] == "kingfisher_sdk"
+        }
+        self.assertEqual(
+            imports, {("kingfisher_sdk", "Rules"), ("kingfisher_sdk", "Scanner")}
         )

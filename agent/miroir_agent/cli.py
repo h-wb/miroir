@@ -10,7 +10,8 @@ from .collectors.base import Window
 from .config import CollectorConfig, load_config
 from .dates import parse_date
 from .errors import ConfigError, Failure
-from .runner import Outcome, Result
+from .masking import Masker
+from .runner import Outcome, Resend, Result
 from .state import State, StateError
 
 
@@ -43,10 +44,13 @@ def _print_result(label: str, result: Result) -> bool:
     return result.outcome == Outcome.FAILED
 
 
-def _run(args: argparse.Namespace, config: CollectorConfig, state: State) -> bool:
+def _run(
+    args: argparse.Namespace, config: CollectorConfig, state: State, masker: Masker
+) -> bool:
     rows, media = runner.run(
         config,
         state,
+        masker=masker,
         max_batches=args.max_batches,
         max_media_files=args.max_media_files,
     )
@@ -56,13 +60,20 @@ def _run(args: argparse.Namespace, config: CollectorConfig, state: State) -> boo
     return failed
 
 
-def _preview(args: argparse.Namespace, config: CollectorConfig, state: State) -> bool:
+def _preview(
+    args: argparse.Namespace, config: CollectorConfig, state: State, masker: Masker
+) -> bool:
     return _print_result(
-        config.id, runner.preview(config, state, args.out, max_batches=args.max_batches)
+        config.id,
+        runner.preview(
+            config, state, args.out, masker=masker, max_batches=args.max_batches
+        ),
     )
 
 
-def _resend(args: argparse.Namespace, config: CollectorConfig, state: State) -> bool:
+def _resend(
+    args: argparse.Namespace, config: CollectorConfig, state: State, masker: Masker
+) -> bool:
     if args.media and config.collector.media(config.options) is None:
         print("Media is not enabled for this collector")
         return True
@@ -76,15 +87,15 @@ def _resend(args: argparse.Namespace, config: CollectorConfig, state: State) -> 
         runner.resend(
             config,
             state,
-            window,
-            out=args.out,
-            max_batches=args.max_batches,
-            media=args.media,
+            Resend(window, args.out, args.max_batches, args.media),
+            masker=masker,
         ),
     )
 
 
-def _status(args: argparse.Namespace, config: CollectorConfig, state: State) -> bool:
+def _status(
+    args: argparse.Namespace, config: CollectorConfig, state: State, masker: Masker
+) -> bool:
     try:
         result = runner.status(config, state)
     except StateError:
@@ -131,11 +142,15 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _dispatch(
-    args: argparse.Namespace, config: CollectorConfig, state_dir: Path
+    args: argparse.Namespace,
+    config: CollectorConfig,
+    state_dir: Path,
+    masker: Masker,
 ) -> bool:
     try:
+        state = State(state_dir / config.id)
         handler = args.handler
-        return bool(handler(args, config, State(state_dir / config.id)))
+        return bool(handler(args, config, state, masker))
     except Exception:  # noqa: BLE001 - never expose a traceback or exception values
         return _print_result(
             config.id, Result(Outcome.FAILED, {}, Failure("collect", "internal"))
@@ -155,7 +170,9 @@ def main(argv: list[str] | None = None) -> int:
         if not collectors:
             print("Collector not configured")
             return 1
+    # Starting the scanner is deferred to the first text that needs masking.
+    masker = Masker(config.masking_rules)
     failed = False
     for item in collectors:
-        failed |= _dispatch(args, item, config.state_dir)
+        failed |= _dispatch(args, item, config.state_dir, masker)
     return int(failed)

@@ -79,9 +79,10 @@ load, so both can feed one connection.
 
 Secrets in addresses are masked on the Mac unless `mask_urls` is false: a password
 in `user:password@host`, the value of a secret-named query or fragment parameter
-(`token`, `signature`, `code`, `key` and the like), and known token shapes in
-addresses and titles. A long id in a path is left alone. The snapshot path masks
-nothing.
+(`token`, `signature`, `code`, `key` and the like), and provider credentials and
+known token shapes in addresses and titles, found by the scanner's catalogue,
+your own rule files and the agent's own rules (decision 036). A long id in a
+path is left alone. The snapshot path masks nothing.
 
 Limits: a page whose title or counters change without a new visit is not sent
 again until it is visited. A reused id overwrites the older row with that id, as

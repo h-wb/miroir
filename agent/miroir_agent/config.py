@@ -29,6 +29,7 @@ class CollectorConfig:
 class Config:
     state_dir: Path
     collectors: list[CollectorConfig]
+    masking_rules: tuple[Path, ...]
 
 
 class _Entry(Model):
@@ -40,9 +41,25 @@ class _Entry(Model):
     options: Any = Field(default_factory=dict)
 
 
+def _rule_file(path: Path) -> Path:
+    try:
+        if path.is_file():
+            return path
+    except OSError:
+        pass
+    raise ValueError("file not found") from None
+
+
+class _Masking(Model):
+    rules: list[Annotated[UserPath, AfterValidator(_rule_file)]] = Field(
+        default_factory=list
+    )
+
+
 class _Document(Model):
     state_dir: UserPath
     collectors: list[_Entry]
+    masking: _Masking = Field(default_factory=_Masking)
 
 
 _MESSAGES = {
@@ -58,6 +75,7 @@ _MESSAGES = {
     "model_type": "expected an object",
 }
 _FIXED_ERRORS = {
+    "file not found",
     "Invalid receiving URL",
     "Invalid date or offset-qualified instant",
     "Expected a nonempty string",
@@ -123,4 +141,5 @@ def load_config(path: Path) -> Config:
             _collector(entry, index, ids)
             for index, entry in enumerate(document.collectors)
         ],
+        tuple(document.masking.rules),
     )

@@ -13,7 +13,7 @@ from pydantic import BeforeValidator, Field
 
 from ..batch import BatchWriter
 from ..errors import Failure
-from ..masking import mask
+from ..masking import Masker
 from .base import (
     Collected,
     Collector,
@@ -102,10 +102,11 @@ class ScreenMemory(Collector[ScreenMemoryOptions, ScreenMemoryCursor]):
         out: Path,
         now: float,
         *,
+        masker: Masker,
         window: Window | None = None,
     ) -> Collected | None:
         self.guard(options, out)
-        return _collect(options, cursor, out, now, window=window)
+        return _collect(options, cursor, out, now, masker=masker, window=window)
 
     def media(self, options: ScreenMemoryOptions) -> MediaSource | None:
         return Screenshots(options) if options.media else None
@@ -315,6 +316,7 @@ def _collect(
     out_path: Path,
     now: float,
     *,
+    masker: Masker,
     window: Window | None = None,
 ) -> Collected | None:
     data = options.data_dir
@@ -359,7 +361,7 @@ def _collect(
             if reason:
                 withheld[reason] += 1
             else:
-                text, rules = mask(raw_text)
+                text, rules = masker.text(raw_text)
                 masked.update(rules)
                 replacements = sum(rules.values())
             batch.write(
