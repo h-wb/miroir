@@ -3,7 +3,7 @@
 {% block title %}Connections · {{ overview.miroir }}{% endblock %}
 {% block body %}
 <h1>Connections <span class="muted">{{ overview.miroir }}</span></h1>
-<p><a href="/connections/new">Add a connection</a> · <form method="post" action="/deployments/apply" style="display:inline"><button type="submit">Apply deployments</button></form></p>
+<p><a href="/connections/new">Add a connection</a> · <form class="inline" method="post" action="/deployments/apply"><button type="submit">Apply deployments</button></form></p>
 {% if not overview.connections %}
 <p class="muted">No connections yet. Add one to start mirroring your data.</p>
 {% else %}
@@ -24,7 +24,7 @@
     <td>{{ when(s.last_ingestion_success) }}</td>
     <td>{{ badge(c.configuration) }}</td>
     <td>
-      {% if s.last_attempt and s.last_attempt.run_url %}<a href="{{ s.last_attempt.run_url }}" target="_blank" rel="noopener">Prefect run</a>{% endif %}
+      {% if s.last_attempt and s.last_attempt.run_url %}<a href="{{ s.last_attempt.run_url }}" target="_blank" rel="noopener noreferrer">Prefect run</a>{% endif %}
     </td>
   </tr>
   {% endfor %}
@@ -42,7 +42,7 @@
     <td>{% for role, input in a.inputs.items() %}{% if input.connection %}<a href="/connections/{{ input.connection }}">{{ input.connection }}</a>{% else %}<span class="muted">{{ role }} not linked</span>{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}</td>
     <td>{{ badge(a.status.state) }}</td>
     <td>{{ when(a.status.last_build) }}</td>
-    <td>{% for d in a.dashboards %}<a href="{{ d.url }}" target="_blank" rel="noopener">{{ d.name }}</a><br>{% endfor %}</td>
+    <td>{% for d in a.dashboards %}<a href="{{ d.url }}" target="_blank" rel="noopener noreferrer">{{ d.name }}</a><br>{% endfor %}</td>
   </tr>
   {% endfor %}
 </table>

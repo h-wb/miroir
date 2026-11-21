@@ -19,10 +19,13 @@ Miroir (decision 014); history keeps its own words.
 - `src/core/` — the product. `config.py` (validation, revisions,
   `metadata_url()`), `operations.py` (MetadataStore: operations, attempts,
   encrypted secrets, artifact registry; Postgres schema `miroir_meta`),
-  `runner.py` (register → lock → load → record → model), `service.py`
-  (everything both transports call), `secrets.py` (Fernet built-in store,
-  env/fnox backends), `artifacts.py` (content-addressed receipt).
-- `src/web/` — FastAPI app + templates. Token auth (`MIROIR_API_TOKEN`).
+  `runner.py` (register → lock → load → record → model; a package's minimum
+  build interval defers builds, decision 040), `service.py` (everything both
+  transports call), `secrets.py` (Fernet built-in store, env/fnox backends),
+  `artifacts.py` (content-addressed receipt), `timeline.py` (the server's only,
+  read-only, time-limited access to the warehouse).
+- `src/web/` — FastAPI app + templates + `static/`. Token auth (`MIROIR_API_TOKEN`).
+  A strict content security policy: no inline styles or scripts in templates.
   `connections.py` owns guided setup and connection settings; activity/ingestion
   routes stay in `app.py`. Integration delivery metadata drives the forms.
 - `src/cli/` — `pipelines-mirroir`, one CLI over the same service.

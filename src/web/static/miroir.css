@@ -1,0 +1,41 @@
+/* Every page's styles: the content security policy refuses inline styles. */
+:root { color-scheme: light dark; --muted: #888; --ok: #2a7d4f; --warn: #a66a00; --bad: #b3261e; }
+body { font: 15px/1.45 system-ui, sans-serif; max-width: 1100px; margin: 0 auto; padding: 1rem 1.25rem 3rem; }
+header { display: flex; gap: 1.25rem; align-items: baseline; border-bottom: 1px solid #8884; margin-bottom: 1rem; }
+header form { margin-left: auto; }
+a { color: inherit; }
+table { border-collapse: collapse; width: 100%; margin: .5rem 0 1.5rem; }
+th, td { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid #8883; vertical-align: top; }
+th { font-weight: 600; font-size: .85rem; color: var(--muted); }
+.muted { color: var(--muted); font-size: .9em; }
+.badge { display: inline-block; padding: 0 .45rem; border-radius: .6rem; font-size: .8rem; border: 1px solid currentColor; }
+.succeeded, .current, .applied { color: var(--ok); }
+.stale, .not_modelled, .running, .pending, .requested, .saved_not_applied, .skipped { color: var(--warn); }
+.failed, .blocked { color: var(--bad); }
+.notice { padding: .5rem .75rem; border-left: 4px solid var(--ok); background: #8881; }
+.error { padding: .5rem .75rem; border-left: 4px solid var(--bad); background: #8881; white-space: pre-wrap; }
+form.inline { display: inline; }
+.tabs { display: flex; gap: 1.5rem; border-bottom: 1px solid #8884; padding: .5rem 0; margin-bottom: 1.5rem; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr)); gap: 1rem; margin: 1.5rem 0; }
+.choice { display: flex; flex-direction: column; gap: .6rem; border: 1px solid #8885; border-radius: .5rem; padding: 1.25rem; text-decoration: none; }
+.choice:hover { border-color: currentColor; background: #8881; }
+.setting-block { border-top: 1px solid #8883; padding: 1rem 0; margin: 1rem 0; }
+summary { cursor: pointer; font-weight: 600; }
+.upload-form { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; }
+.upload-form label { display: block; }
+.upload-form input[type=file] { display: block; margin-top: .4rem; max-width: 100%; }
+.setup-steps { padding-left: 1.5rem; }
+.setup-steps li { margin: 1.5rem 0; }
+.button-link { display: inline-block; border: 1px solid #8888; border-radius: .3rem; padding: .4rem .8rem; text-decoration: none; }
+button { font: inherit; padding: .2rem .7rem; cursor: pointer; }
+textarea { width: 100%; min-height: 28rem; font: 13px/1.4 ui-monospace, monospace; }
+pre { white-space: pre-wrap; font-size: 12px; }
+code { font-size: .9em; }
+.copy-value { box-sizing: border-box; width: min(48rem, 100%); padding: .4rem; font: 13px/1.4 ui-monospace, monospace; }
+form.stack label { display: block; margin: .8rem 0; }
+form.stack input:not([type=hidden]):not([type=checkbox]) { display: block; width: min(32rem, 100%); padding: .3rem; font: inherit; }
+form.stack fieldset { margin: 1rem 0; padding: 1rem; border: 1px solid #ccc; min-width: 0; }
+.ok { color: var(--ok); }
+.rejected, .check_failed { color: var(--bad); }
+.unknown { color: var(--muted); }
+textarea.short { min-height: 4rem; }

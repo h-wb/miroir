@@ -7,6 +7,7 @@ analysis in the configuration links each role to a connection.
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 from pydantic import Field, field_validator
@@ -78,6 +79,9 @@ class Package:
     # dbt variables from the linked inputs' settings (by role) and validated
     # parameters; unlinked optional roles are absent.
     bind: Callable[[Mapping[str, Any], Any], dict[str, Any]] = _no_variables
+    # Loads inside this interval after a build coalesce into one build at its end
+    # (decision 040). None builds after every load.
+    min_build_interval: timedelta | None = None
 
     def variables(
         self, settings_by_role: Mapping[str, Any], parameters: dict[str, Any]

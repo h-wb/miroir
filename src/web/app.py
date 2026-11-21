@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
@@ -32,6 +33,7 @@ from src.core.reports import (
 )
 from src.core.secrets import SecretKeyError, SecretResolutionError
 from src.core.service import MiroirService
+from src.core.timeline import TimelineDatabase
 from src.integrations.validation import InvalidArtifact
 from src.web.metrics import render_metrics
 
@@ -51,6 +53,19 @@ METRICS_TOKEN_REUSED = (
     "MIROIR_METRICS_TOKEN must differ from MIROIR_API_TOKEN: "
     "a scraper must not hold the admin token"
 )
+# On every response. Pages load styles and scripts from /static only; images may
+# also be blobs the timeline makes from fetched frames (decision 040). No address
+# reaches another host; "no-referrer" would also make browsers post our own forms
+# with "Origin: null", which the login check cannot tell from another site.
+SECURITY_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'self'; img-src 'self' blob:; object-src 'none'; "
+        "base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+    ),
+    "Referrer-Policy": "same-origin",
+    "X-Content-Type-Options": "nosniff",
+}
+STATIC_DIR = Path(__file__).parent / "static"
 # Query parameters of the upload API that are not import options.
 UPLOAD_PARAMETERS = {"import", "name", "format"}
 
@@ -122,8 +137,13 @@ def create_app(
     token: str,
     max_upload_bytes: int = DEFAULT_MAX_UPLOAD,
     metrics_token: str | None = None,
+    timeline: TimelineDatabase | None = None,
 ) -> FastAPI:
-    """`metrics_token` enables `/metrics` for a scraper that holds only it."""
+    """`metrics_token` enables `/metrics` for a scraper that holds only it.
+
+    `timeline` is the read-only warehouse connection; without it the timeline
+    routes say it is not configured.
+    """
     if len(token) < 16:
         raise ValueError("MIROIR_API_TOKEN must be at least 16 characters")
     if metrics_token is not None and hmac.compare_digest(
@@ -171,8 +191,13 @@ def create_app(
     async def require_login(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        # /metrics checks its own token and never accepts the admin's.
-        if request.url.path in ("/login", "/healthz", "/metrics"):
+        # /metrics checks its own token and never accepts the admin's. The login
+        # page needs the stylesheet; nothing under /static is private.
+        if request.url.path in (
+            "/login",
+            "/healthz",
+            "/metrics",
+        ) or request.url.path.startswith("/static/"):
             return await call_next(request)
         # These routes authenticate their connection-scoped bearer before reading bytes.
         if request.method == "POST" and (
@@ -187,6 +212,17 @@ def create_app(
                 return JSONResponse({"error": "unauthorized"}, status_code=401)
             return RedirectResponse("/login", status_code=303)
         return await call_next(request)
+
+    @app.middleware("http")
+    async def security_headers(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        response = await call_next(request)
+        response.headers.update(SECURITY_HEADERS)
+        if request.url.path.startswith("/static/"):
+            # Names carry no version: revalidate (ETag) so a deploy shows at once.
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
     async def known_error(request: Request, error: Exception) -> Response:
         status = error_status(error)
@@ -630,9 +666,12 @@ def create_app(
 
     from src.web.analyses import analysis_pages
     from src.web.connections import connection_pages
+    from src.web.timeline import timeline_pages
 
     app.include_router(connection_pages(service, page))
     app.include_router(analysis_pages(service, page))
+    app.include_router(timeline_pages(timeline, page))
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @app.get("/", response_class=HTMLResponse)
     def overview(request: Request) -> HTMLResponse:

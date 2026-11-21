@@ -1669,3 +1669,162 @@ disk is not skipped when its metadata becomes eligible later.
 
 Contact names are separately opt-in. Where matching address book cards
 disagree, the collector reports ambiguity and sends no name for that handle.
+
+## 040 — A timeline inside Miroir, and its groundwork
+
+Status: accepted, 2026-11-21. Refines 022 and 033. Phase 0 is built; the rest is
+the agreed plan for the phases that follow.
+
+Miroir loads screen frames, their screenshots and soon messages, but the only way
+to look at them is a dashboard that lists rows. The timeline is a page of the
+Miroir server for moving through them by time: a day of screenshots to scrub
+through, a search over screen text that lands on a moment, and later a
+conversation read in order with its attachments in place.
+
+**What it is made of.**
+
+- *Data:* one analysis package, `timeline` (022), with optional input roles
+  (screen, messages, browser, music and the like). It builds incremental tables
+  indexed by time, group and text: `screen_frames` (the only place screen text is
+  indexed), `events` (the same columns for every source: one row per message,
+  visit or listen, and one per app session for the screen, not one per frame),
+  a `days` rollup, and `apps` (bundle identifier to a readable name). Each source
+  reaches `events` through one short SQL model of its own. Text search uses
+  Postgres's `simple` configuration. Times are shown in the package's timezone.
+- *Reading:* the server reads the warehouse through a role that may only select
+  from the timeline's tables, granted by the models themselves (dbt `grants`).
+  The server never read the warehouse before this. A core module,
+  `src/core/timeline.py`, holds that access; the routes are in `src/web/`.
+- *Images:* thumbnails in two sizes (360 and 1280 pixels wide, WebP), made once by
+  the background worker, stored in the bucket beside the originals, and streamed
+  by the server behind the login with `Cache-Control: private,
+  max-age=31536000, immutable`. Logging out sends `Clear-Site-Data: "cache"`.
+  Video and other large files keep the redirect to a short signed link, so the
+  storage serves range requests.
+- *Stored media:* the worker that makes thumbnails also writes one warehouse row
+  per stored file, so a model can tell an attachment that was uploaded from one
+  that never was. This revises 033's "the bucket is the record" for the timeline:
+  the bucket stays the record of what exists, and this table is the worker's copy
+  of it for the models to join.
+- *Pages:* server-rendered templates, htmx 2 for fragments, and three small
+  JavaScript modules (scrubber, lanes, thread). No build step. Usable on a phone.
+- *Conversations* are keyed by the chat's own identifier, never Apple's chat ID,
+  which differs between macOS versions (038).
+
+**Builds wait for a quiet moment.** Every analysis linking a connection builds
+after each of its loads (022), and messages are meant to arrive about every
+minute. A package may therefore state a minimum interval between builds. A load
+that arrives within the interval after the latest build started does not build;
+it makes sure one build is scheduled at the interval's end, and every load
+arriving before then joins that build. The timeline will use a few minutes, so it
+is a few minutes behind the warehouse. A package that states no interval builds
+after every load, exactly as before. In detail:
+
+- The interval runs from the start of the latest build of that analysis that was
+  not blocked, inline or scheduled.
+- The scheduled build is an ordinary `models` operation, a child of the load that
+  scheduled it, with its earliest start in its options. It runs as a Prefect flow
+  run of that load's deployment, scheduled for that time, with the operation ID as
+  its idempotency key, and is observed like any submission.
+- A load joins a build that has not started, was planned for the analysis's
+  current receipt and its connection's current settings (otherwise it would be
+  blocked), and was due no longer than one interval ago: a build whose run
+  is still starting covers the load, because it will start after the load
+  committed. One due longer ago may never run and is not joined.
+- When the build cannot be deferred safely, the load builds now, as without an
+  interval: when it does not run in a Prefect deployment (local runs, the
+  subprocess executor), when the schedule is refused (the planned operation is
+  then closed as blocked, `NotScheduled`), or when the metadata store fails. A
+  redundant build costs a few minutes of dbt; a missing one leaves the analysis
+  stale with nothing to rebuild it.
+- Loads of different connections decide under an advisory lock per analysis, so
+  two of them do not schedule two builds. A load that cannot take it within a
+  minute builds now.
+- A rebuild requested in the interface ignores the interval.
+- A load that deferred every build records its transformation as `skipped`, with
+  the detail `Analyses: <id> deferred`; the analysis shows as running until the
+  scheduled build has run.
+
+**Phase 0, the groundwork, contains:**
+
+- Static files at `/static/`, served without the login (the login page needs the
+  stylesheet; nothing there is private) and revalidated on each use
+  (`Cache-Control: no-cache`, with an ETag), because their names carry no version.
+  The stylesheet moved out of `base.html`; the two copy buttons and the error
+  page's Back link moved their inline script to `/static/miroir.js`; two inline
+  styles became classes. Every page looks and works as before.
+- On every response: `Content-Security-Policy: default-src 'self'; img-src 'self'
+  blob:; object-src 'none'; base-uri 'none'; form-action 'self';
+  frame-ancestors 'none'`, `Referrer-Policy: same-origin`, and
+  `X-Content-Type-Options: nosniff`. Outbound links also carry `rel=noreferrer`.
+  The plan said `no-referrer`. Either keeps every Miroir address from other
+  hosts, but `no-referrer` also makes browsers post Miroir's own forms with
+  `Origin: null`, so every post, logging out included, would rest on
+  `Sec-Fetch-Site` alone (the setup page already chose `same-origin` for this
+  reason). `same-origin` keeps a real origin on them.
+  The storage host is not in the policy yet: no page shows video before the
+  conversations phase.
+- htmx 2.0.11, vendored as `src/web/static/htmx.min.js`, with its version and
+  SHA-256 in `VENDORED.md` beside it, checked by a test. `base.html` configures it
+  with `allowEval: false`, `includeIndicatorStyles: false`, `allowScriptTags:
+  false` and `selfRequestsOnly: true`. No page loads it yet.
+- The read-only warehouse connection: `MIROIR_TIMELINE_DATABASE_URL`, or the parts
+  `MIROIR_TIMELINE_DATABASE__{HOST,PORT,DATABASE,USERNAME,PASSWORD}` composed as
+  for the metadata store. It must be PostgreSQL and is opened with psycopg2. Every
+  session sets `statement_timeout` to 5 seconds and
+  `default_transaction_read_only`, and these replace any `options` in the URL, so
+  neither depends on the role. Without the setting, `/timeline` and
+  `/api/timeline/health` say the timeline is not configured (503) and nothing else
+  changes; the server still starts if the warehouse is down. The health check is
+  one query that reads back the session's read-only flag and time limit.
+- `ObjectStore.get` (bounded by a size the caller states) and `ObjectStore.put`,
+  for the worker's thumbnails. The web process does not call them.
+- The minimum build interval, above, in the shared build code. No package states
+  one yet.
+- Import rules: `src/core/timeline.py` imports nothing of the server's but
+  `src.core.config` and `src.core.operations`, and only `src.web` and `src.cli`
+  import it; nothing in `src/web/` or the timeline module imports an image library.
+
+Choices made where the plan left them open, each the more conservative one: the
+referrer policy above; the time limit is fixed in code rather than a setting; the policy has the extra
+directives above; htmx gets two more restrictions than the plan named and is
+loaded by no page; the timeline routes need the login like every other page and
+are not linked from the header until there is something to see; a deferred
+build that cannot be scheduled is built at once.
+
+Considered and left out:
+
+- *A single-page application (SvelteKit or similar).* A Node toolchain in the
+  image and its dependency churn, for pages that templates and htmx serve.
+- *A signed storage link per image.* No browser cache across links, and a second
+  host in the policy.
+- *Thumbnails made on request by the web server.* It would decode images and
+  spend CPU in the process that serves the login. The worker makes them.
+- *imgproxy*, whose result cache is a paid feature, and *thumbnails made by the
+  Mac* (`sips`), which a copied archive would lack.
+- *A declarative timeline source on the connector* (time column, title, text,
+  media, group, renderer). About three sources could use it today; one SQL model
+  per source does the same with no plumbing. Deferred until writing those models
+  becomes the cost.
+- *Building after every load*, as other analyses do: with minute-by-minute
+  deliveries, builds would queue behind each other.
+- *A periodic build instead of an interval*: it builds when nothing arrived and
+  adds a schedule to keep in step with the configuration.
+
+Deferred: contact sheets per hour, collapsing near-duplicate frames, trigram
+search, video thumbnails, a timezone per event (until then, travel days are
+shifted), location with self-hosted map tiles.
+
+Consequences:
+
+- Screenshots that are not masked stay in the browser's cache for a long time on
+  each device used; logging out clears it. Whether Safari honours
+  `Clear-Site-Data` is still to be checked; if not, only thumbnails are cached.
+- A scheduled build runs through the connection whose load scheduled it. Like any
+  request, it is blocked if that connection's settings change before it starts,
+  and the analysis stays stale until its next load or a rebuild.
+- A scheduled build that Prefect loses is closed by `refresh` like any lost run;
+  the loads that joined it are built by the next load or a rebuild.
+- The read-only role and its settings belong to the installation. The schema
+  privilege (`USAGE`) on the timeline's schema is not something dbt `grants`
+  gives and has to be granted with it.

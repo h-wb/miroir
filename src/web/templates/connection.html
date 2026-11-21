@@ -23,7 +23,7 @@
 {% for a in c.analyses %}
 <p><a href="/analyses/{{ a.id }}"><strong>{{ a.id }}</strong></a> · {{ a.package.title }} {{ badge(a.status.state) }}
   {% if a.status.last_build %}<span class="muted">built {{ when(a.status.last_build) }}</span>{% endif %}
-  {% for d in a.dashboards %} · <a href="{{ d.url }}" target="_blank" rel="noopener">{{ d.name }}</a>{% endfor %}</p>
+  {% for d in a.dashboards %} · <a href="{{ d.url }}" target="_blank" rel="noopener noreferrer">{{ d.name }}</a>{% endfor %}</p>
 {% else %}<p class="muted">No analysis links this connection. <a href="/analyses/new">Add one</a>.</p>{% endfor %}
 <p class="muted">Each linked analysis rebuilds after this connection loads.</p>
 </section>
@@ -83,7 +83,7 @@
     <tr>
       <td>{% if loop.first %}{{ when(o.created_at) }}{% endif %}</td>
       <td>{% if loop.first %}{{ o.kind }}{% if o.artifact_name %} <span class="muted">{{ o.artifact_name }}</span>{% endif %} <span class="muted">via {{ o.origin }}</span>
-        {% if o.run_url %}<div><a href="{{ o.run_url }}" target="_blank" rel="noopener">Prefect run</a></div>{% endif %}{% endif %}</td>
+        {% if o.run_url %}<div><a href="{{ o.run_url }}" target="_blank" rel="noopener noreferrer">Prefect run</a></div>{% endif %}{% endif %}</td>
       {% if a %}<td>#{{ a.number }}</td>{{ attempt_cells(a) }}{% else %}<td colspan="4">{{ badge("requested") }}</td>{% endif %}
     </tr>
     {% endfor %}

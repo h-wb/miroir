@@ -1,10 +1,18 @@
+import io
 import unittest
 from urllib.parse import parse_qs, urlsplit
 
 from botocore.exceptions import ClientError
+from botocore.response import StreamingBody
 from botocore.stub import Stubber
 
 from src.adapters.s3 import S3ObjectStore
+from src.core.media import ObjectTooLarge, StoredObject
+from tests.fakes import FakeObjectStore
+
+
+def streamed(data: bytes) -> StreamingBody:
+    return StreamingBody(io.BytesIO(data), len(data))
 
 
 class S3AdapterTests(unittest.TestCase):
@@ -37,6 +45,64 @@ class S3AdapterTests(unittest.TestCase):
             with self.assertRaises(ClientError):
                 self.store.head(params["Key"])
             stub.assert_no_pending_responses()
+
+    def test_get_and_put(self):
+        name = "screen/screenshots.w360/dir/a.webp"
+        params = {"Bucket": "media", "Key": name}
+        with Stubber(self.store.client) as stub:
+            stub.add_response(
+                "put_object",
+                {"ETag": '"abc"'},
+                {**params, "Body": b"thumb", "ContentType": "image/webp"},
+            )
+            self.store.put(name, b"thumb", "image/webp")
+            stub.add_response(
+                "get_object",
+                {
+                    "Body": streamed(b"thumb"),
+                    "ContentLength": 5,
+                    "ContentType": "image/webp",
+                    "ETag": '"abc"',
+                },
+                params,
+            )
+            self.assertEqual(
+                self.store.get(name, 5), StoredObject(b"thumb", "image/webp", '"abc"')
+            )
+            for code in ("404", "NoSuchKey", "NotFound"):
+                stub.add_client_error(
+                    "get_object", code, http_status_code=404, expected_params=params
+                )
+                self.assertIsNone(self.store.get(name, 5))
+            stub.add_client_error(
+                "get_object", "403", http_status_code=403, expected_params=params
+            )
+            with self.assertRaises(ClientError):
+                self.store.get(name, 5)
+            # A declared length past the limit is refused before reading.
+            stub.add_response(
+                "get_object", {"Body": streamed(b"thumb"), "ContentLength": 5}, params
+            )
+            with self.assertRaises(ObjectTooLarge):
+                self.store.get(name, 4)
+            # So is a body longer than it declared.
+            stub.add_response(
+                "get_object",
+                {"Body": streamed(b"thumbnail"), "ContentLength": 3},
+                params,
+            )
+            with self.assertRaises(ObjectTooLarge):
+                self.store.get(name, 4)
+            stub.assert_no_pending_responses()
+
+    def test_the_test_store_behaves_like_the_adapter(self):
+        store = FakeObjectStore()
+        self.assertIsNone(store.get("a/b.webp", 10))
+        store.put("a/b.webp", b"thumb", "image/webp")
+        self.assertEqual(store.head("a/b.webp"), 5)
+        self.assertEqual(store.get("a/b.webp", 5).body, b"thumb")
+        with self.assertRaises(ObjectTooLarge):
+            store.get("a/b.webp", 4)
 
     def test_both_clients_bound_storage_attempts(self):
         for client in (self.store.client, self.store.link_client):

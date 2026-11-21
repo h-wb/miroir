@@ -6,6 +6,10 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
+from src.core.media import ObjectTooLarge, StoredObject
+
+MISSING = {"404", "NoSuchKey", "NotFound"}
+
 
 class S3ObjectStore:
     def __init__(
@@ -38,9 +42,33 @@ class S3ObjectStore:
             response = self.client.head_object(Bucket=self.bucket, Key=name)
             return cast(int, response["ContentLength"])
         except ClientError as error:
-            if error.response["Error"]["Code"] in {"404", "NoSuchKey", "NotFound"}:
+            if error.response["Error"]["Code"] in MISSING:
                 return None
             raise
+
+    def get(self, name: str, max_bytes: int) -> StoredObject | None:
+        try:
+            response = self.client.get_object(Bucket=self.bucket, Key=name)
+        except ClientError as error:
+            if error.response["Error"]["Code"] in MISSING:
+                return None
+            raise
+        body = response["Body"]
+        try:
+            if response.get("ContentLength", 0) > max_bytes:
+                raise ObjectTooLarge(f"Stored object exceeds {max_bytes} bytes")
+            # The declared length is checked; reading one byte past it checks the body.
+            data = body.read(max_bytes + 1)
+        finally:
+            body.close()
+        if len(data) > max_bytes:
+            raise ObjectTooLarge(f"Stored object exceeds {max_bytes} bytes")
+        return StoredObject(data, response.get("ContentType"), response.get("ETag"))
+
+    def put(self, name: str, body: bytes, content_type: str) -> None:
+        self.client.put_object(
+            Bucket=self.bucket, Key=name, Body=body, ContentType=content_type
+        )
 
     def presign_put(self, name: str, content_type: str, expires: int) -> str:
         url = self.link_client.generate_presigned_url(

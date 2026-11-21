@@ -634,6 +634,41 @@ To show a frame's screenshot in a dashboard, build the view address from the row
 `https://<miroir>/media/<connection>/screenshots/<image_path>`. It works in a
 browser that is logged in to Miroir.
 
+### Timeline: reading the warehouse
+
+The timeline (decision 040) is a page of the server that reads the warehouse. So
+far it only checks that it can. It is off until the server's environment names a
+read-only connection:
+
+- `MIROIR_TIMELINE_DATABASE_URL`, a `postgresql://` URL; or
+- `MIROIR_TIMELINE_DATABASE__HOST`, `__USERNAME` and `__PASSWORD` (required) and
+  `__PORT` and `__DATABASE` (default 5432 and the username), composed the way the
+  metadata URL is. The URL wins when both are set.
+
+The role should be able to select from the timeline's tables and nothing else, and
+should have `statement_timeout = '5s'` and `default_transaction_read_only = on`.
+The server sets both on every session it opens anyway, whatever the role or the
+URL say, so one slow search cannot hold a connection and a mistaken grant cannot
+lead to a write.
+
+| Route | What |
+|---|---|
+| `GET /timeline` | For a logged-in administrator: whether the timeline is configured and its database reachable and read-only |
+| `GET /api/timeline/health` | The same as JSON; 200 when ready, 503 when not configured, unreachable or writable |
+
+The server starts without the warehouse: a database that is down only shows here.
+
+### Web pages and the content security policy
+
+Every response carries `Content-Security-Policy: default-src 'self'; img-src
+'self' blob:; ...` and `Referrer-Policy: same-origin` (no address of a Miroir page reaches another
+host). The policy refuses inline
+styles and scripts, so templates load them from `src/web/static/` (served at
+`/static/`, without the login): `miroir.css`, `miroir.js` and the vendored
+`htmx.min.js`, whose version and SHA-256 are in `VENDORED.md`. A template with a
+`style` attribute, a `<style>` element or an `on…=` handler fails
+`tests/test_web_static.py`.
+
 ## Validate in an isolated environment
 
 Use a task-specific virtualenv so this does not change a shared worker environment:

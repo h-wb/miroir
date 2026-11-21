@@ -658,6 +658,38 @@ class MetadataStore:
             "last_detail": latest.transformation_detail if latest is not None else None,
         }
 
+    def last_build_started(self, miroir_id: str, analysis_id: str) -> datetime | None:
+        """When the latest build of an analysis that was not blocked began."""
+        with self.engine.connect() as db:
+            started = db.execute(
+                sa.select(sa.func.max(attempts.c.started_at))
+                .select_from(attempts.join(operations))
+                .where(
+                    operations.c.miroir_id == miroir_id,
+                    operations.c.analysis_id == analysis_id,
+                    operations.c.kind == "models",
+                    attempts.c.ingestion != "blocked",
+                )
+            ).scalar()
+        return _aware(started)
+
+    def unstarted_builds(self, miroir_id: str, analysis_id: str) -> list[Operation]:
+        """Builds of an analysis that were requested and have no attempt yet."""
+        with self.engine.connect() as db:
+            ids = db.execute(
+                sa.select(operations.c.id)
+                .select_from(operations.outerjoin(attempts))
+                .where(
+                    operations.c.miroir_id == miroir_id,
+                    operations.c.analysis_id == analysis_id,
+                    operations.c.kind == "models",
+                    attempts.c.id.is_(None),
+                )
+                .order_by(operations.c.created_at)
+            ).scalars()
+            found = list(ids)
+        return [self.get_operation(operation_id) for operation_id in found]
+
     def last_executed_revision(self, miroir_id: str, connection_id: str) -> str | None:
         """Connection configuration revision used by the latest attempt that ran."""
         with self.engine.connect() as db:
