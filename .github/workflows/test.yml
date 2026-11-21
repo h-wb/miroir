@@ -33,11 +33,13 @@ jobs:
 
       - name: Lint
         run: |
-          uv run --locked ruff check $SLICE tests scripts
-          uv run --locked ruff format --check $SLICE tests scripts
+          uv run --locked ruff check $SLICE tests scripts collector
+          uv run --locked ruff format --check $SLICE tests scripts collector
 
       - name: Types
-        run: uv run --locked mypy --follow-imports=silent $SLICE
+        run: |
+          uv run --locked mypy --follow-imports=silent $SLICE
+          uv run --locked mypy --strict --config-file collector/pyproject.toml collector/miroir_collector
 
       - name: Tests
         run: |
