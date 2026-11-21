@@ -32,6 +32,10 @@ models:
     browser:
       +schema: browser
       +materialized: table
+    # Built only for a Miroir analysis (each model checks miroir_namespace)
+    timeline:
+      +schema: timeline
+      +materialized: table
 
 vars:
   # Local time for the listening and biking data (the health data carries its own offsets)

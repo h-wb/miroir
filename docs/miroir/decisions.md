@@ -1792,6 +1792,46 @@ loaded by no page; the timeline routes need the login like every other page and
 are not linked from the header until there is something to see; a deferred
 build that cannot be scheduled is built at once.
 
+**Phase 1a, the package's screen and browser data (2026-11-21).** The `timeline`
+package reads `screen` (ScreenMemory) and `browser` (browser history), both
+optional, and states the five-minute interval. Where the plan left a choice open,
+it was made this way, the more conservative way where it touched correctness,
+privacy or cost:
+
+- *At least one input.* A package whose inputs are all optional cannot be
+  configured with none linked: it would have nothing to build from.
+- *A frame's app* is the app usage row of the same second, the first by name if
+  there are several, or none. Frames without an app neither start nor end a
+  session; no app is carried over from an earlier frame. The collector's own
+  exclusion of password managers matches frames to apps the same way.
+- *An app session* is a run of frames of one app with no pause over five minutes,
+  named after its first frame. Screen text stays out of `events`; a session's
+  title is its app.
+- *Late rows.* Builds resume from the newest load dlt lists as complete
+  (`_dlt_loads`), recorded on every row they write, so a load still running waits
+  for the next build. A late frame or app usage row recomputes only the sessions
+  between the two nearest boundaries it cannot move; a session that no longer
+  exists is kept by the screen's own model as a deleted row, which `events` and
+  `days` remove. A test checks that a series of incremental builds gives the same
+  tables as one first build.
+- *Indexes on raw tables.* dlt indexes only its row ID, so the models create the
+  indexes they look rows up by (load ID, second, image path, page, dlt's list of
+  loads) on the raw tables when missing. No model reads all frames on an ordinary build; an index
+  on the image path also spares dlt's merge a full read.
+- *Visits* are navigations only (no redirects, reloads, embeds or framed links);
+  the site comes from the address, not the origins table; a page's new title
+  reaches its visits.
+- *The reader role* is the analysis parameter `reader_role`, a plain lower-case
+  role name (`public` and `pg_*` refused); empty grants nothing and revokes the
+  `SELECT` an earlier build gave. Each table grants `SELECT` through dbt `grants`;
+  one model grants the schema's `USAGE` in a post-hook, one model only, as two
+  grants on one schema at once fail.
+- *Connection IDs* reach the models (`miroir_connections`) only for a package
+  that asks, so the receipts of the other packages do not change.
+- *No data tests on `screen_frames` or `events`*: each would read the whole table
+  on every build. Unique indexes hold their keys.
+- *Legacy builds* (no analysis) leave the timeline's models out.
+
 Considered and left out:
 
 - *A single-page application (SvelteKit or similar).* A Node toolchain in the
@@ -1827,4 +1867,8 @@ Consequences:
   the loads that joined it are built by the next load or a rebuild.
 - The read-only role and its settings belong to the installation. The schema
   privilege (`USAGE`) on the timeline's schema is not something dbt `grants`
-  gives and has to be granted with it.
+  gives; since phase 1a a post-hook of the package grants it.
+- Incremental tables keep rows built by older model code: a change to the models
+  reaches old rows only once their tables are built from scratch, which Miroir
+  cannot request yet. A load whose ID is older than one already built is not read
+  until then either.

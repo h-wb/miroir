@@ -527,6 +527,9 @@ def _resolve_analyses(
         ]
         if missing:
             raise ConfigurationError(f"{prefix}.inputs: link the required inputs")
+        if not inputs:
+            # A package of optional inputs only still needs one to build from.
+            raise ConfigurationError(f"{prefix}.inputs: link at least one input")
         try:
             parameters = package.parameters.model_validate(analysis.parameters)
         except ValidationError as error:

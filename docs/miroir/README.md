@@ -349,9 +349,10 @@ Analyses are top-level configuration entries. For example, with connections name
 ]
 ```
 
-Packages are `music`, `health`, `github`, `biking`, `browser`, and `crossovers`.
-The first five require one input. Crossovers requires Health and optionally reads
-music and biking. Unlinked inputs are empty and their measures are unknown (null),
+Packages are `music`, `health`, `github`, `biking`, `browser`, `crossovers`, and
+`timeline`. The first five require one input. Crossovers requires Health and
+optionally reads music and biking. The timeline's inputs are all optional, and at
+least one must be linked (see *The timeline package* below). Unlinked inputs are empty and their measures are unknown (null),
 including yearly counts and late-listening categories. They never fall back to
 legacy datasets or another account. A linked input with no successful load is shown
 on the analysis page. Health dates keep the exported local date; the analysis's
@@ -657,6 +658,65 @@ lead to a write.
 | `GET /api/timeline/health` | The same as JSON; 200 when ready, 503 when not configured, unreachable or writable |
 
 The server starts without the warehouse: a database that is down only shows here.
+
+### The timeline package
+
+The `timeline` analysis package builds the tables the timeline reads. Its inputs
+are `screen` (a ScreenMemory connection) and `browser` (a browser history
+connection), both optional; link one or both:
+
+```json
+{"id": "timeline", "package": "timeline",
+ "inputs": {"screen": "screen", "browser": "browser"},
+ "timezone": "America/Toronto",
+ "parameters": {"reader_role": "miroir_timeline"}}
+```
+
+It writes these relations to `miroir_<analysis>_<identity>_timeline`:
+
+| Relation | What |
+|---|---|
+| `screen_frames` | One row per frame: `captured_at`, `bundle_id` (the app usage row of the same second, or null), `text` (null when withheld), `withheld`, `masked`, `image_path`. Screen text is indexed only here: search with `to_tsvector('simple', text)`, the indexed expression. |
+| `events` | One row per event, the same columns for every source: `source`, `connection`, `event_id`, `started_at`, `ended_at`, `kind`, `title`, `body`, `media_kind`, `media_key`, `group_key`, `payload`, `search`. The screen gives one row per app session (`kind` `app_session`, `group_key` the bundle, `media_key` the first frame), not one per frame; the browser one per visit (`group_key` the site). `search` weights the title over the body, `simple` configuration. |
+| `days` | Per local day, in the analysis's timezone, and source: `events` that started that day and, for the screen, `frames`. |
+| `apps` | Bundle identifier to `name` and `colour`, for a list of common apps and every app seen. Others are named from their identifier, with a palette colour. |
+
+An app session is a run of frames of one app with no pause over five minutes.
+Frames without an app neither start nor end one. Redirects, reloads, embeds and
+framed links are not visits. Columns whose names start with `_` are the builds'
+own bookkeeping.
+
+It builds at most every five minutes, however many loads arrive (decision 040),
+and each build is incremental: it reads only what loads completed since the last
+build. A resent frame replaces its row; an app usage row that arrives after its
+frame gives the frame its app and moves the sessions around it; a session still
+open at the last build grows; a page's new title reaches its visits. The tables
+are then what a first build over the same rows gives. A load still running is
+read by the next build, once dlt lists it as complete. `timeline_screen` and
+`timeline_browser` are the two sources' own models and are not meant to be read.
+
+Builds create indexes on the raw tables they look rows up by (load, second,
+image path; visit page, page id; dlt's list of loads) when those are missing. On
+a test machine with a million frames, an ordinary build took under a second per
+model; a million frames arriving at once took about 40 seconds, and a first build
+over them 11.
+
+**Read access.** `reader_role` names the role the server reads the timeline with
+(the installation uses `miroir_timeline`). Each build grants it `SELECT` on the
+four relations and `USAGE` on their schema, so nothing has to be granted by hand.
+It cannot read the raw tables or the two source models. The role must exist
+before the build that names it, or the build fails. Empty, nothing is granted, and
+a build revokes the `SELECT` an earlier build gave; it leaves the schema's `USAGE`.
+
+Limits:
+
+- A changed list of known apps names new sessions only, and a change to these
+  models reaches old rows only after their tables are dropped and built again;
+  Miroir has no full refresh yet. Changing the timezone recounts `days` by itself.
+- A load whose ID is older than one already built (a failed load retried after a
+  later one succeeded) is not read until those tables are built again.
+- The timeline is built only for a Miroir analysis; the nightly legacy build
+  leaves these models out.
 
 ### Web pages and the content security policy
 

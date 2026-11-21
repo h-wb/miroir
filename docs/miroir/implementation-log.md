@@ -2137,3 +2137,60 @@ Not done: the read-only role in the installation (home-ops) and its settings; th
 `timeline` package and its models, grants and schema privilege; thumbnails and
 the stored-media table; any timeline page beyond its status. The Safari check of
 `Clear-Site-Data` belongs to the phase that caches images.
+
+## 2026-11-21 — The timeline's screen and browser data (decision 040, phase 1a)
+
+The first data for the timeline: the `timeline` analysis package, for the screen
+and browser sources. No query code, route or page reads it yet.
+
+Built:
+
+- **The package**, in the catalogue: optional `screen` (screenmemory) and
+  `browser` (browser_history) inputs, a five-minute minimum build interval (the
+  first package to state one), and a `reader_role` parameter. A package whose
+  inputs are all optional now needs at least one linked. Only packages that ask
+  get the linked connection IDs as a dbt variable, so other receipts are unchanged.
+- **The models**, in `dbt/models/timeline/`: `screen_frames` (one row per frame,
+  its app from the app usage row of the same second; a time index and a GIN index
+  on `to_tsvector('simple', text)`), `timeline_screen` (app sessions) and
+  `timeline_browser` (visits), `events` (their union, merged on `event_id`, with
+  a weighted `search` column), `days` (per local day and source) and `apps` (a
+  list of common apps plus every app seen, with a fallback name and colour).
+  Macros in `dbt/macros/timeline.sql`, including a custom incremental strategy
+  that replaces rows by key and removes the ones marked deleted.
+- **Incremental builds.** Every model resumes from the newest load dlt lists as
+  complete, recorded on the rows it writes. A late frame or app usage row
+  recomputes only the sessions between the nearest boundaries it cannot move;
+  removed sessions and visits that are no longer navigations reach `events` as
+  deleted rows. Watermarks and the windows to recompute are read first and
+  inlined as literals: as parameters, the planner read all frames to join them.
+  The models create the raw-table indexes they need (dlt indexes only `_dlt_id`).
+- **Read access.** The four output tables grant `SELECT` to the reader role
+  through dbt `grants`; `screen_frames` grants `USAGE` on the schema in a post-hook.
+  A first version granted it from every output model; parallel threads then failed
+  with `tuple concurrently updated`.
+
+Validation: `tests/test_timeline_models.py` (5 tests). Four loads through the
+receiving path, from invented ScreenMemory and browser batches, cover a session
+open at a build that grows at the next, an app usage row arriving after its
+frame, a resent frame, a late frame joining two sessions, one splitting a
+session, one moving a session's start, a page renamed without a new visit, a
+reload that is not a visit, and a cleared visit's ID reused by an embed. A load
+still running is not read until `_dlt_loads` lists it. A first build of a
+second analysis over the same rows gives the same tables; screen-only and
+browser-only analyses build; a changed timezone recounts `days`. A role created
+in the test database can select the four tables after a build, cannot read the
+raw tables or the source models, and loses `SELECT` when the parameter is
+emptied. Builds without a Miroir analysis list no timeline model.
+
+Outside the suite (scratch scripts, invented rows only): 28 random seeds of five
+loads each, with late frames, late app rows and resent frames, gave the same
+tables incrementally as from scratch, including with the window cap lowered to
+force its fallback. With a million frames, `auto_explain` showed no full read of
+`frames`, `app_usage`, `screen_frames` or `events` on an ordinary build. Each
+model took under 0.3 s; a million frames arriving at once took about 40 s, a
+first build over them 11 s.
+
+Not done: thumbnails, `media_objects`, queries in `src/core/timeline.py`,
+routes, pages; the Messages, music and other sources. The installation still has
+to create the role and set `reader_role` (decision 040).

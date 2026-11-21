@@ -58,6 +58,10 @@ def analysis_plan(analysis: ResolvedAnalysis) -> AnalysisPlan:
             analysis.config.parameters,
         ),
     }
+    if package.connection_ids:
+        variables["miroir_connections"] = {
+            role: connection.config.id for role, connection in analysis.inputs.items()
+        }
     if any(not spec.required for spec in package.inputs.values()):
         # Models report measures of unlinked inputs as unknown, not zero.
         variables["miroir_inputs"] = sorted(analysis.inputs)
