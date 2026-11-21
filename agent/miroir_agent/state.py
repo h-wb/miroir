@@ -1,53 +1,74 @@
-"""Atomic file state and a per-collector lock."""
+"""The durable state and lock of one collector."""
 
 import fcntl
 import json
-import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from tempfile import NamedTemporaryFile
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import ValidationError
+
+from .errors import Reason, Step
+from .files import atomic_path
+from .models import Model
+
+Section = Literal["rows", "media", "resend"]
 
 
-@contextmanager
-def atomic_path(path: Path) -> Iterator[Path]:
-    with NamedTemporaryFile(dir=path.parent, delete=False) as file:
-        temporary = Path(file.name)
+class StateError(Exception):
+    """A state file could not be read or had an invalid shape."""
+
+
+class Pending(Model):
+    cursor: dict[str, Any]
+    counts: dict[str, Any]
+    more: bool
+
+
+class _Position(Model):
+    ts: int
+
+
+class StatusEntry(Model):
+    time: str | None = None
+    outcome: (
+        Literal["delivered", "nothing_new", "collected", "failed", "already_running"]
+        | None
+    ) = None
+    counts: dict[str, Any] | None = None
+    http_status: int | None = None
+    artifact_id: str | None = None
+    new: bool | None = None
+    step: Step | None = None
+    reason: Reason | None = None
+    window: list[int] | None = None
+    batches: int | None = None
+
+
+def _validate[M: Model](model: type[M], raw: object) -> M:
     try:
-        yield temporary
-        # The caller has closed the writer, flushing its buffers and any gzip footer.
-        with temporary.open("r+b") as file:
-            os.fsync(file.fileno())
-        os.replace(temporary, path)
-        directory = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-    finally:
-        temporary.unlink(missing_ok=True)
+        return model.model_validate(raw)
+    except ValidationError:
+        raise StateError("Invalid agent state") from None
 
 
-def write_json(path: Path, value: dict[str, Any]) -> None:
-    with atomic_path(path) as temporary:
-        temporary.write_text(json.dumps(value) + "\n", encoding="utf-8")
-
-
-def read_json(path: Path) -> dict[str, Any] | None:
+def _read(path: Path) -> dict[str, Any] | None:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return None
-    if type(data) is not dict:
-        raise ValueError("Invalid agent state")
+    except (OSError, ValueError, RecursionError):
+        raise StateError("Unreadable agent state") from None
+    if not isinstance(data, dict):
+        raise StateError("Invalid agent state")
     return data
 
 
-def outside_source(path: Path, source: Path) -> None:
-    if path.resolve().is_relative_to(source.resolve()):
-        raise ValueError("Agent output cannot be inside the source folder")
+def _write(path: Path, value: dict[str, Any]) -> None:
+    with atomic_path(path) as temporary:
+        temporary.write_text(json.dumps(value) + "\n", encoding="utf-8")
 
 
 @dataclass(frozen=True)
@@ -55,15 +76,15 @@ class State:
     directory: Path
 
     @property
-    def cursor(self) -> Path:
+    def _cursor(self) -> Path:
         return self.directory / "cursor.json"
 
     @property
-    def status(self) -> Path:
+    def _status(self) -> Path:
         return self.directory / "status.json"
 
     @property
-    def media_cursor(self) -> Path:
+    def _media(self) -> Path:
         return self.directory / "media_cursor.json"
 
     @property
@@ -71,21 +92,80 @@ class State:
         return self.directory / "spool" / "batch.jsonl.gz"
 
     @property
-    def batch_cursor(self) -> Path:
+    def _batch_cursor(self) -> Path:
         return self.batch.with_name("batch.cursor.json")
 
     @property
-    def pending(self) -> bool:
-        return self.batch.is_file() and self.batch_cursor.is_file()
+    def _lock(self) -> Path:
+        return self.directory / "lock"
+
+    @property
+    def paths(self) -> tuple[Path, ...]:
+        """Every path this state writes, for the source-folder guard."""
+        return (
+            self.directory,
+            self._lock,
+            self.batch.parent,
+            self.batch,
+            self._batch_cursor,
+            self._cursor,
+            self._media,
+            self._status,
+        )
+
+    def read_cursor(self) -> dict[str, Any] | None:
+        return _read(self._cursor)
+
+    def save_cursor(self, cursor: dict[str, Any]) -> None:
+        _write(self._cursor, cursor)
+
+    def has_pending(self) -> bool:
+        return self.batch.is_file() and self._batch_cursor.is_file()
+
+    def pending(self) -> Pending | None:
+        if not self.has_pending():
+            return None
+        return _validate(Pending, _read(self._batch_cursor))
+
+    def prepare_spool(self) -> None:
+        self.batch.parent.mkdir(mode=0o700, exist_ok=True)
+
+    def save_pending(self, pending: Pending) -> None:
+        _write(self._batch_cursor, pending.model_dump())
 
     def clear_spool(self) -> None:
         self.batch.unlink(missing_ok=True)
-        self.batch_cursor.unlink(missing_ok=True)
+        self._batch_cursor.unlink(missing_ok=True)
+
+    def media_position(self) -> int | None:
+        raw = _read(self._media)
+        return None if raw is None else _validate(_Position, raw).ts
+
+    def save_media_position(self, position: int) -> None:
+        _write(self._media, {"ts": position})
+
+    def status(self) -> dict[str, Any] | None:
+        return _read(self._status)
+
+    def record(self, section: Section, entry: StatusEntry) -> None:
+        try:
+            previous = self.status() or {}
+        except StateError:
+            previous = {}
+        value = entry.model_dump(exclude_unset=True)
+        if section == "rows":
+            value.update(
+                {key: previous[key] for key in ("media", "resend") if key in previous}
+            )
+        else:
+            previous[section] = value
+            value = previous
+        _write(self._status, value)
 
     @contextmanager
     def lock(self) -> Iterator[bool]:
         self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        with (self.directory / "lock").open("a") as file:
+        with self._lock.open("a") as file:
             try:
                 fcntl.flock(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:

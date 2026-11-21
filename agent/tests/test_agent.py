@@ -1,25 +1,27 @@
-import ast
 import io
 import json
 import os
 import sqlite3
 import stat
-import sys
 import unittest
 from contextlib import closing, redirect_stdout
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from socket import socket
 from tempfile import TemporaryDirectory
-from threading import Thread
+from threading import Event, Thread
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
 from miroir_agent.cli import main
-from miroir_agent.collectors import COLLECTORS, Collected
+from miroir_agent.collectors import COLLECTORS
+from miroir_agent.collectors.base import Collected
+from miroir_agent.collectors.screenmemory import ScreenMemoryCursor
 from miroir_agent.config import load_config
-from miroir_agent.deliver import deliver
+from miroir_agent.errors import ConfigError, Failure
 from miroir_agent.masking import mask, mask_tokens, mask_url
-from miroir_agent.state import State, write_json
+from miroir_agent.state import State
+from miroir_agent.transport import Client
 
 
 class MaskingTests(unittest.TestCase):
@@ -102,24 +104,6 @@ class MaskingTests(unittest.TestCase):
             for value in (f"{card}{separator}2", f"2{separator}{card}"):
                 self.assertEqual(mask(value), (value, {}))
 
-    def test_standard_library_only(self) -> None:
-        package = Path(__file__).resolve().parents[1] / "miroir_agent"
-        for path in package.rglob("*.py"):
-            for node in ast.walk(ast.parse(path.read_text())):
-                if isinstance(node, ast.ImportFrom) and node.level == 0:
-                    names = [node.module or ""]
-                elif isinstance(node, ast.Import):
-                    names = [alias.name for alias in node.names]
-                else:
-                    continue
-                for name in names:
-                    self.assertTrue(
-                        name.split(".")[0] in sys.stdlib_module_names
-                        or name == "miroir_agent"
-                        or name.startswith("miroir_agent."),
-                        (path, name),
-                    )
-
     def test_token_shapes(self) -> None:
         tokens = [
             *("gh" + letter + "_" + "a" * 30 for letter in "pousr"),
@@ -190,6 +174,16 @@ class _Handler(BaseHTTPRequestHandler):
                 self.rfile.read(int(self.headers["Content-Length"])),
             )
         )
+        if self.server.wait_for_reply:
+            self.server.release_reply.wait(3)
+            return
+        if self.server.stall_receipt:
+            self.send_response(201)
+            self.send_header("Content-Length", "100")
+            self.end_headers()
+            self.wfile.flush()
+            self.server.release_reply.wait(3)
+            return
         self.send_response(self.server.response_code)
         self.send_header("Location", "/elsewhere")
         self.end_headers()
@@ -216,11 +210,15 @@ class AgentTests(unittest.TestCase):
         server.posts = []
         server.gets = []
         server.response_code = 201
+        server.wait_for_reply = False
+        server.stall_receipt = False
+        server.release_reply = Event()
         thread = Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
         thread.start()
         self.addCleanup(server.server_close)
         self.addCleanup(thread.join)
         self.addCleanup(server.shutdown)
+        self.addCleanup(server.release_reply.set)
         self.token = "demo" + "-receive"
         env = patch.dict(
             os.environ, {"MIROIR_TEST_TOKEN": self.token, "no_proxy": "127.0.0.1"}
@@ -249,16 +247,18 @@ class AgentTests(unittest.TestCase):
     def _fake(
         self,
         options: dict,
-        cursor: dict | None,
+        cursor: ScreenMemoryCursor | None,
         out: Path,
         now: float,
         *,
         window: tuple[int, int] | None = None,
     ) -> Collected:
-        self.calls.append(cursor)
-        step = (cursor or {}).get("frames", 0) + 1
+        self.calls.append(cursor.model_dump() if cursor else None)
+        step = (cursor.frames if cursor else 0) + 1
         out.write_bytes(f"fixture text {step}".encode())
-        return Collected({"frames": step}, {"frames": 1}, True)
+        return Collected(
+            ScreenMemoryCursor(frames=step, app_usage=0), {"frames": 1}, True
+        )
 
     def test_config(self) -> None:
         self.item["receive_url"] = (
@@ -275,8 +275,8 @@ class AgentTests(unittest.TestCase):
         )
         self.assertEqual(config.collectors[0].timeout_seconds, 120)
         self.assertEqual(
-            config.collectors[0].options["data_dir"],
-            str(Path.home() / "ScreenMemoryData"),
+            config.collectors[0].options.data_dir,
+            Path.home() / "ScreenMemoryData",
         )
         for changes in (
             {"wat": True},
@@ -289,12 +289,12 @@ class AgentTests(unittest.TestCase):
             self.path.write_text(
                 json.dumps({**self.raw, "collectors": [{**self.item, **changes}]})
             )
-            with self.assertRaises(ValueError):
+            with self.assertRaises(ConfigError):
                 load_config(self.path)
         self.path.write_text(
             json.dumps({**self.raw, "collectors": [self.item, self.item]})
         )
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ConfigError):
             load_config(self.path)
 
     def test_config_rejects_blank_drop_list_entries(self) -> None:
@@ -304,7 +304,7 @@ class AgentTests(unittest.TestCase):
                 self.path.write_text(json.dumps(self.raw))
                 with (
                     self.subTest(field=field, entry=entry),
-                    self.assertRaises(ValueError),
+                    self.assertRaises(ConfigError),
                 ):
                     load_config(self.path)
 
@@ -325,12 +325,12 @@ class AgentTests(unittest.TestCase):
 
         self.server.response_code = 503
         self.assertEqual(self._cli("run")[0], 1)
-        self.assertTrue(self.state.pending)
-        self.assertFalse(self.state.cursor.exists())
+        self.assertTrue(self.state.has_pending())
+        self.assertFalse((self.state.directory / "cursor.json").exists())
         self.server.response_code = 201
         self.assertEqual(self._cli("run")[0], 0)
-        self.assertFalse(self.state.pending)
-        cursor = json.loads(self.state.cursor.read_text())
+        self.assertFalse(self.state.has_pending())
+        cursor = json.loads((self.state.directory / "cursor.json").read_text())
         self.assertRegex(cursor["origins_digest"], r"^[0-9a-f]{64}$")
         self.assertEqual(self._cli("status")[0], 0)
         code, output = self._cli("run")
@@ -349,13 +349,15 @@ class AgentTests(unittest.TestCase):
         self.assertFalse((profile / "state").exists())
 
     def test_atomic_write_syncs_file_then_directory(self) -> None:
-        path = self.root / "atomic.json"
+        path = self.root / "cursor.json"
         replace = os.replace
         steps: list[str] = []
 
         def sync(fd: int) -> None:
             if stat.S_ISDIR(os.fstat(fd).st_mode):
-                self.assertEqual(json.loads(path.read_text()), {"frames": 1})
+                self.assertEqual(
+                    json.loads(path.read_text()), {"frames": 1, "app_usage": 0}
+                )
                 steps.append("directory")
             else:
                 self.assertFalse(path.exists())
@@ -367,10 +369,10 @@ class AgentTests(unittest.TestCase):
             replace(source, destination)
 
         with (
-            patch("miroir_agent.state.os.fsync", side_effect=sync),
-            patch("miroir_agent.state.os.replace", side_effect=rename),
+            patch("miroir_agent.files.os.fsync", side_effect=sync),
+            patch("miroir_agent.files.os.replace", side_effect=rename),
         ):
-            write_json(path, {"frames": 1})
+            State(path.parent).save_cursor({"frames": 1, "app_usage": 0})
         self.assertEqual(steps, ["file", "replace", "directory"])
 
     def test_delivery(self) -> None:
@@ -383,9 +385,17 @@ class AgentTests(unittest.TestCase):
         body.write_bytes(b"batch body")
         for code in (201, 500, 302):
             self.server.response_code = code
-            observed = deliver(config, body)
-            self.assertEqual(observed.status, code)
-            self.assertEqual(observed.acknowledged, code == 201)
+            with Client(
+                config.receive_url, config.token_env, config.timeout_seconds
+            ) as client:
+                if code == 201:
+                    self.assertEqual(
+                        client.post_batch(body, "screenmemory_batch").status, code
+                    )
+                else:
+                    with self.assertRaises(Failure) as caught:
+                        client.post_batch(body, "screenmemory_batch")
+                    self.assertEqual(caught.exception.http_status, code)
         self.assertEqual(len(self.server.posts), 3)
         self.assertFalse(self.server.gets)
         for path, headers, contents in self.server.posts:
@@ -394,22 +404,20 @@ class AgentTests(unittest.TestCase):
             )
             self.assertEqual(headers["Authorization"], f"Bearer {self.token}")
             self.assertEqual(headers["Content-Type"], "application/gzip")
+            self.assertRegex(headers["User-Agent"], r"^miroir-agent/\d")
             self.assertEqual(contents, body.read_bytes())
         self.assertEqual(config.receive_url, self.item["receive_url"])
 
     def test_retry_lock_limit_and_status(self) -> None:
-        with patch.dict(
-            COLLECTORS,
-            {"screenmemory": COLLECTORS["screenmemory"]._replace(collect=self._fake)},
-        ):
+        with patch.object(COLLECTORS["screenmemory"], "collect", self._fake):
             self.state.batch.parent.mkdir(parents=True)
             self.state.batch.write_bytes(b"incomplete batch")
             self.server.response_code = 500
             code, output = self._cli("run")
             self.assertEqual(code, 1)
             self.assertIn("failed", output)
-            self.assertTrue(self.state.pending)
-            self.assertFalse(self.state.cursor.exists())
+            self.assertTrue(self.state.has_pending())
+            self.assertFalse((self.state.directory / "cursor.json").exists())
             pending = self.state.batch.read_bytes()
             self.assertNotEqual(pending, b"incomplete batch")
             with self.state.lock() as locked:
@@ -423,46 +431,155 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(
                 [body for _, _, body in self.server.posts], [pending, pending]
             )
-            self.assertFalse(self.state.pending)
-            self.assertEqual(json.loads(self.state.cursor.read_text()), {"frames": 1})
+            self.assertFalse(self.state.has_pending())
+            self.assertEqual(
+                json.loads((self.state.directory / "cursor.json").read_text()),
+                {"frames": 1, "app_usage": 0},
+            )
             self.assertEqual(self._cli("run", "--max-batches", "2")[0], 0)
-            self.assertEqual(self.calls, [None, {"frames": 1}, {"frames": 2}])
+            self.assertEqual(
+                self.calls,
+                [None, {"frames": 1, "app_usage": 0}, {"frames": 2, "app_usage": 0}],
+            )
             code, output = self._cli("status")
             self.assertEqual(code, 0)
             self.assertNotIn("fixture text", output)
             self.assertNotIn(self.token, output)
             status = json.loads(output.split(" ", 1)[1])
-            self.assertEqual(status["cursor"], {"frames": 3})
+            self.assertEqual(status["cursor"], {"frames": 3, "app_usage": 0})
             self.assertFalse(status["pending"])
             self.assertEqual(status["status"]["outcome"], "delivered")
             self.assertEqual(status["status"]["artifact_id"], "artifact-one")
 
     def test_missing_token_preserves_pending_batch(self) -> None:
-        with patch.dict(
-            COLLECTORS,
-            {"screenmemory": COLLECTORS["screenmemory"]._replace(collect=self._fake)},
-        ):
+        with patch.object(COLLECTORS["screenmemory"], "collect", self._fake):
             del os.environ["MIROIR_TEST_TOKEN"]
             self.assertEqual(self._cli("run")[0], 1)
-            self.assertTrue(self.state.pending)
-            self.assertFalse(self.state.cursor.exists())
+            self.assertTrue(self.state.has_pending())
+            self.assertFalse((self.state.directory / "cursor.json").exists())
             self.assertFalse(self.server.posts)
             self.assertEqual(self.calls, [None])
 
+    def test_row_failures_are_reported_without_advancing_the_cursor(self) -> None:
+        cursor_path = self.state.directory / "cursor.json"
+        saved = '{"frames": 10, "app_usage": 0}\n'
+        cursor_path.parent.mkdir(parents=True)
+        cursor_path.write_text(saved)
+        url = self.item["receive_url"]
+        with (
+            closing(socket()) as endpoint,
+            patch.object(COLLECTORS["screenmemory"], "collect", self._fake),
+        ):
+            endpoint.bind(("127.0.0.1", 0))
+            refused_url = f"http://127.0.0.1:{endpoint.getsockname()[1]}/receive"
+            for reason, endpoint_url, token, http_status in (
+                ("network", refused_url, self.token, None),
+                ("token", url, "", None),
+                ("http", url, self.token, 500),
+                ("timeout", url, self.token, None),
+            ):
+                with (
+                    self.subTest(reason=reason),
+                    patch.dict(os.environ, MIROIR_TEST_TOKEN=token),
+                ):
+                    self.server.response_code = 500
+                    self.server.wait_for_reply = reason == "timeout"
+                    self.item.update(receive_url=endpoint_url, timeout_seconds=1)
+                    self.path.write_text(json.dumps(self.raw))
+                    code, output = self._cli("run")
+                    self.assertEqual(code, 1)
+                    detail = f"failed step=deliver reason={reason}"
+                    if http_status is not None:
+                        detail += f" http_status={http_status}"
+                    self.assertIn(detail + " ", output)
+                    raw_status = (self.state.directory / "status.json").read_text()
+                    status = json.loads(raw_status)
+                    self.assertEqual(
+                        (
+                            status["outcome"],
+                            status["step"],
+                            status["reason"],
+                            status["http_status"],
+                        ),
+                        ("failed", "deliver", reason, http_status),
+                    )
+                    self.assertNotIn(self.token, output + raw_status)
+                    self.assertTrue(self.state.has_pending())
+                    self.assertEqual(cursor_path.read_text(), saved)
+            self.assertEqual(self.calls, [json.loads(saved)])
+            self.assertEqual(len(self.server.posts), 2)
+            self.assertEqual(self.server.posts[0][2], self.server.posts[1][2])
+
+    def test_receipt_that_never_arrives_is_not_an_acknowledgement(self) -> None:
+        self.server.stall_receipt = True
+        self.item["timeout_seconds"] = 1
+        self.path.write_text(json.dumps(self.raw))
+        with patch.object(COLLECTORS["screenmemory"], "collect", self._fake):
+            code, output = self._cli("run")
+        self.assertEqual(code, 1)
+        self.assertIn("failed step=deliver reason=timeout ", output)
+        self.assertTrue(self.state.has_pending())
+        self.assertFalse((self.state.directory / "cursor.json").exists())
+
+    def test_timeout_while_sending_the_body_is_a_timeout(self) -> None:
+        body = self.root / "large"
+        size = 64 * 1024**2
+        with body.open("wb") as file:
+            file.truncate(size)
+        with closing(socket()) as stuck:
+            # Connections are accepted by the kernel and never read.
+            stuck.bind(("127.0.0.1", 0))
+            stuck.listen()
+            url = f"http://127.0.0.1:{stuck.getsockname()[1]}/receive"
+            with Client(url, "MIROIR_TEST_TOKEN", 1) as client:
+                for step, send in (
+                    ("put", lambda: client.put(body, size, url, "image/jpeg")),
+                    ("deliver", lambda: client.post_batch(body, "screenmemory_batch")),
+                ):
+                    with self.subTest(step=step), self.assertRaises(Failure) as caught:
+                        send()
+                    self.assertEqual(
+                        (caught.exception.step, caught.exception.reason),
+                        (step, "timeout"),
+                    )
+
+    def test_unknown_cursor_key_and_unexpected_collector_error_are_distinct(
+        self,
+    ) -> None:
+        self.state.directory.mkdir(parents=True)
+        cursor = self.state.directory / "cursor.json"
+        cursor.write_text(json.dumps({"frames": 1, "app_usage": 2, "unexpected": 3}))
+        code, output = self._cli("run")
+        self.assertEqual(code, 1)
+        self.assertIn("step=collect reason=state ", output)
+        cursor.unlink()
+        with patch.object(
+            COLLECTORS["screenmemory"],
+            "collect",
+            side_effect=RuntimeError("private fixture"),
+        ):
+            code, output = self._cli("run")
+        self.assertEqual(code, 1)
+        self.assertIn("step=collect reason=internal ", output)
+        self.assertNotIn("private fixture", output)
+
     def test_preview_leaves_state_unchanged(self) -> None:
         self.state.batch.parent.mkdir(parents=True)
-        write_json(self.state.cursor, {"frames": 10})
-        write_json(self.state.status, {"outcome": "delivered"})
-        write_json(self.state.batch_cursor, {"cursor": {"frames": 11}})
+        (self.state.directory / "cursor.json").write_text(
+            json.dumps({"frames": 10, "app_usage": 0})
+        )
+        (self.state.directory / "status.json").write_text(
+            json.dumps({"outcome": "delivered"})
+        )
+        (self.state.directory / "spool/batch.cursor.json").write_text(
+            json.dumps({"cursor": {"frames": 11, "app_usage": 0}})
+        )
         self.state.batch.write_bytes(b"pending data")
         before = {
             p: p.read_bytes() for p in self.state.directory.rglob("*") if p.is_file()
         }
         out = self.root / "out"
-        with patch.dict(
-            COLLECTORS,
-            {"screenmemory": COLLECTORS["screenmemory"]._replace(collect=self._fake)},
-        ):
+        with patch.object(COLLECTORS["screenmemory"], "collect", self._fake):
             del os.environ["MIROIR_TEST_TOKEN"]
             self.assertEqual(
                 self._cli(
@@ -476,7 +593,9 @@ class AgentTests(unittest.TestCase):
                 )[0],
                 0,
             )
-        self.assertEqual(self.calls, [{"frames": 10}, {"frames": 11}])
+        self.assertEqual(
+            self.calls, [{"frames": 10, "app_usage": 0}, {"frames": 11, "app_usage": 0}]
+        )
         self.assertEqual(len(list(out.glob("*.jsonl.gz"))), 2)
         self.assertEqual(
             before,
@@ -510,30 +629,56 @@ class ConfigurationMessageTests(unittest.TestCase):
 
     def test_the_message_says_what_is_wrong_and_never_echoes_a_value(self):
         cases = {
-            "collector: unknown key media": {
+            "collectors.0.media: unknown key": {
                 "state_dir": "/tmp/x",
-                "collectors": [self.collector(media=True)],
+                "collectors": [self.collector(media="marker-value")],
             },
-            "options: unknown key cutoff": {
+            "collectors.0.options.cutoff: unknown key": {
                 "state_dir": "/tmp/x",
                 "collectors": [
                     self.collector(options={"data_dir": "/nowhere", "cutoff": 0})
                 ],
             },
-            "top level: unknown key collector": {
+            "collector: unknown key": {
                 "state_dir": "/tmp/x",
                 "collector": [],
                 "collectors": [],
             },
-            "Invalid media option": {
+            "collectors.0.options.media: expected a boolean": {
                 "state_dir": "/tmp/x",
                 "collectors": [
                     self.collector(options={"data_dir": "/nowhere", "media": "true"})
                 ],
             },
-            "Invalid receiving URL": {
+            "collectors.0.receive_url: Invalid receiving URL": {
                 "state_dir": "/tmp/x",
                 "collectors": [self.collector(receive_url="ftp://private-host/x")],
+            },
+            "collectors.0.collector: unknown collector": {
+                "state_dir": "/tmp/x",
+                "collectors": [self.collector(collector="marker-value")],
+            },
+            "collectors.0.options.max_rows: expected an integer": {
+                "state_dir": "/tmp/x",
+                "collectors": [
+                    self.collector(
+                        options={"data_dir": "/nowhere", "max_rows": "marker-value"}
+                    )
+                ],
+            },
+            "collectors.0.options.max_rows: number out of range": {
+                "state_dir": "/tmp/x",
+                "collectors": [
+                    self.collector(options={"data_dir": "/nowhere", "max_rows": 200001})
+                ],
+            },
+            "collectors.0.options.since: Invalid date or offset-qualified instant": {
+                "state_dir": "/tmp/x",
+                "collectors": [
+                    self.collector(
+                        options={"data_dir": "/nowhere", "since": "marker-value"}
+                    )
+                ],
             },
             "not valid JSON": '{"state_dir": "/tmp/x", "collectors": [',
         }
@@ -543,3 +688,5 @@ class ConfigurationMessageTests(unittest.TestCase):
             self.assertIn(expected, output)
             self.assertNotIn("private-host", output)
             self.assertNotIn("/nowhere", output)
+            self.assertNotIn("marker-value", output)
+            self.assertNotIn("200001", output)

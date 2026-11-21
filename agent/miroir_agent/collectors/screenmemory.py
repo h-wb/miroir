@@ -1,20 +1,33 @@
 """Collect and redact incremental ScreenMemory records."""
 
-import gzip
-import json
 import math
 import sqlite3
 import stat
 from collections import Counter
 from contextlib import closing
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 from urllib.parse import quote
 
+from pydantic import BeforeValidator, Field
+
+from ..batch import BatchWriter
+from ..errors import Failure
 from ..masking import mask
-from ..state import atomic_path, outside_source
-from . import Collected, Cursor, MediaItem, MediaPage
+from .base import (
+    Collected,
+    Collector,
+    Cursor,
+    MediaItem,
+    MediaPage,
+    MediaSource,
+    Nonblank,
+    Options,
+    Since,
+    UserPath,
+    Window,
+    nonempty,
+)
 
 _DROP_BUNDLES = {
     "com.bitwarden.desktop",
@@ -35,7 +48,6 @@ _DROP_MARKERS = {
     "about:logins",
     "chrome://password-manager",
 }
-SOURCE_ERROR = "Cannot read ScreenMemory databases or required columns"
 
 _FRAMES = """
 SELECT epoch_second(CASE WHEN typeof(imagetimestamp) = 'text'
@@ -47,6 +59,79 @@ SELECT epoch_second(CASE WHEN typeof(timestamp) = 'text'
     THEN CAST(timestamp AS BLOB) ELSE timestamp END) AS second,
     identifier FROM usage
 """
+
+
+class ScreenMemoryOptions(Options):
+    data_dir: UserPath
+    since: Annotated[Since | None, BeforeValidator(nonempty)] = None
+    settle_seconds: int = Field(default=300, ge=0)
+    max_rows: int = Field(default=20000, ge=1, le=200000)
+    drop_bundle_ids: list[Nonblank] = Field(default_factory=list)
+    drop_markers: list[Nonblank] = Field(default_factory=list)
+    media: bool = False
+    media_dir: Annotated[
+        UserPath,
+        Field(
+            default_factory=lambda data: data.get("data_dir", Path()) / "screenshots"
+        ),
+    ]
+
+
+class ScreenMemoryCursor(Cursor):
+    frames: int
+    app_usage: int
+
+
+class ScreenMemory(Collector[ScreenMemoryOptions, ScreenMemoryCursor]):
+    name = "screenmemory"
+    format_id = "screenmemory_batch"
+    options_model = ScreenMemoryOptions
+    cursor_model = ScreenMemoryCursor
+
+    def source_dirs(self, options: ScreenMemoryOptions) -> list[Path]:
+        return (
+            [options.data_dir, options.media_dir]
+            if options.media
+            else [options.data_dir]
+        )
+
+    def collect(
+        self,
+        options: ScreenMemoryOptions,
+        cursor: ScreenMemoryCursor | None,
+        out: Path,
+        now: float,
+        *,
+        window: Window | None = None,
+    ) -> Collected | None:
+        self.guard(options, out)
+        return _collect(options, cursor, out, now, window=window)
+
+    def media(self, options: ScreenMemoryOptions) -> MediaSource | None:
+        return Screenshots(options) if options.media else None
+
+
+class Screenshots(MediaSource):
+    kind = "screenshots"
+
+    def __init__(self, options: ScreenMemoryOptions) -> None:
+        self.options = options
+
+    def start(self) -> int:
+        return _start(self.options)
+
+    def limit(self, cursor: Cursor | None) -> int | None:
+        if cursor is None:
+            return None
+        assert isinstance(cursor, ScreenMemoryCursor)
+        return cursor.frames
+
+    def page(self, after: int, upto: int, limit: int) -> MediaPage | None:
+        return _collect_media(self.options, after, upto, limit)
+
+
+def _start(options: ScreenMemoryOptions) -> int:
+    return options.since - 1 if options.since is not None else 0
 
 
 def _open(path: Path) -> sqlite3.Connection:
@@ -109,12 +194,11 @@ def _valid_path(path: Any) -> bool:
 
 
 def _withholding(
-    options: dict[str, Any], db: sqlite3.Connection, frames: list[tuple[Any, ...]]
+    options: ScreenMemoryOptions, db: sqlite3.Connection, frames: list[tuple[Any, ...]]
 ) -> tuple[set[int], tuple[str, ...]]:
-    drop_bundles = _DROP_BUNDLES.union(options.get("drop_bundle_ids", []))
+    drop_bundles = _DROP_BUNDLES.union(options.drop_bundle_ids)
     markers = tuple(
-        marker.casefold()
-        for marker in _DROP_MARKERS.union(options.get("drop_markers", []))
+        marker.casefold() for marker in _DROP_MARKERS.union(options.drop_markers)
     )
     stamps = [ts for ts, _, _ in frames if _valid_ts(ts)]
     excluded = (
@@ -148,35 +232,61 @@ def _withheld(
     return None
 
 
-def collect_media(
-    options: dict[str, Any], media_cursor: int, rows_cursor: Cursor, limit: int
+def _frame(
+    ts: int, key: Any, value: Any, excluded: set[int], markers: tuple[str, ...]
+) -> tuple[str, str | None] | None:
+    if not _valid_ts(ts) or not _valid_path(key):
+        return None
+    text = _frame_text(value)
+    return text, _withheld(ts, text, excluded, markers)
+
+
+def _snapshot(path: Path) -> sqlite3.Connection:
+    db = _open(path)
+    try:
+        db.execute("PRAGMA query_only=ON")
+        db.execute("BEGIN")
+    except sqlite3.Error:
+        db.close()
+        raise
+    return db
+
+
+def _collect_media(
+    options: ScreenMemoryOptions, media_cursor: int, upper: int, limit: int
 ) -> MediaPage | None:
-    upper = rows_cursor["frames"]
-    if type(upper) is not int:
-        raise ValueError("Invalid frame cursor")
     if media_cursor >= upper:
         return None
-    data = Path(options["data_dir"]).expanduser()
+    data = options.data_dir
     try:
-        with closing(_open(data / "text.sqlite")) as text_db:
-            text_db.execute("BEGIN")
+        with closing(_snapshot(data / "text.sqlite")) as text_db:
             frames, cursor, more = _page(text_db, _FRAMES, limit, media_cursor, upper)
         if not frames:
             return None
-        with closing(_open(data / "usage.sqlite")) as usage_db:
+        with closing(_snapshot(data / "usage.sqlite")) as usage_db:
             excluded, markers = _withholding(options, usage_db, frames)
-        root = (
-            Path(options.get("media_dir", data / "screenshots")).expanduser().resolve()
-        )
+        root = options.media_dir.resolve()
     except (sqlite3.Error, OSError, OverflowError, RuntimeError, ValueError):
-        raise ValueError(SOURCE_ERROR) from None
+        raise Failure("collect", "source") from None
+    return _media_items(root, frames, cursor, more, excluded, markers)
+
+
+def _media_items(
+    root: Path,
+    frames: list[tuple[Any, ...]],
+    cursor: int,
+    more: bool,
+    excluded: set[int],
+    markers: tuple[str, ...],
+) -> MediaPage:
     counts = {"examined": len(frames), "withheld": 0, "missing": 0, "invalid": 0}
     items: list[MediaItem] = []
     for ts, key, text in frames:
-        if not _valid_ts(ts) or not _valid_path(key):
+        frame = _frame(ts, key, text, excluded, markers)
+        if frame is None:
             counts["invalid"] += 1
             continue
-        if _withheld(ts, _frame_text(text), excluded, markers):
+        if frame[1]:
             counts["withheld"] += 1
             continue
         try:
@@ -199,38 +309,29 @@ def collect_media(
     return MediaPage(items, cursor, counts, more)
 
 
-def collect(
-    options: dict[str, Any],
-    cursor: Cursor | None,
+def _collect(
+    options: ScreenMemoryOptions,
+    cursor: ScreenMemoryCursor | None,
     out_path: Path,
     now: float,
     *,
-    window: tuple[int, int] | None = None,
+    window: Window | None = None,
 ) -> Collected | None:
-    data = Path(options["data_dir"]).expanduser()
-    outside_source(out_path, data)
-    initial = options["since"] - 1 if "since" in options else 0
-    if window is not None:
-        initial = window[0] - 1
-    frame_cursor = cursor["frames"] if cursor is not None else initial
-    usage_cursor = cursor["app_usage"] if cursor is not None else initial
-    if type(frame_cursor) is not int or type(usage_cursor) is not int:
-        raise ValueError("Invalid ScreenMemory cursor")
-    upper = math.floor(now - options.get("settle_seconds", 300))
+    data = options.data_dir
+    initial = window[0] - 1 if window is not None else _start(options)
+    frame_cursor = cursor.frames if cursor is not None else initial
+    usage_cursor = cursor.app_usage if cursor is not None else initial
+    upper = math.floor(now - options.settle_seconds)
     if window is not None:
         frame_cursor = max(initial, frame_cursor)
         usage_cursor = max(initial, usage_cursor)
         upper = min(upper, window[1] - 1)
-    limit = options.get("max_rows", 20000)
+    limit = options.max_rows
     try:
         with (
-            closing(_open(data / "text.sqlite")) as text_db,
-            closing(_open(data / "usage.sqlite")) as usage_db,
+            closing(_snapshot(data / "text.sqlite")) as text_db,
+            closing(_snapshot(data / "usage.sqlite")) as usage_db,
         ):
-            for db in (text_db, usage_db):
-                db.execute("PRAGMA query_only=ON")
-                # Keep the page and any follow-up lookups on the same snapshot.
-                db.execute("BEGIN")
             frames, next_frame, more_frames = _page(
                 text_db, _FRAMES, limit, frame_cursor, upper
             )
@@ -238,42 +339,22 @@ def collect(
                 usage_db, _USAGE, limit, usage_cursor, upper
             )
             excluded, markers = _withholding(options, usage_db, frames)
-    except (sqlite3.Error, OverflowError, ValueError):
-        raise ValueError(SOURCE_ERROR) from None
+    except (sqlite3.Error, OSError, OverflowError, ValueError):
+        raise Failure("collect", "source") from None
     if not frames and not apps:
         return None
 
     counts: dict[str, Any] = {"frames": 0, "app_usage": 0, "skipped": 0}
     masked: Counter[str] = Counter()
     withheld: Counter[str] = Counter()
-    with atomic_path(out_path) as path, gzip.open(path, "wt", encoding="utf-8") as file:
-        size = 0
-
-        def write(record: dict[str, Any]) -> None:
-            nonlocal size
-            line = json.dumps(record, separators=(",", ":")) + "\n"
-            size += len(line)  # json.dumps emits ASCII by default.
-            if len(line) > 2 * 1024**2 or size > 512 * 1024**2:
-                raise ValueError("ScreenMemory batch exceeds format size limits")
-            file.write(line)
-
-        write(
-            {
-                "type": "header",
-                "format": "screenmemory_batch",
-                "version": 1,
-                "collected_at": datetime.fromtimestamp(now, timezone.utc)
-                .isoformat()
-                .replace("+00:00", "Z"),
-            }
-        )
+    with BatchWriter(out_path, ScreenMemory.format_id, 1, now) as batch:
         for ts, image_path, image_text in frames:
-            if not _valid_ts(ts) or not _valid_path(image_path):
+            frame = _frame(ts, image_path, image_text, excluded, markers)
+            if frame is None:
                 counts["skipped"] += 1
                 continue
-            raw_text = _frame_text(image_text)
+            raw_text, reason = frame
             text: str | None = None
-            reason = _withheld(ts, raw_text, excluded, markers)
             replacements = 0
             if reason:
                 withheld[reason] += 1
@@ -281,7 +362,7 @@ def collect(
                 text, rules = mask(raw_text)
                 masked.update(rules)
                 replacements = sum(rules.values())
-            write(
+            batch.write(
                 {
                     "type": "frame",
                     "ts": ts,
@@ -300,12 +381,12 @@ def collect(
             ):
                 counts["skipped"] += 1
                 continue
-            write({"type": "app_usage", "ts": ts, "bundle_id": bundle})
+            batch.write({"type": "app_usage", "ts": ts, "bundle_id": bundle})
             counts["app_usage"] += 1
         counts.update(masked=dict(masked), withheld=dict(withheld))
-        write(
-            {"type": "trailer", **{k: v for k, v in counts.items() if k != "skipped"}}
-        )
+        batch.finish({k: v for k, v in counts.items() if k != "skipped"})
     return Collected(
-        {"frames": next_frame, "app_usage": next_app}, counts, more_frames or more_apps
+        ScreenMemoryCursor(frames=next_frame, app_usage=next_app),
+        counts,
+        more_frames or more_apps,
     )

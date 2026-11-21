@@ -30,11 +30,15 @@ from tests.test_browser_history_batch import snapshot
 _TS = 1795132100
 
 
+@unittest.skipIf(sys.version_info < (3, 12), "agent requires Python 3.12")
 class ZenHistoryContractTests(unittest.TestCase):
     def test_collected_batch_matches_connector_format(self):
         agent = Path(__file__).resolve().parents[1] / "agent"
         with patch.object(sys, "path", [str(agent), *sys.path]):
-            from miroir_agent.collectors.zen_history import collect
+            from miroir_agent.collectors.zen_history import (
+                ZenHistory,
+                ZenHistoryOptions,
+            )
 
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -42,7 +46,14 @@ class ZenHistoryContractTests(unittest.TestCase):
             profile.mkdir()
             source = snapshot(profile / "places.sqlite")
             out = root / "batch.jsonl.gz"
-            self.assertIsNotNone(collect({"places_path": str(source)}, None, out, _TS))
+            self.assertIsNotNone(
+                ZenHistory().collect(
+                    ZenHistoryOptions.model_validate({"places_path": str(source)}),
+                    None,
+                    out,
+                    _TS,
+                )
+            )
             validate_zen_batch(out)
             with gzip.open(out, "rt", encoding="utf-8") as file:
                 document = [json.loads(line) for line in file]
@@ -60,6 +71,7 @@ class ZenHistoryContractTests(unittest.TestCase):
             )
 
 
+@unittest.skipIf(sys.version_info < (3, 12), "agent requires Python 3.12")
 class ScreenMemoryContractTests(unittest.TestCase):
     def setUp(self) -> None:
         temporary = TemporaryDirectory()
@@ -182,7 +194,10 @@ class ScreenMemoryContractTests(unittest.TestCase):
     def test_mask_exclude_and_connector_contract(self) -> None:
         agent = Path(__file__).resolve().parents[1] / "agent"
         with patch.object(sys, "path", [str(agent), *sys.path]):
-            from miroir_agent.collectors.screenmemory import collect
+            from miroir_agent.collectors.screenmemory import (
+                ScreenMemory,
+                ScreenMemoryOptions,
+            )
 
         token = "gh" + "p_" + "a1B2" * 9
         paths = [f"date/{i}.jpeg" for i in range(5)]
@@ -206,7 +221,9 @@ class ScreenMemoryContractTests(unittest.TestCase):
                 (_TS + 41, "app.example.new"),
             ],
         )
-        batch = collect(self.options, None, self.out, self.now)
+        batch = ScreenMemory().collect(
+            ScreenMemoryOptions.model_validate(self.options), None, self.out, self.now
+        )
         assert batch is not None
         validate_batch(self.out)
         with gzip.open(self.out, "rt", encoding="utf-8") as gz:
@@ -241,8 +258,15 @@ class ScreenMemoryContractTests(unittest.TestCase):
                 "withheld": {"excluded_app": 1, "marker": 1},
             },
         )
-        self.assertEqual(batch.cursor, {"frames": _TS + 3, "app_usage": _TS + 2})
+        self.assertEqual(
+            batch.cursor.model_dump(), {"frames": _TS + 3, "app_usage": _TS + 2}
+        )
         self.assertIsNone(
-            collect(self.options, batch.cursor, self.root / "second.gz", self.now)
+            ScreenMemory().collect(
+                ScreenMemoryOptions.model_validate(self.options),
+                batch.cursor,
+                self.root / "second.gz",
+                self.now,
+            )
         )
         self.assertFalse((self.root / "second.gz").exists())

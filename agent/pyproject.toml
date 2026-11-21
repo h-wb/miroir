@@ -7,8 +7,8 @@ name = "miroir-agent"
 version = "0.1.0"
 description = "Collect and deliver local data to Miroir."
 readme = "README.md"
-requires-python = ">=3.10"
-dependencies = []
+requires-python = ">=3.12"
+dependencies = ["urllib3>=2.2,<3", "pydantic>=2.10,<3"]
 
 [project.scripts]
 miroir-agent = "miroir_agent.cli:main"
@@ -18,12 +18,25 @@ packages = ["miroir_agent"]
 
 [tool.ruff]
 line-length = 88
-target-version = "py310"
+target-version = "py312"
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.12"
 explicit_package_bases = true
 mypy_path = "$MYPY_CONFIG_FILE_DIR"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "C90", "BLE", "PLR0912", "PLR0913", "PLR0915"]
+ignore = ["E501"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-args = 6
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["C90", "PLR0912", "PLR0913", "PLR0915"]
