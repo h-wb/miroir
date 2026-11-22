@@ -2202,6 +2202,121 @@ Consequences:
 - A flow run that Prefect shows as running after its pod died before recording an
   attempt holds the queue until it is cancelled in Prefect or a backfill runs.
 
+## 041 — A messages analysis: conversations by identifier, no text
+
+Status: accepted, 2026-11-22. Builds on 022, 038 and 040. Revised the same day
+after review (see the end).
+
+Dashboards read an analysis package's tables, never a source's raw tables. The
+`messages` package is what makes dashboards on Apple Messages possible: who is
+talked to, when, how much and how fast replies come. It has one required input,
+an `apple_messages` connection, and the package timezone. Creating an Apple
+Messages connection now creates it, as for the other sources.
+
+**A conversation is the chat's own identifier** (`chat_identifier`: a number, an
+address or a group id), never Apple's chat guid. One person reached over iMessage,
+SMS and RCS has a chat per service, and the same chat has a different guid on Macs
+on different macOS versions (038); all of those are one conversation. A chat with
+no identifier falls back to the last part of its guid, which holds the same value,
+and failing that to the whole guid, so a key is never empty.
+
+The same person's identifier can be written in several ways: an address in
+another case, a number with or without its country code (`5555550113` for SMS,
+`+15555550113` for iMessage). A direct conversation's key is therefore the
+identifier under one rule, which mirrors the one the collector uses to match a
+handle to a contact (`_phone` and `_email` in its Apple Messages source): an
+address (it holds `@`) in lower case; a number as its digits, with a leading 1
+dropped from eleven; anything shorter than seven digits, such as a short code, as
+written. The rule is the dbt macro `messages_address`, and the same rule joins
+senders, participants and contact names. Names fall back to the identifier as
+written. A group keeps its identifier as it is: its id holds digits that are not
+a number. One person reached at a number and at an address is still two
+conversations: nothing in the data says they are the same person.
+
+**What counts as a message.** A row is a message when its `item_type` is 0 and its
+`associated_message_type` is 0, 2 or 3 (or absent). A reaction is 2000 to 2007
+(love, like, dislike, laugh, emphasis, question, emoji, sticker), plus 1000, a
+sticker placed on a message; 3000 to 3007 remove one. Every other `item_type` is a
+group event, a call, a shared location or a kept audio message, and is left out,
+as is any other associated type (4000 is a poll vote). These codes are not in
+Apple's documentation. They were checked against the reader in imessage-exporter
+and several other open-source readers of the same database. Where a code is not
+known, the row counts as nothing rather than as a message.
+
+**Reactions that were removed.** Messages deletes a tapback's row when it is
+removed, but rows already loaded are never deleted (038), so the warehouse can hold
+both. For each sender, target message, part and kind, the latest row decides: a
+tapback stands if it is newer than any removal, and a removal at the same time
+wins. A person holds one tapback per part of a message, so of a sender's standing
+tapbacks on one part only the latest is kept: a change of kind with no removal row
+counts once. If a changed tapback is later removed while the earlier kind has no
+removal row of its own, the earlier one stands again; the data cannot tell this
+case apart. The emoji of an emoji reaction is not sent by the collector; such
+reactions have the kind `emoji` only.
+
+Stickers (1000 and 2007) are not tapbacks: several can be placed on one message,
+so each sticker row is one reaction. A sticker removal (3007) does not say which
+sticker it removes and cancels none; a removed sticker that was already loaded
+stays.
+
+**Reply times** are measured only in direct conversations. A run is the messages
+one side sends before the other answers. The first message of a run gets the
+minutes since the first message of the run before it: how long the other side
+waited, not how long since the last message of a burst. Every other message has
+none. Unsent messages count as messages here too. Beyond 24 hours the value is
+null: the conversation is taken to have started again, and a reply two days later
+would otherwise dominate an average.
+
+**Times.** Apple's clock starts at 2001-01-01, and a missing date reads as 0 or
+close to it. A time before 2001-01-02 is therefore no time. An undated message
+stays in `messages` and in its conversation's totals, and is absent from
+`daily`, from first and last times and from reply times.
+
+**No text.** The tables hold lengths and flags, never text. Message text, subjects
+and group renames stay in the raw tables, which only the staging view reads. The
+text of a group's title, a chat's display name and contact names are names, not
+messages, and are kept. Lengths are counted after the collector's masking, without
+the placeholder character Messages puts in the text for each attachment.
+
+Choices where the data cannot tell:
+
+- A message linked to chats of two conversations takes the first key in order. A
+  message in no chat is kept, with no conversation: it counts in the daily totals
+  and in no conversation.
+- A sender is set only for messages from someone else. For my own messages the
+  source's handle is the other person in a direct chat and empty in a group.
+- A chat is a group when its style is 43, direct when 45, and otherwise a group
+  when it has a room name or lists more than one handle. A conversation is a group
+  when any of its chats is. An unnamed group with nobody listed is called "Group".
+- Participants are the handles listed in a conversation's chats and those who sent
+  in it, never me. A conversation with no listed handles and no received messages
+  has none.
+- An unsent message counts as sent and unsent, not edited, even if it carries an
+  edit time.
+- An attachment counts only when its metadata arrived. Link previews
+  (`.pluginPayloadAttachment`, what Messages fetched for a link) are not
+  attachments anyone sent and are left out, as are files on reactions (stickers).
+
+Left out: the text and anything derived from it beyond its length, edit history,
+read and delivery times, calls and shared locations, poll votes, and the
+attachment files themselves. Merging a person's number and address into one
+person waits for a reliable source of that link.
+
+Every table is rebuilt in full. On 200,000 synthetic messages a build takes about
+four seconds, of which dbt's own start is more than a third; incremental tables
+would add complexity for little. The collector delivers about every minute, so the
+package has a minimum build interval of 10 minutes (040): loads within it join one
+build at its end, and the tables are at most about ten minutes behind the raw
+data.
+
+**Review.** An independent review of the first version found six things, all
+taken: one person written two ways split into two conversations (the address
+rule above); no build interval; a missing or epoch date started `daily` at
+Apple's epoch and counted in some tables but not others; reply times measured
+from the last message of a burst; stickers merged and cancelled like tapbacks,
+and a changed tapback counted twice; and empty or bare-id names for an unnamed
+group or a chat with no identifier.
+
 ## 042 — Dashboards read the analysis outputs; `run_dbt` is removed
 
 Status: accepted, 2026-11-22. Supersedes the part of 025 that kept `run_dbt`.

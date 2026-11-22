@@ -221,6 +221,25 @@ PACKAGES: Mapping[str, Package] = {
             _single("browser", "Browser history", "browser_history"),
         ),
         Package(
+            "messages",
+            "Messages analysis",
+            "Conversations, messages, reactions, participants, attachments, and "
+            "daily totals; reply times in direct conversations. No message text.",
+            "+path:models/messages",
+            "messages",
+            (
+                "conversations",
+                "messages",
+                "reactions",
+                "participants",
+                "attachments",
+                "daily",
+            ),
+            _single("messages", "Apple Messages", "apple_messages"),
+            # The collector delivers about every minute; each build is a full one.
+            min_build_interval=timedelta(minutes=10),
+        ),
+        Package(
             "crossovers",
             "Across sources",
             "Days, nights, listens, and rides combined: what was playing during "

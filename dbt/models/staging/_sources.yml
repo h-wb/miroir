@@ -7,6 +7,17 @@ sources:
     tables:
       - name: metrics
       - name: workouts
+  # Apple Messages batches from the Miroir collector (apple_messages connector)
+  - name: apple_messages
+    schema: "{{ var('miroir_sources', {}).get('apple_messages', 'apple_messages_data') }}"
+    tables:
+      - name: messages
+      - name: chats
+      - name: attachments
+      - name: chat_messages
+      - name: message_attachments
+      - name: chat_handles
+      - name: contacts
   - name: listenbrainz
     schema: "{{ var('miroir_sources', {}).get('listenbrainz', 'listenbrainz_data') }}"
     tables:
