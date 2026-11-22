@@ -1807,30 +1807,88 @@ privacy or cost:
 - *An app session* is a run of frames of one app with no pause over five minutes,
   named after its first frame. Screen text stays out of `events`; a session's
   title is its app.
-- *Late rows.* Builds resume from the newest load dlt lists as complete
-  (`_dlt_loads`), recorded on every row they write, so a load still running waits
-  for the next build. A late frame or app usage row recomputes only the sessions
-  between the two nearest boundaries it cannot move; a session that no longer
+- *Late rows.* A late frame or app usage row recomputes only the sessions
+  between the two nearest boundaries it cannot move. A session that no longer
   exists is kept by the screen's own model as a deleted row, which `events` and
-  `days` remove. A test checks that a series of incremental builds gives the same
-  tables as one first build.
+  `days` remove. A frame, session or visit that moves to another time is also
+  recounted where it was. A test checks that a series of incremental builds
+  gives the same tables as one first build.
+- *Which loads a build reads* (revised after review, below). Membership, not a
+  range of load IDs. A build reads only rows of loads that `_dlt_loads` lists as
+  complete, in first builds and in every lookup. The models that read raw tables
+  remember the latest completion time they have read. Each build reads the loads
+  completed after it, less ten minutes, with their IDs written into the query.
+  So a load that completes out of order is read at the next build, and one that
+  never completes is never read. What remains:
+  - completion times come from the loading workers' clocks, so two clocks more
+    than ten minutes apart can hide a load until a rebuild from scratch;
+  - a load still rewriting a row while a build reads can hide that row's old
+    version, and the next build corrects it;
+  - more than 5,000 waiting loads are read as one rebuild.
+  Nothing is locked against ingestion and no raw table is copied.
 - *Indexes on raw tables.* dlt indexes only its row ID, so the models create the
   indexes they look rows up by (load ID, second, image path, page, dlt's list of
-  loads) on the raw tables when missing. No model reads all frames on an ordinary build; an index
-  on the image path also spares dlt's merge a full read.
+  loads) on the raw tables when missing. Each is built in a hook outside the
+  model's transaction and committed at once: writes to that raw table wait only
+  while that index is built. Concurrent creation was not used: dbt opens a
+  transaction around every hook statement on Postgres, and `CREATE INDEX
+  CONCURRENTLY` cannot run in one. A table the build's role does not own is not
+  indexed and is read more slowly. No model reads all frames on an ordinary
+  build. An index on the image path also spares dlt's merge a full read.
+- *Inputs unlinked or replaced.* Every row records its input's connection and raw
+  dataset. When those change, the next build removes that input's rows from every
+  table and reads the new one from its start; it does not wait for anyone to
+  press a button.
+- *Rebuild from scratch.* A requested rebuild may ask for dbt's `--full-refresh`.
+  This is an option recorded in the operation, offered on the analysis page, in
+  the CLI and in the API.
+- *Withheld text.* `screen_frames` keeps no text for a frame with a withholding
+  reason. The server refuses a ScreenMemory batch whose frame has both; the
+  collector never writes one.
 - *Visits* are navigations only (no redirects, reloads, embeds or framed links);
   the site comes from the address, not the origins table; a page's new title
   reaches its visits.
 - *The reader role* is the analysis parameter `reader_role`, a plain lower-case
-  role name (`public` and `pg_*` refused); empty grants nothing and revokes the
-  `SELECT` an earlier build gave. Each table grants `SELECT` through dbt `grants`;
-  one model grants the schema's `USAGE` in a post-hook, one model only, as two
-  grants on one schema at once fail.
+  role name (`public` and `pg_*` refused). Empty grants nothing and revokes the
+  `SELECT` an earlier build gave.
+  - The four output tables grant it `SELECT` through dbt `grants`. The two source
+    models state an empty grant list.
+  - Every timeline table also ends its build, in the same transaction, with
+    exactly the owner and, on the four outputs, the reader with `SELECT`. This
+    holds whatever default privileges said.
+  - One model grants the schema's `USAGE` in a post-hook. It is one model only,
+    because two grants on one schema at once fail.
+  - The role must be a dedicated one, with no other roles or default privileges
+    in the warehouse.
 - *Connection IDs* reach the models (`miroir_connections`) only for a package
   that asks, so the receipts of the other packages do not change.
 - *No data tests on `screen_frames` or `events`*: each would read the whole table
   on every build. Unique indexes hold their keys.
 - *Legacy builds* (no analysis) leave the timeline's models out.
+- *Builds that waited* for the connection lock or the dbt slot read the
+  configuration again once they hold each. If the connection's revision or the
+  analysis's receipt changed, the build ends as blocked.
+- *Joining a deferred build.* A load joins only a scheduled build that has its
+  own flow run bound. A load that builds at once registers that build under the
+  same lock as the decision, so a second load deciding meanwhile defers instead.
+
+*Review of phase 1a (2026-11-22).* An independent review of pull request #43
+reported eleven findings; each was decided as follows:
+1. Unlinked or replaced inputs: fixed, as above, with the rebuild from scratch.
+2. Watermark by maximum load ID: fixed, membership as above.
+3. Superseded settings after waiting for locks: fixed, checked again.
+4. Joining a build with no run: fixed. Having `refresh` resubmit lost deferred
+   builds was not built; the limitation below stands.
+5. Old positions of moved rows: fixed for frames, sessions, visits and days.
+6. Withheld text: fixed in the model and in the server's batch validation.
+7. Default privileges on internal tables: fixed with the exact ACL and the
+   dedicated-role requirement.
+8. Two loads both building at once: fixed, registered under the decision lock.
+9. Index creation: outside the model's transaction, not concurrent, and skipped
+   for raw tables owned by another role.
+10. Long uninterrupted sessions and the 50-range cap: left as they are, accepted
+    costs.
+11. A repeated local midnight: listed as a limit.
 
 Considered and left out:
 
@@ -1869,6 +1927,6 @@ Consequences:
   privilege (`USAGE`) on the timeline's schema is not something dbt `grants`
   gives; since phase 1a a post-hook of the package grants it.
 - Incremental tables keep rows built by older model code: a change to the models
-  reaches old rows only once their tables are built from scratch, which Miroir
-  cannot request yet. A load whose ID is older than one already built is not read
-  until then either.
+  reaches old rows at a rebuild from scratch.
+- Where the clocks go back at midnight, a day of `days` starts at the later of
+  the two midnights.

@@ -2,7 +2,8 @@
 
 import hashlib
 import json
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any
 
 from src.core.config import ResolvedAnalysis, ResolvedMiroir
@@ -19,6 +20,10 @@ class AnalysisPlan:
     variables: dict[str, Any]
     relations: tuple[str, ...]
     version: int = 1
+    # How this one build runs; neither is part of the receipt.
+    full_refresh: bool = False
+    # Called once the build holds the dbt slot, just before dbt; raises to stop.
+    ready: Callable[[], None] | None = field(default=None, compare=False, repr=False)
 
     @property
     def receipt(self) -> str:

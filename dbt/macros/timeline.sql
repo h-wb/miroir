@@ -43,25 +43,138 @@
     '{{ value | replace("'", "''") }}'::text
 {%- endmacro %}
 
-{# The newest load of a source that dlt lists as complete. A load's rows are all
-   visible once it is listed in _dlt_loads, so every row of a load up to this one
-   can be read; rows of a load still running wait for the next build. #}
-{% macro timeline_loaded_through(source_name) -%}
-    {%- set sql -%}
-        select max(load_id) from (
-            {{ optional_input(source_name, '_dlt_loads', {'load_id': 'text', 'status': 'bigint'}, ['load_id', 'status']) }}
-        ) loads where status = 0
-    {%- endset -%}
-    {{- return(timeline_scalar(sql)) -}}
+{# The newest stamp a model's source rows carry: where a downstream model resumes.
+   Stamps are the build's clock, so they grow from build to build. #}
+{% macro timeline_resume(relation, where='true') -%}
+    {{- return(timeline_scalar('select max(_stamp) from ' ~ relation ~ ' where ' ~ where)) -}}
 {%- endmacro %}
 
-{# The newest load a model's own rows were built through: where it resumes. #}
-{% macro timeline_resume(relation, where='true') -%}
-    {{- return(timeline_scalar('select max(_loaded_through) from ' ~ relation ~ ' where ' ~ where)) -}}
+{% macro timeline_new_stamp() -%}
+    {{- return(timeline_scalar("select to_char(clock_timestamp() at time zone 'UTC', 'YYYY-MM-DD HH24:MI:SS.US')")) -}}
+{%- endmacro %}
+
+{# Each input's identity: its connection and raw dataset, '' when unlinked. Rows
+   carry it as `_input`; rows of another identity belong to an input no longer
+   linked, or replaced, and are removed before the build. #}
+{% macro timeline_input(role) -%}
+    {%- set sources = {'screen': 'screenmemory', 'browser': 'browser_history'} -%}
+    {%- set connection = var('miroir_connections', {}).get(role) -%}
+    {%- if not connection -%}{{ return('') }}{%- endif -%}
+    {{- return(connection ~ '@' ~ var('miroir_sources', {}).get(sources[role], '')) -}}
+{%- endmacro %}
+
+{% macro timeline_foreign_rows(roles, by_source=false) -%}
+    {%- for role in roles -%}
+        {#- Two ranges, not "is distinct from", so the index on _input answers. -#}
+        ({% if by_source %}source = '{{ role }}' and {% endif %}(_input < {{ timeline_literal(timeline_input(role)) }} or _input > {{ timeline_literal(timeline_input(role)) }})){% if not loop.last %} or {% endif %}
+    {%- endfor -%}
+{%- endmacro %}
+
+{# Roles whose rows in this incremental table belong to another identity. #}
+{% macro timeline_replaced(roles, by_source=false) -%}
+    {%- set replaced = [] -%}
+    {%- if execute and is_incremental() -%}
+        {%- for role in roles -%}
+            {%- if run_query('select 1 from ' ~ this ~ ' where ' ~ timeline_foreign_rows([role], by_source) ~ ' limit 1').rows | length > 0 -%}
+                {%- do replaced.append(role) -%}
+            {%- endif -%}
+        {%- endfor -%}
+    {%- endif -%}
+    {{- return(replaced) -}}
+{%- endmacro %}
+
+{# Pre-hook: remove the rows of inputs no longer linked as they were. #}
+{% macro timeline_remove_foreign(roles, by_source=false) -%}
+    {%- if is_incremental() -%}delete from {{ this }} where {{ timeline_foreign_rows(roles, by_source) }}{%- endif -%}
+{%- endmacro %}
+
+{# Completed loads of a source: dlt lists a load once all its rows are written. #}
+{% macro timeline_completed(source_name) -%}
+    select load_id, inserted_at from (
+        {{ optional_input(source_name, '_dlt_loads', {'load_id': 'text', 'status': 'bigint', 'inserted_at': 'timestamptz'}, ['load_id', 'status', 'inserted_at']) }}
+    ) loads where status = 0
+{%- endmacro %}
+
+{# Which loads a raw-reading model reads this build. Its cursor is the latest
+   completion time it has read (`_cursor` on its rows). It reads the loads that
+   completed after that, less a margin, so a load completing out of order is read
+   as long as the workers' clocks agree within the margin; a load read again
+   inside the margin only rewrites its rows. A first build, a replaced input, or
+   more new loads than one statement should list reads every completed load.
+   Returns {rebuild, loads, cursor}; the load IDs are inlined in the query. #}
+{% macro timeline_load_cursor(source_name, replaced) -%}
+    {%- set result = {'rebuild': replaced or not is_incremental(), 'loads': [], 'cursor': ''} -%}
+    {%- if not execute -%}{{ return(result) }}{%- endif -%}
+    {%- set completed = '(' ~ timeline_completed(source_name) ~ ')' -%}
+    {%- if not result.rebuild -%}
+        {%- set lower = timeline_scalar('select max(_cursor)::text from ' ~ this) -%}
+        {%- set found = timeline_scalar(
+            "select string_agg(load_id, ',' order by inserted_at, load_id) || '|' || max(inserted_at)::text from (select * from "
+            ~ completed ~ " l where inserted_at > coalesce(nullif(" ~ timeline_literal(lower) ~ ", '')::timestamptz, '-infinity') - interval '"
+            ~ timeline_cursor_margin() ~ "' order by inserted_at, load_id limit " ~ (timeline_cursor_limit() + 1) ~ ") n") -%}
+        {%- if found -%}
+            {%- set parts = found.split('|') -%}
+            {%- set ids = parts[0].split(',') -%}
+            {%- if ids | length > timeline_cursor_limit() -%}
+                {%- do result.update({'rebuild': true}) -%}
+            {%- else -%}
+                {%- do result.update({'loads': ids, 'cursor': parts[1]}) -%}
+            {%- endif -%}
+        {%- else -%}
+            {%- do result.update({'cursor': lower}) -%}
+        {%- endif -%}
+    {%- endif -%}
+    {%- if result.rebuild -%}
+        {%- do result.update({'cursor': timeline_scalar('select max(inserted_at)::text from ' ~ completed ~ ' l')}) -%}
+    {%- endif -%}
+    {{- return(result) -}}
+{%- endmacro %}
+
+{# The variable exists for tests, which need loads outside the margin. #}
+{% macro timeline_cursor_margin() %}{{ return(var('timeline_cursor_margin', '10 minutes') | replace("'", '')) }}{% endmacro %}
+{% macro timeline_cursor_limit() %}{{ return(5000) }}{% endmacro %}
+
+{# Rows of the loads read this build. #}
+{% macro timeline_in_loads(column, loads) -%}
+    {%- if loads -%}{{ column }} in ({% for id in loads %}{{ timeline_literal(id) }}{% if not loop.last %}, {% endif %}{% endfor %}){%- else -%}false{%- endif -%}
+{%- endmacro %}
+
+{# A raw row whose load has completed; needs the model's `completed` CTE. #}
+{% macro timeline_completed_row(alias) -%}
+    exists (select 1 from completed c where c.load_id = {{ alias }}._dlt_load_id)
+{%- endmacro %}
+
+{# Post-hook: leave exactly the owner and, on a readable table, the configured
+   reader with SELECT, whatever default or earlier privileges said. It runs in
+   the model's transaction, so no other state is ever visible. #}
+{% macro timeline_exact_acl(readable) -%}
+    {%- set role = timeline_reader_role() if readable else none -%}
+    do $acl$
+    declare grantee oid;
+    begin
+        for grantee in
+            select distinct a.grantee from pg_class c, aclexplode(c.relacl) a
+            where c.oid = '{{ this }}'::regclass and a.grantee <> c.relowner
+        loop
+            if grantee = 0 then
+                execute 'revoke all on {{ this }} from public';
+            else
+                execute format('revoke all on {{ this }} from %s', grantee::regrole);
+            end if;
+        end loop;
+        {%- if role %}
+        execute 'grant select on {{ this }} to {{ role }}';
+        {%- endif %}
+    end
+    $acl$
 {%- endmacro %}
 
 {# Indexes on raw tables that incremental builds look rows up by; dlt creates
-   none but on _dlt_id. Created once, when missing, by a pre-hook. #}
+   none but on _dlt_id. A pre-hook outside the model's transaction: each index is
+   created once, when missing, and committed at once, so the lock that holds
+   writes to that raw table lasts only while the index is built. An invalid one
+   (an interrupted build) is rebuilt. A table the build's role does not own is
+   left alone: reads stay correct, only slower. #}
 {% macro timeline_raw_indexes(source_name, indexes) -%}
     {%- set statements = [] -%}
     {%- if execute and source_name not in var('miroir_unlinked_sources', []) -%}
@@ -69,17 +182,26 @@
             {%- set raw = source(source_name, table_name) -%}
             {%- set relation = adapter.get_relation(database=raw.database, schema=raw.schema, identifier=raw.identifier) -%}
             {%- if relation is not none -%}
-                {%- for column in columns -%}
+                {%- set owned = run_query("select pg_has_role(current_user, relowner, 'USAGE') from pg_class where oid = '" ~ relation ~ "'::regclass").columns[0].values()[0] -%}
+                {%- if not owned -%}
+                    {%- do log('Not indexing ' ~ relation ~ ': owned by another role', info=true) -%}
+                {%- endif -%}
+                {%- for column in columns if owned -%}
                     {%- set name = 'miroir_' ~ raw.identifier ~ '_' ~ column.strip('_') -%}
-                    {%- set found = run_query("select to_regclass('" ~ adapter.quote(raw.schema) ~ "." ~ adapter.quote(name) ~ "') is not null") -%}
-                    {%- if not found.columns[0].values()[0] -%}
+                    {%- set qualified = adapter.quote(raw.schema) ~ '.' ~ adapter.quote(name) -%}
+                    {%- set state = run_query("select coalesce((select indisvalid::text from pg_index where indexrelid = to_regclass('" ~ qualified ~ "')), 'missing')").columns[0].values()[0] -%}
+                    {%- if state == 'missing' -%}
                         {%- do statements.append('create index if not exists ' ~ adapter.quote(name) ~ ' on ' ~ relation ~ ' (' ~ adapter.quote(column) ~ ')') -%}
+                    {%- elif state == 'false' -%}
+                        {%- do statements.append('reindex index ' ~ qualified) -%}
                     {%- endif -%}
                 {%- endfor -%}
             {%- endif -%}
         {%- endfor -%}
     {%- endif -%}
-    {{- statements | join(';\n') -}}
+    {#- Each index commits on its own. The checks opened a transaction, which the
+        last commit ends before the model's own begins. -#}
+    {{- statements | join(';\ncommit;\n') ~ ';\ncommit' if statements else 'commit' -}}
 {%- endmacro %}
 
 {# Whether a time falls in one of the ranges [lo, hi), given as text. #}

@@ -11,6 +11,7 @@
 <p class="muted">{{ a.package.description }} Rebuilds after any linked connection loads.</p>
 {% if a.status.state != 'no_data' %}
 <form class="inline" method="post" action="/analyses/{{ a.id }}/models"><button>Rebuild analysis</button></form>
+<form class="inline" method="post" action="/analyses/{{ a.id }}/models"><input type="hidden" name="full_refresh" value="true"><button>Rebuild from scratch</button></form>
 {% else %}<p class="muted">Import or sync a linked connection to build it.</p>{% endif %}
 {% if a.dashboards %}<p>{% for d in a.dashboards %}<a href="{{ d.url }}" target="_blank" rel="noopener noreferrer">Open {{ d.name }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
 

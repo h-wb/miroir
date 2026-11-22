@@ -2194,3 +2194,83 @@ first build over them 11 s.
 Not done: thumbnails, `media_objects`, queries in `src/core/timeline.py`,
 routes, pages; the Messages, music and other sources. The installation still has
 to create the role and set `reader_role` (decision 040).
+
+## 2026-11-22 — Timeline phase 1a after review (PR #43)
+
+An independent reviewer read pull request #43 and reported eleven findings.
+Nine were fixed and two were left as accepted costs; decision 040's amendment
+records the decision on each. Built:
+
+- **Inputs unlinked or replaced** leave no rows. Every timeline row records its
+  input (connection and raw dataset, `_input`). A build that finds rows of
+  another input removes them in a pre-hook and reads the current input from its
+  start; `events` and `days` do so per source.
+- **Rebuild from scratch.** `request_models(..., full_refresh=True)` records
+  `full_refresh` in the operation's options; the build passes dbt
+  `--full-refresh`. It is offered as **Rebuild from scratch** on the analysis
+  page, as `models <analysis> --full-refresh`, and as
+  `POST /api/analyses/{id}/models?full_refresh=true`.
+- **Which loads are read.** The cursor is no longer the highest load ID. Only rows
+  of loads listed as complete in `_dlt_loads` are read, in lookups and first
+  builds too. The two raw-reading models record the latest completion time read
+  (`_cursor`). Each build reads the loads completed after it, less ten minutes,
+  their IDs inlined. Downstream models resume from a build clock (`_stamp`). The
+  margin is a dbt variable so tests can set it to zero.
+- **Old positions.** A frame, session or visit that moves keeps its previous time
+  (`previous_captured_at`, `previous_started_at`). `timeline_screen` recomputes
+  around it, and `days` recounts it.
+- **Withheld text.** It is nulled in `screen_frames`, and refused by the batch
+  validator. The collector writes text only for frames it does not withhold.
+- **Exact privileges.** Each timeline table ends its build, in its transaction,
+  with the owner and, on the four outputs, the reader with `SELECT` only. The two
+  source models state an empty grant list.
+- **Raw indexes.** They are created in a hook outside the model's transaction,
+  each committed at once. An invalid one is rebuilt, and tables the role does not
+  own are skipped. Not concurrent: dbt-postgres runs hook statements inside a
+  transaction.
+- **Runner** (`src/core/runner.py`, build path only):
+  - a build checks its connection revision and analysis receipt again, against
+    the configuration read anew, once it holds the connection lock and once it
+    holds the dbt slot (`AnalysisPlan.ready`, called by `build_models`); if
+    either changed, it ends as blocked;
+  - `_deferred` joins only builds with a bound flow run;
+  - a build due now is registered under the decision lock;
+  - the flow and the CLI's `execute` pass the reload.
+
+The foreign-row check and its delete are two range conditions on an indexed
+`_input`, not `is distinct from`. As first written, they read all of
+`screen_frames` on every build (about 90 ms at a million frames).
+
+Validation:
+
+- `tests/test_timeline_models.py`, 6 tests:
+  - a load with an older ID that completes later is read;
+  - a load that never completes is never read, including its app row;
+  - a withheld frame's text is dropped;
+  - a frame moved out of a two-frame session and to another day, a frame without
+    an app moved off a day of its own, and a reused visit ID leaving a day are
+    handled;
+  - a rebuild from scratch equals the first build;
+  - with default privileges granting the reader every new table, an emptied
+    `reader_role` leaves nothing readable;
+  - unlinking the screen leaves no screen row and the browser rows unchanged;
+    replacing it with another connection shows only that connection's rows, and
+    switching back shows only the first's.
+- `tests/test_build_interval.py`, 3 new tests:
+  - a build with no bound run is not joined;
+  - the immediate build is registered before the next load decides;
+  - settings changed while waiting for the lock, or for the dbt slot, block the
+    build, and a full refresh reaches the plan.
+- Also: the web and API full-refresh paths, the CLI flag, and the batch
+  validator's new rejection.
+- Each fix was undone in turn, and a test failed each time.
+
+Outside the suite, with invented rows only:
+- 10 random seeds matched incremental and fresh builds, and 3 more with the load
+  limit lowered to force the backlog path.
+- At a million frames, `auto_explain` showed no full read of a large table on an
+  ordinary build except `apps` and the session join. Each model took under half a
+  second.
+
+Not done: `refresh` resubmitting lost deferred builds (left as decision 040
+describes); concurrent index creation.

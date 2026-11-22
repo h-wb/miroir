@@ -49,7 +49,8 @@ def _valid_frame(record: dict[str, Any]) -> bool:
         and (
             withheld is None or (isinstance(withheld, str) and 0 < len(withheld) <= 64)
         )
-        and (isinstance(text, str) or (text is None and withheld is not None))
+        # A withheld frame carries no text; any other frame carries its text.
+        and (text is None if withheld is not None else isinstance(text, str))
         and _count(record["masked"])
     )
 

@@ -42,17 +42,19 @@ SAFARI, TERMINAL, NOTES, MAIL = (
     "com.apple.mail",
 )
 UNLISTED = "com.example.unlisted-app"
+LINKS = "timeline_links"  # a miroir of its own: other raw datasets
 
 
-def configuration(analyses):
+def configuration(analyses, miroir_id="timeline_tests"):
     return parse_miroir(
         json.dumps(
             {
                 "schema_version": 1,
-                "id": "timeline_tests",
+                "id": miroir_id,
                 "connections": [
                     {"id": "screen", "integration": "screenmemory", "settings": {}},
                     {"id": "browser", "integration": "browser_history", "settings": {}},
+                    {"id": "laptop", "integration": "screenmemory", "settings": {}},
                 ],
                 "analyses": analyses,
             }
@@ -235,7 +237,10 @@ class TimelineModelTests(unittest.TestCase):
         )
         self.store.migrate()
         self.addCleanup(self.store.engine.dispose)
-        self.query(f"create role {READER} nologin")
+        self.query(
+            f"do $$ begin create role {READER} nologin; "
+            "exception when duplicate_object then null; end $$"
+        )
         self.execution = {
             "destination": dlt.destinations.postgres(
                 credentials={
@@ -248,9 +253,16 @@ class TimelineModelTests(unittest.TestCase):
             ),
             "resolve_credentials": lambda c: {},
             "pipelines_dir": str(self.root / "dlt"),
-            "transform": build_connection_models,
+            "transform": self.build,
         }
+        # No margin: each build reads only loads completed since the last, so
+        # the narrow incremental paths are the ones tested.
+        self.margin = "0 seconds"
         self.sent = 0
+
+    def build(self, plan):
+        variables = {**plan.variables, "timeline_cursor_margin": self.margin}
+        build_connection_models(replace(plan, variables=variables))
 
     def query(self, sql, role=None):
         with (
@@ -378,7 +390,7 @@ class TimelineModelTests(unittest.TestCase):
                 place(2, "https://example.net/b", "Page B"),
                 visit(1, 1, 100, 1),
                 visit(2, 1, 110, 9),  # a reload is not a visit
-                visit(4, 2, 200, 2),
+                visit(4, 2, 200 - 2 * 86400, 2),  # two days earlier
             ),
             batch_format,
         )
@@ -400,7 +412,8 @@ class TimelineModelTests(unittest.TestCase):
             browser_batch(
                 place(1, "https://www.example.org/a", "Page A, renamed"),
                 visit(3, 2, 300, 1),
-                visit(4, 2, 400, 4),  # a cleared visit's id, reused by an embed
+                # A cleared visit's id, reused by an embed: its old day loses it.
+                visit(4, 2, 400, 4),
             ),
             batch_format,
         )
@@ -484,28 +497,72 @@ class TimelineModelTests(unittest.TestCase):
             [(path(-60),)],
         )
 
-        # A load still running is not read; once listed as complete, it is.
+        # Rows of a load still running are not read, in lookups neither. A load
+        # with an older ID that completes later is read at the next build. One
+        # that never completes is never read.
         dataset = miroir.connections[0].binding.dataset_name
-        self.query(
-            f"insert into {dataset}.frames (image_path, ts, captured_at, text, masked, "
-            "_dlt_load_id, _dlt_id) values "
-            f"('{path(50)}', {MIDNIGHT + 50}, to_timestamp({MIDNIGHT + 50}), 'Late', 0, "
-            "'9999999999.000001', 'invented-row-1')"
-        )
-        self.query(
-            f"insert into {dataset}.app_usage (ts, bundle_id, observed_at, "
-            f"_dlt_load_id, _dlt_id) values ({MIDNIGHT + 50}, '{TERMINAL}', "
-            f"to_timestamp({MIDNIGHT + 50}), '9999999999.000001', 'invented-row-2')"
-        )
+
+        def raw_frame(load_id, offset, text="Late", withheld="null"):
+            self.query(
+                f"insert into {dataset}.frames (image_path, ts, captured_at, text, "
+                "withheld, masked, _dlt_load_id, _dlt_id) values "
+                f"('{path(offset)}', {MIDNIGHT + offset}, "
+                f"to_timestamp({MIDNIGHT + offset}), '{text}', {withheld}, 0, "
+                f"'{load_id}', 'invented-frame-{offset}')"
+            )
+
+        def raw_usage(load_id, offset, bundle):
+            self.query(
+                f"insert into {dataset}.app_usage (ts, bundle_id, observed_at, "
+                f"_dlt_load_id, _dlt_id) values ({MIDNIGHT + offset}, '{bundle}', "
+                f"to_timestamp({MIDNIGHT + offset}), '{load_id}', "
+                f"'invented-usage-{offset}-{load_id}')"
+            )
+
+        late, never = "1000000000.000001", "1000000000.000002"
+        # Withheld, yet with text: the model keeps none.
+        raw_frame(late, 50, text="Should not stay", withheld="'marker'")
+        raw_usage(late, 50, TERMINAL)
+        raw_frame(never, 60)
+        raw_usage(never, 60, TERMINAL)
+        raw_usage(never, 40, "com.aaa.first")  # would be the frame at 40's app
         plan = analysis_plan(miroir.analyses[0])
-        build_connection_models(plan)
+        self.build(plan)
         self.assertEqual(self.sessions(schema)[1][3:], (at(40), 4))
         self.query(
             f"insert into {dataset}._dlt_loads (load_id, schema_name, status, "
-            "inserted_at) values ('9999999999.000001', 'screenmemory', 0, now())"
+            f"inserted_at) values ('{late}', 'screenmemory', 0, now())"
         )
-        build_connection_models(plan)
+        self.build(plan)
         self.assertEqual(self.sessions(schema)[1][3:], (at(50), 5))
+        frames = {
+            row[0]: row[1:]
+            for row in self.query(
+                f"select image_path, bundle_id, text, withheld from {schema}.screen_frames"
+            )
+        }
+        self.assertEqual(frames[path(50)], (TERMINAL, None, "marker"))
+        self.assertNotIn(path(60), frames)
+        self.assertEqual(frames[path(40)][0], TERMINAL)
+
+        # A frame resent with another time leaves its old session and day: the
+        # second frame of a Safari session moves to the evening before, and a
+        # frame without an app, alone on its day, moves there next.
+        self.send(
+            miroir,
+            "screen",
+            screen_batch(
+                frame(3010) | {"ts": MIDNIGHT - 7200},
+                usage(-7200, SAFARI),
+                frame(3 * 86400),
+            ),
+        )
+        sessions = self.sessions(schema)
+        self.assertEqual(sessions[0], (path(3010), "Safari", at(-7200), at(-7200), 1))
+        self.assertIn((path(3000), "Safari", at(3000), at(3000), 1), sessions)
+        self.send(
+            miroir, "screen", screen_batch(frame(3 * 86400) | {"ts": MIDNIGHT - 7300})
+        )
 
         # A first build over the same rows gives the same tables.
         both = {"screen": "screen", "browser": "browser"}
@@ -518,15 +575,28 @@ class TimelineModelTests(unittest.TestCase):
             ]
         )
         for analysis in miroir.analyses[1:]:
-            build_connection_models(analysis_plan(analysis))
+            self.build(analysis_plan(analysis))
+        incremental = self.snapshot(schema)
+        self.assertEqual(self.snapshot(self.schema(miroir, "fresh")), incremental)
         self.assertEqual(
-            self.snapshot(self.schema(miroir, "fresh")), self.snapshot(schema)
+            self.query(
+                f"select source, day::text, events, frames from {schema}.days "
+                "order by source, day"
+            ),
+            [
+                ("browser", "2026-11-20", 2, None),
+                ("screen", "2026-11-19", 2, 4),
+                ("screen", "2026-11-20", 8, 17),
+            ],
         )
+        # A rebuild from scratch gives the same tables again.
+        self.build(replace(analysis_plan(miroir.analyses[0]), full_refresh=True))
+        self.assertEqual(self.snapshot(schema), incremental)
         screen_only = self.schema(miroir, "screen_only")
         browser_only = self.schema(miroir, "browser_only")
         self.assertEqual(
             self.query(f"select source, count(*) from {screen_only}.events group by 1"),
-            [("screen", 9)],
+            [("screen", 10)],
         )
         self.assertEqual(
             self.query(
@@ -540,7 +610,7 @@ class TimelineModelTests(unittest.TestCase):
         # A changed timezone recounts every day and keeps none of the old ones.
         fresh = next(a for a in miroir.analyses if a.id == "fresh")
         utc = replace(fresh, config=fresh.config.model_copy(update={"timezone": "UTC"}))
-        build_connection_models(analysis_plan(utc))
+        self.build(analysis_plan(utc))
         self.assertEqual(
             self.query(
                 "select source, day::text, events, frames, timezone from "
@@ -548,7 +618,7 @@ class TimelineModelTests(unittest.TestCase):
             ),
             [
                 ("browser", "2026-11-20", 2, None, "UTC"),
-                ("screen", "2026-11-20", 9, 20, "UTC"),
+                ("screen", "2026-11-20", 10, 21, "UTC"),
             ],
         )
 
@@ -566,17 +636,28 @@ class TimelineModelTests(unittest.TestCase):
                 self.assertRaises(psycopg2.errors.InsufficientPrivilege),
             ):
                 self.query(f"select 1 from {relation}", READER)
-        # Unsetting the role revokes what an earlier build granted.
+        # Unsetting the role revokes what an earlier build granted, even where
+        # default privileges grant the reader every new table.
+        self.query(f"alter default privileges grant select on tables to {READER}")
+        self.addCleanup(
+            self.query,
+            f"alter default privileges revoke select on tables from {READER}",
+        )
         miroir = configuration([timeline("timeline", both)])
-        build_connection_models(analysis_plan(miroir.analyses[0]))
-        with self.assertRaises(psycopg2.errors.InsufficientPrivilege):
-            self.query(f"select 1 from {schema}.events", READER)
+        self.build(analysis_plan(miroir.analyses[0]))
+        for table in ("screen_frames", "events", "days", "apps", "timeline_screen"):
+            with (
+                self.subTest(table=table),
+                self.assertRaises(psycopg2.errors.InsufficientPrivilege),
+            ):
+                self.query(f"select 1 from {schema}.{table}", READER)
         self.assertTrue(
             {
                 "miroir_frames_dlt_load_id",
                 "miroir_frames_ts",
                 "miroir_frames_image_path",
                 "miroir__dlt_loads_load_id",
+                "miroir__dlt_loads_inserted_at",
             }
             <= {
                 row[0]
@@ -585,3 +666,92 @@ class TimelineModelTests(unittest.TestCase):
                 )
             }
         )
+
+    def test_unlinking_or_replacing_an_input_leaves_none_of_its_rows(self):
+        self.margin = "10 minutes"  # the installation's
+        both = {"screen": "screen", "browser": "browser"}
+        miroir = configuration([timeline("timeline", both, READER)], LINKS)
+        schema = self.schema(miroir, "timeline")
+        self.send(
+            miroir, "screen", screen_batch(*screen(0, SAFARI), *screen(10, UNLISTED))
+        )
+        self.send(
+            miroir,
+            "browser",
+            browser_batch(
+                place(1, "https://example.org/a", "Page A"), visit(1, 1, 100, 1)
+            ),
+            "firefox_places_batch",
+        )
+
+        def screen_rows():
+            return {
+                table: self.query(
+                    f"select count(*) from {schema}.{table}"
+                    + (
+                        " where source = 'screen'"
+                        if table in ("events", "days")
+                        else ""
+                    )
+                )[0][0]
+                for table in ("screen_frames", "timeline_screen", "events", "days")
+            }
+
+        def browser_rows():
+            return (
+                self.query(
+                    "select event_id, title, started_at from "
+                    f"{schema}.events where source = 'browser'"
+                ),
+                self.query(
+                    f"select day, events from {schema}.days where source = 'browser'"
+                ),
+            )
+
+        browser = browser_rows()
+        self.assertEqual(
+            screen_rows(),
+            {"screen_frames": 2, "timeline_screen": 2, "events": 2, "days": 1},
+        )
+        # Unlinked: its rows go at the next build, wherever they were.
+        miroir = configuration(
+            [timeline("timeline", {"browser": "browser"}, READER)], LINKS
+        )
+        self.build(analysis_plan(miroir.analyses[0]))
+        self.assertEqual(
+            screen_rows(),
+            {"screen_frames": 0, "timeline_screen": 0, "events": 0, "days": 0},
+        )
+        self.assertEqual(
+            self.query(f"select count(*) from {schema}.apps where not known"), [(0,)]
+        )
+        self.assertEqual(browser_rows(), browser)
+
+        # Replaced by another connection: only that connection's rows.
+        replaced = {"screen": "laptop", "browser": "browser"}
+        miroir = configuration([timeline("timeline", replaced, READER)], LINKS)
+        self.send(miroir, "laptop", screen_batch(*screen(500, NOTES)))
+        self.assertEqual(
+            self.query(f"select image_path, connection from {schema}.screen_frames"),
+            [(path(500), "laptop")],
+        )
+        self.assertEqual(
+            self.query(
+                f"select group_key from {schema}.events where source = 'screen'"
+            ),
+            [(NOTES,)],
+        )
+        # And back: the first connection's rows again, read from the start.
+        miroir = configuration([timeline("timeline", both, READER)], LINKS)
+        self.build(analysis_plan(miroir.analyses[0]))
+        self.assertEqual(
+            self.query(
+                f"select image_path, connection from {schema}.screen_frames order by 1"
+            ),
+            [(path(0), "screen"), (path(10), "screen")],
+        )
+        self.assertEqual(
+            screen_rows(),
+            {"screen_frames": 2, "timeline_screen": 2, "events": 2, "days": 1},
+        )
+        self.assertEqual(browser_rows(), browser)

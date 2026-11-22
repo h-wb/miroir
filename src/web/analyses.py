@@ -7,7 +7,7 @@ persists analyses, and these handlers translate forms and choose the next page.
 from collections.abc import Callable
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from src.core.config import ConfigurationConflict, ConfigurationError
@@ -133,8 +133,8 @@ def analysis_pages(service: MiroirService, page: Page) -> APIRouter:
         )
 
     @router.post("/analyses/{analysis_id}/models")
-    def rebuild(analysis_id: str) -> Response:
-        service.request_models(analysis_id)
+    def rebuild(analysis_id: str, full_refresh: str = Form("")) -> Response:
+        service.request_models(analysis_id, full_refresh=full_refresh == "true")
         return RedirectResponse(
             f"/analyses/{analysis_id}?notice=models_requested", status_code=303
         )

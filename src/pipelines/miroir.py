@@ -90,6 +90,8 @@ def sync_connection(
         operation_id=operation_id,
         backend_run_id=str(flow_run.id),
         transform=build_connection_models,
+        # A build that waited for a lock checks the configuration again first.
+        reload=lambda: load_miroir(Path(config_path)),
         defer=schedule_build(store, deployment_id, connection_id, config_path)
         if deployment_id
         else None,

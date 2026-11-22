@@ -5,9 +5,13 @@
     incremental_strategy='timeline_upsert',
     indexes=[
         {'columns': ['event_id'], 'unique': True},
+        {'columns': ['_input']},
         {'columns': ['deleted', 'started_at']},
-        {'columns': ['_loaded_through']},
+        {'columns': ['_stamp']},
     ],
+    grants={'select': []},
+    pre_hook="{{ timeline_remove_foreign(['screen']) }}",
+    post_hook="{{ timeline_exact_acl(false) }}",
 ) }}
 -- Screen events: one row per app session, a run of frames of the same app with
 -- no pause longer than five minutes between them. Frames without an app neither
@@ -18,18 +22,26 @@
 -- start of the session before it to the start of the first session beginning
 -- after the next frame with an app: boundaries no change can move. A session
 -- that no longer exists stays as a row with deleted = true, so events drops it.
--- Frames of one second share their app and are never split between sessions.
+-- Frames of one second share their app and are never split between sessions. A
+-- frame that moved counts as changed at its old time too. A session whose start
+-- moved keeps the previous one in previous_started_at, for days.
+-- Internal: the reader has no access (an empty grant list makes dbt revoke).
 -- The windows are found first, by a query of their own, and inlined as
 -- literal ranges, so frames and sessions are read through their time indexes.
 {% set gap_seconds = 300 %}
 {% set upper = timeline_resume(ref('screen_frames')) %}
+{% set replaced = timeline_replaced(['screen']) | length > 0 %}
+{% set incremental = is_incremental() and not replaced %}
 {% set ns = namespace(windows=[('-infinity', 'infinity')]) %}
-{% if is_incremental() %}
+{% if incremental %}
     {% set lower = timeline_resume(this) %}
     {% set reach_sql %}
         with changed as (
-            select distinct captured_at from {{ ref('screen_frames') }}
-            where _loaded_through > {{ timeline_literal(lower) }}
+            select captured_at from {{ ref('screen_frames') }}
+            where _stamp > {{ timeline_literal(lower) }}
+            union
+            select previous_captured_at from {{ ref('screen_frames') }}
+            where _stamp > {{ timeline_literal(lower) }} and previous_captured_at is not null
         ),
         reach as (
             select
@@ -134,18 +146,25 @@ current_sessions as (
             'bundle_id', s.bundle_id, 'frames', s.frames, 'last_frame', s.last_frame
         ) as payload,
         false as deleted,
-        {{ timeline_literal(upper) }} as _loaded_through
+        {% if incremental %}
+        case when t.started_at <> s.started_at then t.started_at end
+        {% else %}null::timestamptz{% endif %} as previous_started_at,
+        {{ timeline_literal(timeline_input('screen')) }} as _input,
+        {{ timeline_literal(upper) }} as _stamp
     from sessions s
     left join {{ ref('timeline_known_apps') }} k on k.bundle_id = s.bundle_id
+    {% if incremental %}left join {{ this }} t on t.event_id = 'screen:' || s.first_frame{% endif %}
 )
 select * from current_sessions
-{% if is_incremental() %}
+{% if incremental %}
 union all
 select
     t.source, t.connection, t.event_id, t.started_at, t.ended_at, t.kind, t.title,
     t.body, t.media_kind, t.media_key, t.group_key, t.payload,
     true as deleted,
-    {{ timeline_literal(upper) }} as _loaded_through
+    null::timestamptz as previous_started_at,
+    t._input,
+    {{ timeline_literal(upper) }} as _stamp
 from {{ this }} t
 where not t.deleted
     and ({{ timeline_in_ranges('t.started_at', ns.windows) }})

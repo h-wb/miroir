@@ -1,6 +1,7 @@
 {{ config(
     enabled=var('miroir_namespace', none) is not none,
     grants=timeline_grants(),
+    post_hook="{{ timeline_exact_acl(true) }}",
 ) }}
 -- Bundle identifier to a readable name and a colour: the known list, and every app
 -- seen in a screen session. An app the list lacks is named from its identifier.
