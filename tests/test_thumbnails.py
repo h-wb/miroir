@@ -67,6 +67,18 @@ class ThumbnailTests(unittest.TestCase):
             for extension in kind.thumbnails:
                 self.assertTrue(decoders([extension]), extension)
 
+    def test_every_decoder_has_a_check_image_that_it_alone_reads(self):
+        from src.core.decoder_checks import check_image
+        from src.core.media import IMAGE_DECODERS
+
+        for decoder in sorted(set(IMAGE_DECODERS.values())):
+            with self.subTest(decoder):
+                image = check_image(decoder)
+                self.assertIsNotNone(image)
+                self.assertEqual(sorted(make(image, (decoder,))), [360, 1280])
+                others = tuple(d for d in set(IMAGE_DECODERS.values()) if d != decoder)
+                self.assertEqual(self.refusal(image, others), "unreadable")
+
     def test_pillow_has_webp(self):
         self.assertTrue(features.check("webp"))
 

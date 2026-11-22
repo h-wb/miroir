@@ -720,10 +720,13 @@ child process does, one file at a time, with no credentials in its environment, 
 1 GiB memory limit and a 30-second deadline per file. On Linux the worker makes
 itself undumpable first, so the child cannot read the worker's environment through
 `/proc`; the child still has the network and can read the mounted volumes. Each
-fresh child must first make thumbnails of two built-in images (the smallest and
-the costliest the bounds accept). If it cannot, the run stops as failed ("The image
-decoder could not start or failed its check"), the files stay queued, none is
-charged and none is recorded.
+fresh child must first make thumbnails of a tiny built-in image for every decoder
+its kinds use (JPEG and PNG for screenshots) and of the costliest image the bounds
+accept; that costs about 1.4 s and a peak of about 530 MB on every fresh child,
+so once per run and again after each lost file. If it cannot (it does not start,
+a decoder is missing from its Pillow, its memory limit is too small), the run
+stops as failed ("The image decoder could not start or failed its check"), the
+files stay queued, none is charged and none is recorded.
 
 - **Names.** Beside the original, under a derived kind:
   `prefix / connection / screenshots.w360 / <key>.webp` and
@@ -741,7 +744,11 @@ charged and none is recorded.
   and empties the queue itself. A run that is overdue is joined only while Prefect
   says it is still scheduled, pending or running; if Prefect lost it, the next
   confirmation asks for a new one. A backfill always asks for its own. The files
-  stay queued meanwhile.
+  stay queued meanwhile. Known limit: a flow run that Prefect still shows as
+  running after its pod died before recording an attempt is joined for as long
+  as Prefect says so, and `refresh` does not close it (it sees no attempt and a
+  running state); cancel that flow run in Prefect, or run a backfill, which
+  requests a run of its own.
 - **What is recorded.** One row per stored file in `media_objects`, in the
   connection's own dataset (its binding's `dataset_name`), written by a dlt
   pipeline of its own (`<pipeline_name>_media`), merged on
@@ -802,10 +809,12 @@ under `prefix / connection / kind /`, queues what it finds and derives it:
 uv run --locked pipelines-miroir media-backfill screen screenshots --limit 10000
 ```
 
-`--retry-failed` also queues the kind's files recorded as `failed` and removes
-their rows, so they are derived again: the repair after an incident (a broken
-image, a decoder fault) without a new `DERIVE_VERSION`. A plain backfill leaves
-`failed` rows alone.
+`--retry` also queues the kind's files recorded as `failed`, and with
+`--retry failed,unreadable` those recorded as `unreadable` too, to be derived again
+whatever their rows say: the repair after a decoder incident (a broken image, a
+missing library) without a new `DERIVE_VERSION`. It is one write to the queue;
+the rows stay until the files are derived again, and a run that dies before that
+leaves them queued for the next. A plain backfill leaves those rows alone.
 
 For development only, `--duckdb FILE --metadata sqlite:///FILE` runs it in the
 CLI's own process. It refuses without `--metadata` naming a local SQLite file, so

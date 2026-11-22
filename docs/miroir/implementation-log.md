@@ -2611,3 +2611,29 @@ answered, with an unsent first message; a null date and a date at the epoch; two
 stickers and a sticker removal; a love changed to like; an unnamed group with
 nobody listed; a chat with no identifier), 12 tests now. A build on 200,000
 synthetic messages still takes 3.7 to 4.3 seconds warm, 5.0 cold.
+
+## 2026-11-22 — Thumbnails: the third review of pull request #44
+
+The third review confirmed every earlier reproduction fixed and the scheduling of
+builds and derive runs coherent after the merge with phase 1a. One finding and
+three small points remained; all were fixed in one commit.
+
+| Finding | Done |
+|---|---|
+| The self-check never decoded a JPEG: a Pillow without libjpeg passed it and every screenshot became `unreadable` for good | `src/core/decoder_checks.py` holds an 8 × 8 image for each decoder in `IMAGE_DECODERS`, read by that decoder alone (data only, made with Pillow once). A fresh child must make thumbnails of the image of every decoder its run's kinds use, then the costliest accepted image. A test requires an image for every mapped decoder and decodes each. The reviewer's case (the JPEG decoder deleted in the child) is in the suite: the run stops as decoder unavailable, nothing charged, no row, nothing scheduled |
+| The retry could not repair `unreadable` rows | `media-backfill --retry` takes the statuses: `failed` by default, `--retry failed,unreadable` for both; anything else is refused |
+| The retry queued files and deleted their rows in two steps | One step: the queue entry carries a `retry` mark (a column of the still unreleased schema 8), and a marked file is derived whatever its row says; the merge replaces the row. A run that dies after the write leaves the files queued and marked for the next run, tested |
+| An `OSError` starting the child or making the worker undumpable escaped | It is decoder unavailable, tested for both |
+
+Documented, not built: a flow run that Prefect still shows as running after its
+pod died before recording an attempt is joined for as long as Prefect says so,
+and `refresh` does not close it. The check costs about 1.4 s and a peak of about
+530 MB on every fresh child (0.9 to 1.4 s and 531 MB measured here).
+
+Validation: the reviewer's case without JPEG, for one decoder and for a whole run;
+every mapped decoder's image decoded by it and refused by the others; the retry of
+`failed` and of `unreadable` rows, a death after the retry was queued, and the
+command's `--retry` forms and refusal; `OSError` from starting the child and from
+`prctl`. The server suite is green: 359 tests, none skipped, including the
+Postgres and Prefect ones, with ruff, format, mypy and the collector's strict
+mypy clean.

@@ -2080,11 +2080,14 @@ time over a pipe:
 - Only the decoders of the kind's thumbnail extensions are tried (JPEG and PNG
   for screenshots), whatever the bytes claim; only the first frame is used.
 - Any decoder error makes the file `unreadable`; it never fails the run.
-- Every fresh child must first make thumbnails of two built-in images, a 1-pixel
-  PNG and the costliest image the bounds accept (40 million grey-and-alpha pixels,
-  all zero, so 78 KB), about a second together. A child that cannot means the
-  decoder is unavailable (it did not start, a limit was refused, the memory limit
-  is too small for what the bounds accept, a module is missing): the run stops as
+- Every fresh child must first make thumbnails of a tiny built-in image for every
+  decoder its kinds use (8 × 8, one per decoder in `IMAGE_DECODERS`, read by that
+  decoder alone; a test makes sure each has one), and of the costliest image the
+  bounds accept (40 million grey-and-alpha pixels, all zero, so 78 KB): about
+  1.4 s and a peak of about 530 MB. A child that cannot means the decoder is
+  unavailable (it did not start, an `OSError` starting it or making the worker
+  undumpable, a limit was refused, a decoder is missing from its Pillow, the memory
+  limit is too small for what the bounds accept, a module is missing): the run stops as
   failed with a fixed reason, the file in flight gets its try back, no row is
   written for it and nothing is scheduled. After a child is lost on a file the
   next one is checked at once, so a loss followed by a working child is the file's
@@ -2095,9 +2098,12 @@ time over a pipe:
   the decode reaches an outcome. A file whose decode did not finish three times
   while the decoder worked (the child crashed, was killed or took too long, or the
   run itself died while it decoded) is `failed`, and not read again by a plain
-  run. A backfill asked to (`--retry-failed`) queues the kind's `failed` files
-  again and removes their rows, to repair a past incident without a new
-  `DERIVE_VERSION`. Nothing that happens to the run after a file was decoded
+  run. A backfill asked to (`--retry`, `failed` by default, `unreadable` on
+  request) queues the kind's files with those statuses again, marked to be derived
+  whatever their rows say, to repair a past incident without a new
+  `DERIVE_VERSION`. The mark is in the queue entry, so the retry is one write: a
+  run that dies after it leaves the files queued and marked, and any later run
+  derives them; their rows are replaced by the merge. Nothing that happens to the run after a file was decoded
   counts against that file.
 - Rows are written, and their files leave the queue, every 100 files. A run that
   dies loses at most that much finished work, which the next run redoes.
@@ -2170,7 +2176,18 @@ check of each fresh child now prevents; the child could read the worker's
 environment through `/proc`, which `prctl` now refuses on Linux; an overdue bound
 run that had died absorbed every confirmation until `refresh`, now asked of the
 orchestrator; writing to the child had no deadline; and the child could leave a
-core file. `--retry-failed` was added to repair rows left by such an incident.
+core file. A backfill's retry was added to repair rows left by such an incident.
+
+A third review confirmed those fixed and found one more and three small points,
+all fixed: the check never decoded a JPEG, so a Pillow without libjpeg would have
+made every screenshot `unreadable` (the check now covers every decoder the kinds
+use); the retry could not repair `unreadable` rows (it takes the statuses now);
+the retry queued files and deleted their rows in two steps, which a death between
+would have left unrepaired (it is one marked queue write now); and an `OSError`
+starting the child was not "decoder unavailable" (it is now). Left as a known
+limit: a flow run Prefect still shows as running after its pod died before
+recording an attempt is joined for as long as Prefect says so, and `refresh`
+does not close it; cancelling it in Prefect, or a backfill, ends that.
 
 Consequences:
 
@@ -2180,8 +2197,10 @@ Consequences:
   0.16 to 0.19 s per JPEG screenshot and 0.28 to 0.37 s per large PNG for a whole
   run, network to the bucket not included. Not yet measured on the cluster.
 - A flow-run Job needs at least about 1 GiB of memory for a derive run (above).
-- Each derive run spends about a second, and the memory above, on checking its
+- Each derive run spends about 1.4 s, and a peak of about 530 MB, on checking its
   decoder, and as much again after each lost file.
+- A flow run that Prefect shows as running after its pod died before recording an
+  attempt holds the queue until it is cancelled in Prefect or a backfill runs.
 
 ## 041 — A messages analysis: conversations by identifier, no text
 
