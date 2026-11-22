@@ -27,6 +27,10 @@ Roadmap: [Miroir implementation plan](product-plan.md).
 Which part of the code does what, who may import whom, and the ways data gets
 in: [architecture](architecture.md).
 
+The system as deployed, across this repo, the device configuration and the
+cluster, with a diagram per flow:
+[the warehouse page in home-ops](https://github.com/h-wb/home-ops/blob/main/kubernetes/apps/main/automation/miroir/README.md).
+
 How the collector is versioned and released: [releases](releases.md).
 
 ## Sources
@@ -40,10 +44,12 @@ original raw schema (decision 021); the legacy per-source flows are retired.
 | [GitHub](sources/github.md) | commits, PRs, issues, comments, releases, stars, events, contribution calendar | `github`, daily 01:00 | `github_data` | `github` | GitHub (30) |
 | [Apple Health](sources/apple-health.md) | metrics, workouts, state of mind, medications | `health`, on each export (receiving URL) | `apple_health_data` | `health`, `crossovers` | Health (24), crossovers |
 | [Bike Share Toronto](sources/bikeshare.md) | every rental | `bikeshare`, daily 00:00 | `bikeshare_data` | `biking`, `crossovers` | Biking (3), Rides (26) |
-| [Browser history](sources/browser-history.md) | Zen (Firefox) visits, time on page, typing | retired 2026-11-11, to be redone in Miroir (watched folder, or the collector's `zen_history` source, built 2026-11-20) | `browser_history_data` (dropped 2026-11-22) | `browser` | Browser (31) |
-| [ScreenMemory](sources/screenmemory.md) | screen text per screenshot, front app | built 2026-11-20, not deployed; sent by the Miroir collector | the connection's dataset | – | – |
-| [Apple Messages](sources/apple-messages.md) | iMessage, SMS and RCS rows | built, not deployed; sent by the Miroir collector | the connection's dataset | `messages` | – |
-| Dawarich | location history | in progress, not deployed | `dawarich_data` | – | – |
+| [Browser history](sources/browser-history.md) | Zen (Firefox) visits, time on page, typing | `browser_macbook`, sent hourly by the Miroir collector (since 2026-11-21) | the connection's dataset | `browser`, `timeline` | Browser (31) |
+| [ScreenMemory](sources/screenmemory.md) | screen text per screenshot, front app, screenshots | `screen_macbook`, sent hourly by the Miroir collector (since 2026-11-20) | the connection's dataset | `timeline` | – (the timeline interface) |
+| [Apple Messages](sources/apple-messages.md) | iMessage, SMS and RCS rows, attachments | `messages`, sent hourly by the Miroir collector (since 2026-11-21) | the connection's dataset | `messages` | Messages (34) |
+
+Location history is not loaded: the location service keeps that record, and no
+connector exists for it.
 
 Crossover dashboards (collection "Crossovers"): Music & Heart (25), Rides (26),
 Late nights (27), Correlations (28), Year in review (29). Each Miroir load builds

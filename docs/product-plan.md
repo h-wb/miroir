@@ -1,8 +1,8 @@
 # Personal data workspace: implementation plan
 
 Status: implementation started, 2026-10-28.
-See the [implementation log](workspace/implementation-log.md) for actual milestone
-status and the [decision log](workspace/decisions.md) for choices made during development.
+See the [implementation log](miroir/implementation-log.md) for actual milestone
+status and the [decision log](miroir/decisions.md) for choices made during development.
 Completion criteria below remain gates, not claims of completed work.
 
 ## Objective

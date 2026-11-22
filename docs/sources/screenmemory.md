@@ -3,13 +3,15 @@
 What was on the Mac's screen: one row per screenshot with its recognised text, and
 which app was in front. Collected on the Mac by the Miroir collector (decision 030).
 
-- **Status**: connector and source built 2026-11-20; not deployed, no connection
-  configured yet
+- **Status**: the connection `screen_macbook`, sent hourly by the collector since
+  2026-11-20, with screenshots as media
 - **Code**: connector [`src/integrations/screenmemory/`](../../src/integrations/screenmemory/),
   source [`collector/miroir_collector/sources/screenmemory.py`](../../collector/miroir_collector/sources/screenmemory.py)
 - **Tables**: `frames`, `app_usage`, in the connection's dataset
-- **dbt**: none yet
-- **Dashboard**: none yet
+- **dbt**: the screen lane of the `timeline` analysis (`screen_frames`, `events`,
+  `days`, `apps`; decision 040). Thumbnails and `media_objects` come from the
+  derive run
+- **Dashboard**: none; the timeline interface reads it
 
 ## Where the data comes from
 
@@ -124,8 +126,8 @@ its app on the exact timestamp.
 
 ## Not covered yet
 
-- No dbt models: sessions, hours per app and a cleaned text for summaries are the
-  next step.
+- No cleaned text for summaries yet. Sessions and time per app are in the
+  `timeline` analysis.
 - Screenshots are uploaded only when the source's `media` option is true, and
   only for frames after the media cursor. An existing archive is brought in by
   copying the `screenshots/` folder into the bucket under

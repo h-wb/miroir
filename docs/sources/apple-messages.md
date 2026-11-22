@@ -3,11 +3,12 @@
 Message history (iMessage, SMS and RCS), collected on the Mac by the Miroir
 collector (decision 038).
 
-- **Status**: collector source and connector built; not deployed
+- **Status**: the connection `messages`, sent hourly by the collector since
+  2026-11-21, with attachments as media
 - **Code**: connector [`src/integrations/apple_messages/`](../../src/integrations/apple_messages/),
   source [`collector/miroir_collector/sources/apple_messages.py`](../../collector/miroir_collector/sources/apple_messages.py)
 - **dbt and dashboards**: the `messages` analysis package (decision 041,
-  [its tables](../miroir/README.md#the-messages-package)); no dashboards yet
+  [its tables](../miroir/README.md#the-messages-package)); dashboard Messages (34)
 
 ## Where the data comes from
 
