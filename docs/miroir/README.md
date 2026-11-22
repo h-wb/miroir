@@ -349,9 +349,10 @@ Analyses are top-level configuration entries. For example, with connections name
 ]
 ```
 
-Packages are `music`, `health`, `github`, `biking`, `browser`, and `crossovers`.
-The first five require one input. Crossovers requires Health and optionally reads
-music and biking. Unlinked inputs are empty and their measures are unknown (null),
+Packages are `music`, `health`, `github`, `biking`, `browser`, `messages`,
+`crossovers`, and `timeline`. The first six require one input. Crossovers requires Health and
+optionally reads music and biking. The timeline's inputs are all optional, and at
+least one must be linked (see *The timeline package* below). Unlinked inputs are empty and their measures are unknown (null),
 including yearly counts and late-listening categories. They never fall back to
 legacy datasets or another account. A linked input with no successful load is shown
 on the analysis page. Health dates keep the exported local date; the analysis's
@@ -362,8 +363,20 @@ as a separate child `models` operation. Folder syncs build after all files load;
 a scan with no new files builds nothing. A failed analysis leaves ingestion
 successful and does not prevent other analyses from building. Model-only rebuilds
 resolve no source credentials and leave ingestion times unchanged. **Rebuild
-analysis** uses one linked connection's Prefect deployment. Local DuckDB execution
+analysis** uses one linked connection's Prefect deployment; **Rebuild from
+scratch** also rebuilds incremental tables from scratch. Local DuckDB execution
 skips Postgres models.
+
+A build waits for its connection's lock and then for the dbt slot. Once it holds
+each, a build run by Prefect or by `execute` reads the configuration again. If
+the analysis's settings changed meanwhile, it ends as blocked, and a load whose
+build was blocked this way shows its transformation as skipped, with the reason.
+A connection edit alone does not stop a build, since what a build applies is in
+the analysis's receipt. A requested rebuild or a scheduled build is still
+blocked when its connection changed before it started, as any request is. With a minimum build interval
+(decision 040), a load joins only a scheduled build bound to its own flow run.
+Two loads deciding at once do not both build: the one that builds is registered
+before the other decides.
 
 An analysis is current only after a successful build with the current plan receipt,
 using data at least as recent as every linked input's last successful load. A load
@@ -373,6 +386,7 @@ or interrupted builds also make it stale, since dbt may have replaced some outpu
 ```bash
 uv run --locked pipelines-miroir --config miroir.json analyses
 uv run --locked pipelines-miroir --config miroir.json models together
+uv run --locked pipelines-miroir --config miroir.json models together --full-refresh
 ```
 
 Each analysis reads its inputs' actual raw bindings and writes isolated
@@ -410,7 +424,7 @@ The JSON API takes `Authorization: Bearer $MIROIR_API_TOKEN`:
 | `POST /api/analyses` with `If-Match: <file_revision>` | Add `{id, package, inputs, timezone}` |
 | `PUT /api/analyses/{id}` with `If-Match: <file_revision>` | Update inputs, timezone, parameters, or dashboard links |
 | `DELETE /api/analyses/{id}` with `If-Match: <file_revision>` | Remove configuration; keep tables and history |
-| `POST /api/analyses/{id}/models` | Rebuild without ingestion (202, operation ID); requires a successful input load |
+| `POST /api/analyses/{id}/models` | Rebuild without ingestion (202, operation ID); requires a successful input load; `?full_refresh=true` rebuilds incremental tables from scratch |
 | `POST /api/connections/{id}/artifacts?import=true&name=…&<option>=…` | Store the raw request body as a file, optionally import it |
 | `POST /api/connections/{id}/artifacts/{artifact}/import?replay=false` | Request an import |
 | `POST /api/connections/{id}/delivery-token`, `DELETE /api/connections/{id}/delivery-token` | Create/replace (value shown once) or revoke a receive-only token; requires administrator auth |
@@ -704,6 +718,111 @@ lead to a write.
 | `GET /api/timeline/health` | The same as JSON; 200 when ready, 503 when not configured, unreachable or writable |
 
 The server starts without the warehouse: a database that is down only shows here.
+
+### The timeline package
+
+The `timeline` analysis package builds the tables the timeline reads. Its inputs
+are `screen` (a ScreenMemory connection) and `browser` (a browser history
+connection), both optional; link one or both:
+
+```json
+{"id": "timeline", "package": "timeline",
+ "inputs": {"screen": "screen", "browser": "browser"},
+ "timezone": "America/Toronto",
+ "parameters": {"reader_role": "miroir_timeline"}}
+```
+
+It writes these relations to `miroir_<analysis>_<identity>_timeline`:
+
+| Relation | What |
+|---|---|
+| `screen_frames` | One row per frame: `captured_at`, `bundle_id` (the app usage row of the same second, or null), `text` (null when withheld), `withheld`, `masked`, `image_path`. Screen text is indexed only here: search with `to_tsvector('simple', text)`, the indexed expression. |
+| `events` | One row per event, the same columns for every source: `source`, `connection`, `event_id`, `started_at`, `ended_at`, `kind`, `title`, `body`, `media_kind`, `media_key`, `group_key`, `payload`, `search`. The screen gives one row per app session (`kind` `app_session`, `group_key` the bundle, `media_key` the first frame), not one per frame; the browser one per visit (`group_key` the site). `search` weights the title over the body, `simple` configuration. |
+| `days` | Per local day, in the analysis's timezone, and source: `events` that started that day and, for the screen, `frames`. |
+| `apps` | Bundle identifier to `name` and `colour`, for a list of common apps and every app seen. Others are named from their identifier, with a palette colour. |
+
+An app session is a run of frames of one app with no pause over five minutes.
+Frames without an app neither start nor end one. Redirects, reloads, embeds and
+framed links are not visits. Columns whose names start with `_` are the builds'
+own bookkeeping.
+
+**Builds.** It builds at most every five minutes, however many loads arrive
+(decision 040), and each build is incremental. It reads only rows of loads that
+dlt lists as complete in `_dlt_loads`, in the first build too, and remembers the
+latest completion time it has read. Each build reads the loads completed after
+that time, less ten minutes: a load that completes after a later one (a retried
+load, say) is still read. A load that never completes is never read.
+
+- A resent frame replaces its row. An app usage row that arrives after its frame
+  gives the frame its app and moves the sessions around it.
+- A session still open at the last build grows. A page's new title reaches its
+  visits.
+- A frame or visit that moves to another time leaves its old session and day. For
+  frames, this is not expected from ScreenMemory. For visits, it happens when
+  Places reuses the IDs of cleared visits. The old times stay on the row until
+  every model that recounts them has read it, so a build that fails part way
+  loses none.
+- The result is what a first build over the same rows gives.
+
+`timeline_screen` and `timeline_browser` are the two sources' own models and are
+not meant to be read.
+
+**Unlinking or replacing an input.** Every row records the connection and raw
+dataset it came from. When the analysis no longer links that input, or links
+another connection or dataset in its place, the next build removes that input's
+rows from every table and reads the current input from its start. No button is
+needed.
+
+**Rebuild from scratch.** A requested rebuild can rebuild the incremental tables
+from scratch (dbt `--full-refresh`): **Rebuild from scratch** on the analysis
+page, `models <analysis> --full-refresh` on the command line, or
+`POST /api/analyses/{id}/models?full_refresh=true`. The operation records it.
+Use it after a change to these models or to the known apps: old rows otherwise
+keep what they were built with.
+
+**Raw-table indexes.** Builds create indexes on the raw tables they look rows up
+by when those are missing: load, second and image path for frames; page for
+visits; load ID and completion time in dlt's list of loads.
+- Each index is built once, outside the model's transaction, and committed at
+  once. Writes to that raw table wait while it is built, so the first build over
+  a large table holds loads for that long.
+- An index left invalid by an interrupted build is rebuilt.
+- Creating an index needs the build's role to own the raw table. A table owned by
+  another role is not indexed, and builds read it correctly but more slowly.
+
+On a test machine with a million frames, an ordinary build took under half a
+second per model. A million frames arriving at once took about 50 seconds; a
+first build over them took about 15. An ordinary build reads no table in full
+except `days` (one row per day and source) and dlt's own small bookkeeping
+tables.
+
+**Read access.** `reader_role` names the role the server reads the timeline with
+(the installation uses `miroir_timeline`). Each build leaves the four relations
+readable by the owner and that role only, with `SELECT`, and grants `USAGE` on
+their schema, so nothing has to be granted by hand. The two source models are
+left readable by the owner alone.
+- The role must exist before the build that names it, or the build fails.
+- With `reader_role` empty, nothing is granted, and the next build takes back the
+  `SELECT` an earlier build gave. It leaves the schema's `USAGE`.
+- Make it a dedicated role, with no privileges of its own beyond logging in. Do
+  not grant it other roles, or default privileges, in the warehouse. The builds
+  clear such grants from the timeline's tables, but not from the raw tables.
+
+Limits:
+
+- Load completion times come from the clocks of the workers that loaded them. A
+  load recorded as completing more than ten minutes before one already read is
+  read only by a rebuild from scratch.
+- A build that reads a raw table while a load is still rewriting a row can miss
+  that row's old version, for example a frame's app or a visit's page. Nothing is
+  locked against ingestion: the next build, once that load is complete, corrects it.
+- If more than 5,000 loads are waiting, a build reads every completed load once.
+- A change spread over more than 50 separate stretches of the screen history is
+  recomputed as one span, from the first to the last.
+- Where the clocks go back at midnight, a day starts at the later of the two
+  midnights. The hour before it counts on the previous day.
+- The timeline is built only for a Miroir analysis; dbt run without one leaves
+  these models out.
 
 ### Web pages and the content security policy
 

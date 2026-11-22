@@ -55,3 +55,11 @@ sources:
       - name: zen_historyvisits
       - name: zen_places_metadata
       - name: zen_origins
+      - name: _dlt_loads
+  # ScreenMemory batches from the Miroir collector (screenmemory connector)
+  - name: screenmemory
+    schema: "{{ var('miroir_sources', {}).get('screenmemory', 'screenmemory_data') }}"
+    tables:
+      - name: frames
+      - name: app_usage
+      - name: _dlt_loads

@@ -580,7 +580,7 @@ class MiroirService:
         self._submit(operation.id)
         return operation.id
 
-    def request_models(self, analysis_id: str) -> str:
+    def request_models(self, analysis_id: str, full_refresh: bool = False) -> str:
         from src.core.analysis import find_analysis
         from src.core.runner import request_models
 
@@ -589,7 +589,11 @@ class MiroirService:
         linked = next(iter(find_analysis(miroir, analysis_id).inputs.values()))
         self.prepare_connection(linked.config.id)
         operation = request_models(
-            miroir, analysis_id, store=self.store, origin="request"
+            miroir,
+            analysis_id,
+            store=self.store,
+            origin="request",
+            full_refresh=full_refresh,
         )
         self._submit(operation.id)
         return operation.id
