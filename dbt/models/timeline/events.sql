@@ -26,6 +26,8 @@
 -- recorded of the event's file (timeline_media_columns), null when unknown.
 {% set sources = [('screen', 'timeline_screen'), ('browser', 'timeline_browser')] %}
 {% set replaced = timeline_replaced(['screen', 'browser'], by_source=true) %}
+{# A table built before the media columns reads every source's rows once. #}
+{% set upgrade = not timeline_has_media_columns() %}
 {% for source, model in sources %}
 select
     source,
@@ -41,6 +43,7 @@ select
     media_status,
     thumbnail_w360,
     thumbnail_w1280,
+    media_withheld,
     group_key,
     payload,
     setweight(to_tsvector('simple', coalesce(title, '')), 'A')
@@ -49,7 +52,7 @@ select
     _stamp
     {% if is_incremental() %}, deleted as _deleted{% endif %}
 from {{ ref(model) }}
-{% if is_incremental() and source not in replaced %}
+{% if is_incremental() and source not in replaced and not upgrade %}
 where _stamp > {{ timeline_literal(timeline_resume(this, "source = '" ~ source ~ "'")) }}
 {% elif is_incremental() %}
 where true

@@ -34,7 +34,12 @@ from src.core.reports import (
 )
 from src.core.secrets import SecretKeyError, SecretResolutionError
 from src.core.service import MiroirService
-from src.core.timeline import TimelineDatabase
+from src.core.timeline import (
+    TimelineDatabase,
+    TimelineTimeout,
+    TimelineUnavailable,
+    media_withheld,
+)
 from src.integrations.validation import InvalidArtifact
 from src.web.metrics import render_metrics
 
@@ -508,11 +513,29 @@ def create_app(
         `size=original` copies an image original up to a size, and redirects for
         any other file. Copied bytes are cached as immutable: a key's file and its
         thumbnails do not change. The server never decodes them (decision 040).
+
+        A file of a frame the timeline says is withheld is not found, at any size
+        or as a link; a timeline that cannot say refuses rather than serve it.
         """
+        refused = withheld_refusal(connection_id, kind, key)
+        if refused is not None:
+            return refused
         size = request.query_params.get("size")
         if size is not None:
             return media_bytes(request, connection_id, kind, key, size)
         return media_link(connection_id, kind, key)
+
+    def withheld_refusal(connection_id: str, kind: str, key: str) -> Response | None:
+        no_store = {"Cache-Control": "private, no-store"}
+        try:
+            withheld = media_withheld(
+                timeline, service.miroir(), connection_id, kind, key
+            )
+        except TimelineTimeout as error:
+            return JSONResponse({"error": str(error)}, 504, headers=no_store)
+        except TimelineUnavailable as error:
+            return JSONResponse({"error": str(error)}, 503, headers=no_store)
+        return Response(status_code=404, headers=no_store) if withheld else None
 
     def media_link(connection_id: str, kind: str, key: str) -> Response:
         try:

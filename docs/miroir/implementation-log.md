@@ -2679,3 +2679,27 @@ logout. Measured with `tests/test_timeline_benchmark.py` (see the amendment): a
 day's index of 3,001 frames in 14 ms through the route, 15 KB gzipped; a search
 over 303,000 frames 2 to 216 ms at the median.
 The server suite is green: 400 tests, one skipped (the benchmark, on request only), including the Postgres and Prefect ones, with ruff, format, mypy and the collector's strict mypy clean.
+
+## 2026-11-22 — Review of pull request #49
+
+An independent review found one high and two low defects and two missing tests
+(decision 040 amendment, *Review*). Each reproduction became a test.
+
+- **A withheld frame's screenshot** was reported available in `events` and served
+  by `/media` at every size. `media_withheld` now travels with the media columns
+  from `screen_frames` through `timeline_screen` to `events`, and `events()`
+  reports `withheld`. The media route asks every timeline analysis reading that
+  connection's screenshots and answers 404 for a withheld frame's key, fails
+  closed (503/504) when the timeline cannot answer, and is unchanged where no
+  timeline analysis reads the connection.
+- **Day bounds** where clocks go back at midnight: `days`, a frame's day and `t`,
+  and a moment's day all follow the index's bounds (America/Havana tested, and
+  Toronto's 23- and 25-hour days).
+- **Negated-only searches** are refused with 400, detected with `querytree`.
+- **Tests added**: a record changing `failed` to `made` reaches `timeline_screen`
+  and `events`; the reader cannot read raw `media_objects`; a table lacking only
+  some media columns, which showed that `events` did not read its rows again
+  (fixed: it reads every source once).
+
+Validation: 405 tests, one skipped (the benchmark, on request), with ruff, format,
+mypy and the collector's strict mypy clean.

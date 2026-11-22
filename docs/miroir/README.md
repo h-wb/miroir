@@ -869,7 +869,9 @@ configuration, in the schema its build writes (the same name the build derives;
 no setting). Several are allowed; the others are named in a `warning` field of the
 health check and of every answer. Every answer also carries `analysis` (its ID)
 and `timezone` (the analysis's). Dates are local days in that timezone,
-`YYYY-MM-DD`; a day runs from its local midnight to the next. Times are ISO 8601
+`YYYY-MM-DD`; a day runs from its local midnight to the next (where clocks go back
+at midnight, from the later of the two, so the hour before belongs to the day
+before; every route and `days` follow this one rule). Times are ISO 8601
 with their offset, sent in the analysis's timezone. Each route needs the login
 (cookie or admin bearer), reads through the read-only session with its 5-second
 limit, and bounds what it returns. A parameter it does not know, or one given
@@ -881,7 +883,7 @@ twice, is refused.
 | `GET /api/timeline/screen/{day}` | none | A day's frames as columns, below |
 | `GET /api/timeline/frames/{key}` | none (`key` is the frame's media key, slashes included) | One frame, below; 404 if unknown |
 | `GET /api/timeline/events` | `from`, `to`: a day or a time with offset (`to` as a day includes it); `source`: `screen`, `browser` or both, comma-separated (default both); `limit` 1–500 (200); `after`: the `next` of the previous page | `{events: [...], next}`, events that started in `[from, to)`, oldest first |
-| `GET /api/timeline/search` | `q`: 1–200 characters, web search syntax (`"a phrase"`, `-word`, `or`); `kind`: `screen` (default) or `browser`; `app`: a bundle identifier (screen only); `from`, `to`: days, inclusive, optional; `limit` 1–50 (20); `before`: the `next` of the previous page | Moments or visits, newest first, below |
+| `GET /api/timeline/search` | `q`: 1–200 characters, web search syntax (`"a phrase"`, `-word`, `or`), with at least one word to look for in every part (`-word` alone, or `a or -b`, is refused with 400); `kind`: `screen` (default) or `browser`; `app`: a bundle identifier (screen only); `from`, `to`: days, inclusive, optional; `limit` 1–50 (20); `before`: the `next` of the previous page | Moments or visits, newest first, below |
 
 The screen index of a day, made small for about 3,000 frames (about 110 KB, 15 KB
 compressed):
@@ -915,7 +917,7 @@ null.
 An event: `{source, event_id, started_at, ended_at, kind, title, body, group,
 payload, media}`. For a screen session `kind` is `app_session`, `title` the app,
 `group` its bundle identifier, `payload` `{bundle_id, frames, last_frame}`, and
-`media` its first frame's (as for a frame, without `withheld`). For a visit `kind`
+`media` its first frame's, as for a frame (`state` `withheld` when that frame is). For a visit `kind`
 is `visit`, `body` the address, `group` the site, `media` null. Title and body are
 cut at 2,000 characters.
 
@@ -951,7 +953,16 @@ bucket's ETag, and answer `If-None-Match` with 304. The connection, kind and key
 are checked as for an upload (a kind of that connection, a valid key, one of the
 kind's extensions); a thumbnail's own kind (`screenshots.w360`) is not a kind and
 can be neither read nor uploaded by name. The server only copies bytes; it never
-decodes an image. Logging out sends `Clear-Site-Data: "cache"`, so the browser
+decodes an image.
+
+For a connection that a timeline analysis reads as its `screen` input, the route
+first asks the timeline about a screenshot's key, at every size and for the plain
+redirect: a withheld frame's file answers 404 (it may have been stored before a
+newer rule withheld the frame). A key with no frame yet is served. If the timeline
+cannot answer (no reader configured, tables not built, warehouse down, the time
+limit), the route refuses with the timeline's own error (503 or 504) rather than
+serve the file. Connections no timeline analysis reads are not affected. The file
+itself stays in the bucket: it is hidden, not deleted. Logging out sends `Clear-Site-Data: "cache"`, so the browser
 drops the screenshots it kept.
 
 ### The timeline package
@@ -971,7 +982,7 @@ It writes these relations to `miroir_<analysis>_<identity>_timeline`:
 
 | Relation | What |
 |---|---|
-| `screen_frames` | One row per frame: `captured_at`, `bundle_id` (the app usage row of the same second, or null), `text` (null when withheld), `withheld`, `masked`, `image_path`, and what the worker recorded of its screenshot: `media_status` (the thumbnail status), `thumbnail_w360`, `thumbnail_w1280`; all null when there is no record yet, which means unknown, not absent. Screen text is indexed only here: search with `to_tsvector('simple', text)`, the indexed expression. |
+| `screen_frames` | One row per frame: `captured_at`, `bundle_id` (the app usage row of the same second, or null), `text` (null when withheld), `withheld`, `masked`, `image_path`, and what the worker recorded of its screenshot: `media_status` (the thumbnail status), `thumbnail_w360`, `thumbnail_w1280`; all null when there is no record yet, which means unknown, not absent; and `media_withheld`, whether the frame is withheld, which wins over any record. `events` has the same four, its first frame's for a screen session. Screen text is indexed only here: search with `to_tsvector('simple', text)`, the indexed expression. |
 | `events` | One row per event, the same columns for every source: `source`, `connection`, `event_id`, `started_at`, `ended_at`, `kind`, `title`, `body`, `media_kind`, `media_key`, `media_status`, `thumbnail_w360`, `thumbnail_w1280`, `group_key`, `payload`, `search`. The screen gives one row per app session (`kind` `app_session`, `group_key` the bundle, `media_key` the first frame), not one per frame; the browser one per visit (`group_key` the site). `search` weights the title over the body, `simple` configuration. |
 | `days` | Per local day, in the analysis's timezone, and source: `events` that started that day and, for the screen, `frames`. |
 | `apps` | Bundle identifier to `name` and `colour`, for a list of common apps and every app seen. Others are named from their identifier, with a palette colour. |

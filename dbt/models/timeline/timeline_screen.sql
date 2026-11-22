@@ -149,6 +149,7 @@ current_sessions as (
         f.media_status,
         f.thumbnail_w360,
         f.thumbnail_w1280,
+        f.media_withheld,
         s.bundle_id as group_key,
         jsonb_build_object(
             'bundle_id', s.bundle_id, 'frames', s.frames, 'last_frame', s.last_frame
@@ -173,7 +174,7 @@ union all
 select
     t.source, t.connection, t.event_id, t.started_at, t.ended_at, t.kind, t.title,
     t.body, t.media_kind, t.media_key, t.media_status, t.thumbnail_w360,
-    t.thumbnail_w1280, t.group_key, t.payload,
+    t.thumbnail_w1280, t.media_withheld, t.group_key, t.payload,
     true as deleted,
     {{ timeline_previous('previous_started_at', 't.started_at', 't.started_at', consumed) }} as previous_started_at,
     t._input,

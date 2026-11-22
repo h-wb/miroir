@@ -131,6 +131,7 @@ select
     m.thumbnail_status as media_status,
     m.thumbnail_w360,
     m.thumbnail_w1280,
+    f.withheld is not null as media_withheld,
     {{ timeline_connection('screen') }} as connection,
     {% if previous %}
     {{ timeline_previous('previous_captured_at', 't.captured_at', 'to_timestamp(f.ts)', consumed) }}

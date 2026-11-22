@@ -76,6 +76,7 @@ select
     null::text as media_status,
     null::boolean as thumbnail_w360,
     null::boolean as thumbnail_w1280,
+    null::boolean as media_withheld,
     nullif(regexp_replace(lower(substring(
         p.url from '^[A-Za-z][A-Za-z0-9+.-]*://(?:[^/?#@]*@)?([^/?#:]+)'
     )), '^www\.', ''), '') as group_key,

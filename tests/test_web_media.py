@@ -311,3 +311,22 @@ class WebMediaBytesTests(WebMediaTests):
         response = self.client.post("/logout")
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["clear-site-data"], '"cache"')
+
+    def test_paths_cannot_reach_another_connection_kind_or_derived_file(self):
+        self.objects.add(OBJECT, b"<html><script>x</script>")
+        self.objects.add("browser/screenshots/dir/a.jpg", b"other")
+        for url in (
+            "/media/screen/screenshots/..%2F..%2Fbrowser/screenshots/dir/a.jpg?size=original",
+            "/media/screen/screenshots/%2Fscreen/screenshots/dir/a.jpg?size=original",
+            "/media/screen/screenshots.w360/dir/a.jpg.webp?size=original",
+            "/media/screen/screenshots%2F..%2Fx/dir/a.jpg?size=360",
+            "/media/browser/screenshots/dir/a.jpg?size=original",
+            "/media/screen/screenshots/dir/a.jpg?size=original&size=360",
+        ):
+            with self.subTest(url=url):
+                response = self.client.get(url, headers=self.admin)
+                self.assertIn(response.status_code, (400, 404))
+        # Markup stored under an image key is still sent as that image's type.
+        response = self.client.get(f"{VIEW}?size=original", headers=self.admin)
+        self.assertEqual(response.headers["content-type"], "image/jpeg")
+        self.assertEqual(response.headers["x-content-type-options"], "nosniff")

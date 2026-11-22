@@ -24,7 +24,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError, DBAPIError, SQLAlchemyError
 
 from src.core.analysis import analysis_plan
-from src.core.config import ConfigurationError, ResolvedMiroir
+from src.core.config import ConfigurationError, ResolvedAnalysis, ResolvedMiroir
 from src.core.operations import OperationError
 
 log = logging.getLogger(__name__)
@@ -155,6 +155,7 @@ def status(
 # ---- Which tables -------------------------------------------------------------
 
 PACKAGE = "timeline"
+SCREEN_ROLE = "screen"
 SCREENSHOTS = "screenshots"
 NO_ANALYSIS = (
     "The timeline is not configured: no analysis of the timeline package is set up."
@@ -214,13 +215,44 @@ def timeline_source(miroir: ResolvedMiroir) -> TimelineSource | None:
     found = [a for a in miroir.analyses if a.package.id == PACKAGE]
     if not found:
         return None
-    first = found[0]
-    schema = analysis_plan(first).relations[0].split(".")[0]
+    return _source(found[0], tuple(a.id for a in found[1:]))
+
+
+def _source(analysis: ResolvedAnalysis, ignored: tuple[str, ...]) -> TimelineSource:
+    schema = analysis_plan(analysis).relations[0].split(".")[0]
     if not _SCHEMA.fullmatch(schema):  # derived from validated IDs; kept honest
         raise TimelineUnavailable("The timeline analysis has an unexpected schema")
-    return TimelineSource(
-        first.id, schema, first.config.timezone, tuple(a.id for a in found[1:])
-    )
+    return TimelineSource(analysis.id, schema, analysis.config.timezone, ignored)
+
+
+def media_withheld(
+    database: "TimelineDatabase | None",
+    miroir: ResolvedMiroir,
+    connection_id: str,
+    kind: str,
+    key: str,
+) -> bool | None:
+    """Whether a file belongs to a withheld frame, for the media route.
+
+    None when no timeline analysis reads this connection's screenshots: there is
+    nothing to ask. Otherwise every such analysis is asked; a key none of them
+    knows (no frame yet) is not withheld. Fails closed: a timeline that cannot
+    answer raises as its routes do, so the file is never served unchecked.
+    """
+    if kind != SCREENSHOTS:
+        return None
+    sources = [
+        _source(a, ())
+        for a in miroir.analyses
+        if a.package.id == PACKAGE
+        and SCREEN_ROLE in a.inputs
+        and a.inputs[SCREEN_ROLE].config.id == connection_id
+    ]
+    if not sources:
+        return None
+    if database is None:
+        raise TimelineUnavailable(NOT_CONFIGURED)
+    return any(TimelineReader(database, s).withheld(key) for s in sources)
 
 
 # ---- Reading --------------------------------------------------------------------
@@ -348,11 +380,23 @@ def read_cursor(value: str, shape: tuple[type, ...]) -> list[Any]:
 
 
 def _day_bounds_sql(day: str) -> tuple[str, str]:
-    """A local day's start and end in the analysis's timezone, as the models count
-    it (where clocks go back at midnight, the later midnight)."""
+    """A local day's start and end in the analysis's timezone. Where clocks go back
+    at midnight, Postgres reads the repeated midnight as the later one, so the
+    hour before it belongs to the previous day. Selecting by these bounds keeps
+    the time index usable; `_local_day_sql` and the models (timeline_local_day)
+    assign a time to a day by the same rule."""
     return (
         f"(CAST(:{day} AS date)::timestamp AT TIME ZONE :tz)",
         f"((CAST(:{day} AS date) + 1)::timestamp AT TIME ZONE :tz)",
+    )
+
+
+def _local_day_sql(column: str) -> str:
+    """The local day whose bounds (`_day_bounds_sql`) hold a time."""
+    date_at = f"CAST({column} AT TIME ZONE :tz AS date)"
+    return (
+        f"(CASE WHEN {column} < ({date_at}::timestamp AT TIME ZONE :tz)"
+        f" THEN {date_at} - 1 ELSE {date_at} END)"
     )
 
 
@@ -452,6 +496,19 @@ class TimelineReader:
             "frames": columns,
         }
 
+    def withheld(self, key: str) -> bool:
+        """Whether the frame with this media key is withheld; False if unknown."""
+        with self._session() as db:
+            found = db.execute(
+                sa.text(
+                    "SELECT withheld IS NOT NULL"
+                    f" FROM {self.source.table('screen_frames')}"
+                    " WHERE image_path = :key"
+                ),
+                {"key": key},
+            ).scalar_one_or_none()
+        return bool(found)
+
     def frame(self, key: str) -> dict[str, Any] | None:
         """One frame: time, app, text, what was masked or withheld, its media."""
         tz = self.source.timezone
@@ -462,7 +519,7 @@ class TimelineReader:
                     " left(f.text, :max_text), length(f.text) > :max_text, f.withheld,"
                     " f.masked, f.connection, f.media_status, f.thumbnail_w360,"
                     " f.thumbnail_w1280,"
-                    " CAST(f.captured_at AT TIME ZONE :tz AS date)"
+                    f" {_local_day_sql('f.captured_at')}"
                     f" FROM {self.source.table('screen_frames')} f"
                     f" LEFT JOIN {self.source.table('apps')} a"
                     " ON a.bundle_id = f.bundle_id"
@@ -536,7 +593,7 @@ class TimelineReader:
                 "(SELECT source, event_id, started_at, ended_at, kind,"
                 " left(title, :max_text), left(body, :max_text), group_key, payload,"
                 " media_kind, media_key, media_status, thumbnail_w360,"
-                f" thumbnail_w1280, connection FROM {events}"
+                f" thumbnail_w1280, media_withheld, connection FROM {events}"
                 f" WHERE source = :source{number}"
                 f" AND started_at >= :lo AND started_at < :hi{keyset}"
                 " ORDER BY started_at, event_id LIMIT :limit)"
@@ -559,7 +616,7 @@ class TimelineReader:
             (source, event_id, started, ended, kind, title, body, group, payload) = row[
                 :9
             ]
-            media_kind, media_key, status, w360, w1280, connection = row[9:]
+            media_kind, media_key, status, w360, w1280, withheld, connection = row[9:]
             event: dict[str, Any] = {
                 "source": source,
                 "event_id": event_id,
@@ -577,7 +634,7 @@ class TimelineReader:
                     connection,
                     media_kind,
                     media_key,
-                    media_code(None, status, w360, w1280),
+                    media_code("withheld" if withheld else None, status, w360, w1280),
                     status,
                 )
             answer.append(event)
@@ -635,13 +692,14 @@ class TimelineReader:
             " SELECT m.bucket, m.bundle_id, m.matches, m.first_at, m.last_at, m.key,"
             " ts_headline('simple', translate(f.text, :marks, ''), q.query, :headline),"
             " f.withheld, f.media_status, f.thumbnail_w360, f.thumbnail_w1280,"
-            " f.connection, CAST(m.first_at AT TIME ZONE :tz AS date)"
+            f" f.connection, {_local_day_sql('m.first_at')}"
             f" FROM moments m JOIN {frames} f ON f.image_path = m.key, q"
             " ORDER BY m.bucket DESC, coalesce(m.bundle_id, '')"
         )
         apps = _Apps()
         zone = self.source.zone
         with self._session() as db:
+            _searchable(db, words)
             rows = db.execute(sa.text(sql), parameters).all()
             more = len(rows) > limit
             rows = rows[:limit]
@@ -712,6 +770,7 @@ class TimelineReader:
             " FROM hits h, q ORDER BY h.started_at DESC, h.event_id DESC"
         )
         with self._session() as db:
+            _searchable(db, words)
             rows = db.execute(sa.text(sql), parameters).all()
         more = len(rows) > limit
         rows = rows[:limit]
@@ -746,6 +805,26 @@ def _media(
         "state": _MEDIA_STATES[code],
         "status": status,
     }
+
+
+NO_WORDS = "The search has no words to look for."
+ONLY_EXCLUDED = (
+    "The search must look for at least one word: words after a minus only exclude,"
+    " and every part joined by 'or' needs a word of its own."
+)
+
+
+def _searchable(db: Any, words: str) -> None:
+    """Refuse a search the text index cannot answer. `querytree` keeps the part of
+    a query an index can use; it is 'T' when every part is negated (`-a`, `a or
+    -b`), which would read every row, and empty when there is no word at all."""
+    tree = db.execute(
+        sa.text("SELECT querytree(websearch_to_tsquery('simple', :q))"), {"q": words}
+    ).scalar_one()
+    if tree == "":
+        raise OperationError(NO_WORDS)
+    if tree == "T":
+        raise OperationError(ONLY_EXCLUDED)
 
 
 def _query(query: str, limit: int) -> str:

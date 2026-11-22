@@ -9,7 +9,7 @@ import getpass
 import gzip
 import json
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from unittest.mock import patch
 
 import psycopg2
@@ -92,6 +92,7 @@ class TimelineQueryTests(TimelineBuildFixture):
         self.source = timeline_source(self.miroir)
         self.database = self.reader_database()
         self.reader = TimelineReader(self.database, self.source)
+        self.objects = FakeObjectStore()
 
     def reader_database(self, timeout=None):
         url = f"postgresql://{READER}@127.0.0.1:{self.port}/postgres"
@@ -115,8 +116,9 @@ class TimelineQueryTests(TimelineBuildFixture):
                 # Another app in the same five minutes: another moment.
                 *text_frame(120, "invoice script", TERMINAL),
                 *text_frame(3600, "meeting notes", NOTES),
+                # Withheld, and the first frame of a Mail session.
                 frame(3700, withheld="excluded_app"),
-                usage(3700, NOTES),
+                usage(3700, MAIL),
                 # Two frames of one second.
                 frame(7200, text="invoice paid") | {"image_path": SAME_A},
                 frame(7200, text="invoice paid again") | {"image_path": SAME_B},
@@ -139,6 +141,8 @@ class TimelineQueryTests(TimelineBuildFixture):
         )
         self.media_record(self.miroir, 0)
         self.media_record(self.miroir, 60, "unreadable")
+        # Stored and derived before a newer rule withheld it: withheld wins.
+        self.media_record(self.miroir, 3700)
         self.build(analysis_plan(self.miroir.analyses[0]))
 
     # ---- finding the tables -------------------------------------------------
@@ -211,7 +215,7 @@ class TimelineQueryTests(TimelineBuildFixture):
                 {
                     "day": "2026-11-20",
                     "browser": {"events": 6},
-                    "screen": {"events": 3, "frames": 7},
+                    "screen": {"events": 4, "frames": 7},
                 },
                 {"day": "2026-11-21", "screen": {"events": 1, "frames": 1}},
             ],
@@ -243,7 +247,7 @@ class TimelineQueryTests(TimelineBuildFixture):
         )
         apps = [index["apps"][i]["name"] for i in frames["app"]]
         self.assertEqual(
-            apps, ["Safari", "Safari", "Terminal", "Notes", "Notes", "Mail", "Mail"]
+            apps, ["Safari", "Safari", "Terminal", "Notes", "Mail", "Mail", "Mail"]
         )
         self.assertEqual(index["apps"][0]["colour"], "#2196f3")
         self.assertEqual(
@@ -306,7 +310,16 @@ class TimelineQueryTests(TimelineBuildFixture):
         whole = self.reader.events(day19, day21, ("screen", "browser"), 500, None)
         self.assertIsNone(whole["next"])
         keys = [(e["started_at"], e["event_id"]) for e in whole["events"]]
-        self.assertEqual(len(keys), 12)  # 7 visits, 5 sessions
+        self.assertEqual(len(keys), 13)  # 7 visits, 6 sessions
+        # A session whose first frame is withheld says so, whatever was stored.
+        withheld = next(
+            e for e in whole["events"] if e["event_id"] == f"screen:{path(3700)}"
+        )
+        self.assertEqual(withheld["media"]["key"], path(3700))
+        self.assertEqual(
+            (withheld["media"]["state"], withheld["media"]["status"]),
+            ("withheld", "made"),
+        )
         self.assertEqual(
             keys, sorted(keys, key=lambda k: (datetime.fromisoformat(k[0]), k[1]))
         )
@@ -426,7 +439,7 @@ class TimelineQueryTests(TimelineBuildFixture):
 
     # ---- the API --------------------------------------------------------------
 
-    def client(self, raw=None, database=True):
+    def client(self, raw=None, database: object = True):
         self.clients = getattr(self, "clients", 0) + 1
         config = self.root / f"api-miroir-{self.clients}.json"
         config.write_text(
@@ -442,9 +455,11 @@ class TimelineQueryTests(TimelineBuildFixture):
             self.store,
             self.root / "artifacts",
             InlineExecutor(self.fail),
-            object_store=FakeObjectStore(),
+            object_store=self.objects,
         )
-        app = create_app(service, TOKEN, timeline=self.database if database else None)
+        if database is True:
+            database = self.database
+        app = create_app(service, TOKEN, timeline=database or None)
         return TestClient(app)
 
     def test_every_route_needs_the_login(self):
@@ -609,4 +624,197 @@ class TimelineQueryTests(TimelineBuildFixture):
             response = client.get("/api/timeline/search?q=invoice", headers=BEARER)
         self.assertEqual(
             (response.status_code, response.json()), (504, {"error": "Too slow"})
+        )
+
+    # ---- a withheld frame's files ----------------------------------------------
+
+    def stored(self, connection, key):
+        self.objects.add(f"{connection}/screenshots/{key}", b"original")
+        for width in (360, 1280):
+            self.objects.add(f"{connection}/screenshots.w{width}/{key}.webp", b"thumb")
+
+    def get_media(self, client, connection, key, size=None):
+        url = f"/media/{connection}/screenshots/{key}" + (
+            f"?size={size}" if size else ""
+        )
+        return client.get(url, headers=BEARER, follow_redirects=False)
+
+    def test_a_withheld_frames_file_is_not_served_at_any_size(self):
+        unknown = "2026/11/20/not-a-frame-yet.jpeg"
+        for key in (path(0), path(3700), unknown):
+            self.stored("screen", key)
+        self.stored("laptop", path(3700))
+        client = self.client()
+        for size, served in (
+            ("360", 200),
+            ("1280", 200),
+            ("original", 200),
+            (None, 302),
+        ):
+            with self.subTest(size=size):
+                withheld = self.get_media(client, "screen", path(3700), size)
+                self.assertEqual(withheld.status_code, 404)
+                self.assertEqual(withheld.headers["cache-control"], "private, no-store")
+                self.assertEqual(
+                    self.get_media(client, "screen", path(0), size).status_code, served
+                )
+                # A key the timeline does not know is not withheld.
+                self.assertEqual(
+                    self.get_media(client, "screen", unknown, size).status_code, served
+                )
+                # No timeline analysis reads this connection: nothing to ask.
+                self.assertEqual(
+                    self.get_media(client, "laptop", path(3700), size).status_code,
+                    served,
+                )
+        self.assertNotIn(
+            "screen/screenshots.w1280/" + path(3700) + ".webp", self.objects.gets
+        )
+
+    def test_the_media_route_fails_closed_when_the_timeline_cannot_answer(self):
+        self.stored("screen", path(0))
+        unbuilt = raw_configuration([timeline("unbuilt", BOTH, READER)], MIROIR_ID)
+        cases = (
+            (self.client(database=False), 503, "MIROIR_TIMELINE_DATABASE_URL"),
+            (self.client(unbuilt), 503, "not been built yet"),
+        )
+        for client, code, message in cases:
+            for size in ("360", "original", None):
+                with self.subTest(message=message, size=size):
+                    response = self.get_media(client, "screen", path(0), size)
+                    self.assertEqual(response.status_code, code)
+                    self.assertIn(message, response.json()["error"])
+                    self.assertEqual(
+                        response.headers["cache-control"], "private, no-store"
+                    )
+        client = self.client(database=self.reader_database(timeout=300))
+        owner = psycopg2.connect(
+            host="127.0.0.1", port=self.port, user=getpass.getuser(), dbname="postgres"
+        )
+        with closing(owner):
+            with owner.cursor() as cursor:
+                cursor.execute(
+                    f'lock table "{self.source.schema}".screen_frames'
+                    " in access exclusive mode"
+                )
+            response = self.get_media(client, "screen", path(0), "1280")
+            owner.rollback()
+        self.assertEqual(response.status_code, 504)
+        self.assertNotIn(b"thumb", response.content)
+
+    # ---- searches the index cannot answer ---------------------------------------
+
+    def test_a_search_without_a_word_to_look_for_is_refused(self):
+        for words, message in (
+            ("-zzzz", "at least one word"),
+            ("-a -b", "at least one word"),
+            ('-"invoice paid"', "at least one word"),
+            ("invoice or -zzzz", "at least one word"),
+            ("invoice paid or -zzzz", "at least one word"),
+            ("-", "no words"),
+            ("!!!", "no words"),
+            ('""', "no words"),
+        ):
+            for search in (
+                lambda w: self.reader.search_screen(w, None, None, None, 20, None),
+                lambda w: self.reader.search_browser(w, None, None, 20, None),
+            ):
+                with (
+                    self.subTest(words=words),
+                    self.assertRaisesRegex(OperationError, message),
+                ):
+                    search(words)
+        # A word with exclusions, a phrase, alternatives: each has a word to find.
+        for words, found in (
+            ("invoice -paid", 4),
+            ('"invoice paid"', 1),
+            ("paid or totals", 2),
+            ("the", 0),  # the simple configuration has no stop words
+        ):
+            with self.subTest(words=words):
+                moments = self.reader.search_screen(words, None, None, None, 20, None)
+                self.assertEqual(len(moments["moments"]), found)
+        response = self.client().get("/api/timeline/search?q=-zzzz", headers=BEARER)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("at least one word", response.json()["error"])
+
+
+class TimelineDayBoundTests(TimelineBuildFixture):
+    """One rule for a time's day everywhere: the day whose bounds hold it."""
+
+    def test_days_index_frames_and_moments_agree_where_clocks_go_back(self):
+        self.query(f"alter role {READER} login")
+        havana = timeline("havana", BOTH, READER) | {"timezone": "America/Havana"}
+        raw = raw_configuration(
+            [timeline("toronto", BOTH, READER), havana], "day_bounds"
+        )
+        miroir = parse_miroir(json.dumps(raw))
+
+        def utc(*parts):
+            return int(datetime(*parts, tzinfo=timezone.utc).timestamp())
+
+        # Havana goes back from 01:00 CDT to 00:00 CST on 2026-11-01: local
+        # midnight comes twice, and the day starts at the later one.
+        first, repeat = utc(2026, 11, 1, 4, 30), utc(2026, 11, 1, 5, 30)
+        # Toronto's 25-hour and 23-hour days.
+        long_day, short_day = utc(2026, 11, 2, 4, 30), utc(2026, 3, 9, 3, 30)
+        records = []
+        for ts in (first, repeat, long_day, short_day):
+            records += [
+                frame(0, text="Some text")
+                | {"ts": ts, "image_path": f"bounds/{ts}.jpeg"},
+                usage(ts - MIDNIGHT, SAFARI),
+            ]
+        self.send(miroir, "screen", screen_batch(*records))
+        for analysis in miroir.analyses:
+            self.build(analysis_plan(analysis))
+        database = TimelineDatabase(
+            f"postgresql://{READER}@127.0.0.1:{self.port}/postgres"
+        )
+        self.addCleanup(database.close)
+
+        def reader(index):
+            analysis = miroir.analyses[index]
+            schema = analysis_plan(analysis).relations[0].split(".")[0]
+            source = TimelineSource(analysis.id, schema, analysis.config.timezone)
+            return TimelineReader(database, source)
+
+        def where(reader, ts):
+            """Each place that names the day of a frame."""
+            key = f"bounds/{ts}.jpeg"
+            found = reader.frame(key)
+            listed = [
+                d
+                for d in ("2026-03-08", "2026-03-09", "2026-10-31", "2026-11-01")
+                if key in reader.screen_day(date.fromisoformat(d))["frames"]["key"]
+            ]
+            moments = reader.search_screen("some", None, None, None, 50, None)
+            moment = next(m["day"] for m in moments["moments"] if m["key"] == key)
+            return found["day"], found["t"], listed, moment
+
+        cuba = reader(1)
+        self.assertEqual(
+            where(cuba, first), ("2026-10-31", 88200, ["2026-10-31"], "2026-10-31")
+        )
+        self.assertEqual(
+            where(cuba, repeat), ("2026-11-01", 1800, ["2026-11-01"], "2026-11-01")
+        )
+        days = cuba.days(date(2026, 10, 31), date(2026, 11, 1))["days"]
+        self.assertEqual(
+            [(d["day"], d["screen"]["frames"]) for d in days],
+            [("2026-10-31", 1), ("2026-11-01", 2)],
+        )
+        toronto = reader(0)
+        self.assertEqual(
+            where(toronto, long_day),
+            ("2026-11-01", 88200, ["2026-11-01"], "2026-11-01"),
+        )
+        self.assertEqual(
+            where(toronto, short_day),
+            ("2026-03-08", 81000, ["2026-03-08"], "2026-03-08"),
+        )
+        index = toronto.screen_day(date(2026, 11, 1))
+        self.assertEqual(
+            (index["start"], index["end"]),
+            ("2026-11-01T00:00:00-04:00", "2026-11-02T00:00:00-05:00"),
         )

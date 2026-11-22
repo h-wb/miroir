@@ -2236,7 +2236,33 @@ written before and after their frames, another connection's record in the same
 dataset, a replaced record, the upgrade, and that the result equals a first build.
 
 **Withheld wins** *(conservative)*. A frame with a withholding reason is shown as
-withheld, with no thumbnail, whatever a record says.
+withheld, with no thumbnail, whatever a record says: in a day's index, in a
+frame, and in an event, whose `media_withheld` column (on every table with the
+media columns) carries its first frame's reason from `screen_frames` through
+`timeline_screen`. A frame withheld after it was built is a changed frame, so its
+session is recomputed and the incremental tables still equal a first build.
+
+*The media route asks the timeline too* *(conservative)*. A file can be in the
+bucket for a frame that is withheld: stored before a newer rule withheld the frame
+when it was sent again (034 never deletes). So `/media/{connection}/{kind}/{key}`,
+at every size and for the plain redirect, first asks every timeline analysis
+whose `screen` input is that connection, when the kind is `screenshots`:
+
+- the key's frame withheld in any of them: 404, as if there were no file;
+- a key none of them has a frame for (not loaded yet): not withheld, served as
+  before;
+- no such analysis: nothing to ask, the route behaves as before;
+- an analysis exists but the timeline cannot answer: the route fails closed with
+  the timeline routes' error, never the file: 503 when the reader is not
+  configured (no `MIROIR_TIMELINE_DATABASE_URL`), the tables are not built yet or
+  the warehouse is unreachable, 504 at the time limit. Without the reader setting
+  this refuses that connection's screenshots outright, the stricter reading of
+  "cannot answer".
+
+This costs one lookup on `screen_frames`' unique `image_path` index per image.
+It leaves one case open: the stored file of a frame that became withheld is
+hidden, not deleted. Anyone with the bucket's key, or a link signed before, can
+still read it.
 
 **Queries.** Each runs in one read-only session with the 5-second limit and is
 bounded: a days range of at most 400 days; at most 20,000 frames in a day's index
@@ -2244,8 +2270,30 @@ bounded: a days range of at most 400 days; at most 20,000 frames in a day's inde
 a page, titles and bodies cut at 2,000 characters; at most 50 search results a
 page; a search of at most 200 characters. Parameters are always bound. A query at
 the time limit answers 504 with a fixed message; a table, schema or column that is
-missing, or not readable by the role, answers 503 "not built yet". A local day's
-bounds are computed in SQL, exactly as `days` counts them.
+missing, or not readable by the role, answers 503 "not built yet".
+
+*One rule for a time's day.* A local day runs from `(day::timestamp AT TIME ZONE
+tz)` to the next day's. Where clocks go back at midnight (America/Havana on
+2026-11-01) the local midnight comes twice, and Postgres reads it as the later
+one, so the hour before belongs to the previous day. The index selects frames by
+these bounds, which keeps the time index usable; selecting by `(captured_at AT
+TIME ZONE tz)::date = day` would not use it. Everything that names a time's day
+follows the same bounds: a frame's `day` and `t`, a moment's `day`, and the
+models' `days` (`timeline_local_day` gives the day whose bounds hold a time, which
+is the local date everywhere else). Before, `days` and a frame took the local date
+while the index took the bounds, so a frame of that hour was counted on one day,
+listed on another, and given a negative `t`. Toronto's 23- and 25-hour days are
+tested too. `days` rows built before keep the old rule in such a timezone until a
+rebuild from scratch.
+
+*Searches the index cannot answer are refused* (400). A query whose every part is
+negated (`-a`, `-"a b"`, `a or -b`) cannot use the text index and would read every
+frame until the time limit, holding one of the server's four connections. The
+server asks Postgres first: `querytree(websearch_to_tsquery('simple', q))` keeps
+the part of a query an index can use, and is `T` when there is none and empty
+when there is no word at all (`-`, `!!!`, `""`). Both are refused with a plain
+message. `a -b`, phrases and `a or b` are searched. The `simple` configuration has
+no stop words, so `the` is a word like any other.
 
 - *Days* are read for the analysis's current timezone only; after a timezone
   change, nothing shows until the next build recounts.
@@ -2302,6 +2350,8 @@ Known limits:
 
 - A record can outlive its file (phase 1b): the index then says thumbnails exist
   and the image answers 404; the page shows its placeholder.
+- The stored file and thumbnails of a frame that became withheld stay in the
+  bucket, hidden by the media route only.
 - A thumbnail made again under a new `DERIVE_VERSION` keeps its old copy in a
   browser's cache until it is evicted or the user logs out.
 - The day index's `connection` is its first frame's: a table holds one screen
@@ -2315,6 +2365,23 @@ of frames, 216 ms for two words that are on nearly every frame, 5 ms for a word 
 1%, 2 ms for a rare one, 13 ms for the common word within a month, and 72 ms
 within one app. `tests/test_timeline_benchmark.py` repeats this
 (`MIROIR_TIMELINE_BENCHMARK=1`).
+
+Left for later: deleting the stored file and its thumbnails when a frame becomes
+withheld (the worker would have to learn of it from the rows, which the server
+cannot write to).
+
+*Review (2026-11-22).* An independent review of pull request #49 found one high
+and two low defects and two missing tests; all are fixed as above, each with a
+test from its reproduction:
+1. A withheld frame's screenshot was reported available in events and served at
+   every size: withheld wins in events, and the media route asks the timeline.
+2. Day bounds disagreed where clocks go back at midnight: one rule.
+3. A search with only negated terms read every frame: refused.
+4. A record that changes after the first build (`failed` to `made`) reaching
+   `timeline_screen` and `events`: tested; it did.
+5. The reader reading raw `media_objects`: tested; it cannot. The test of a
+   table lacking only some media columns found that `events` did not read its
+   rows again; it now does.
 
 ## 041 — A messages analysis: conversations by identifier, no text
 
