@@ -14,6 +14,7 @@ import re
 from collections.abc import Callable, Coroutine
 from datetime import date, datetime
 from typing import Any
+from unicodedata import category
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
@@ -123,6 +124,13 @@ def _time(value: str | None, name: str) -> datetime | date:
     return moment
 
 
+def _plain(value: str | None, name: str) -> str | None:
+    """Text with no control characters: a NUL cannot reach the database."""
+    if value is not None and any(category(char) == "Cc" for char in value):
+        raise OperationError(f"{name} must not contain control characters")
+    return value
+
+
 def _limit(value: str | None, default: int, most: int) -> int:
     if value is None:
         return default
@@ -208,7 +216,7 @@ def timeline_pages(
     @api.get("/api/timeline/frames/{key:path}")
     def frame(request: Request, key: str) -> Response:
         _parameters(request, set())
-        if not key or len(key) > 512:
+        if not _plain(key, "key") or len(key) > 512:
             raise OperationError("Invalid frame key")
         found = reader().frame(key)
         if found is None:
@@ -242,7 +250,7 @@ def timeline_pages(
         query = _parameters(
             request, {"q", "kind", "app", "from", "to", "limit", "before"}
         )
-        words = query.get("q")
+        words = _plain(query.get("q"), "q")
         if words is None:
             raise OperationError("Missing parameter: q")
         kind = query.get("kind", "screen")
@@ -250,7 +258,7 @@ def timeline_pages(
         end = _optional_day(query.get("to"), "to")
         limit = _limit(query.get("limit"), 20, MAX_SEARCH)
         if kind == "screen":
-            app = query.get("app")
+            app = _plain(query.get("app"), "app")
             if app is not None and not 1 <= len(app) <= 255:
                 raise OperationError("app must be a bundle identifier")
             before_moment = None

@@ -517,6 +517,10 @@ def create_app(
         A file of a frame the timeline says is withheld is not found, at any size
         or as a link; a timeline that cannot say refuses rather than serve it.
         """
+        if not media.valid_key(key):  # before the warehouse sees it (NUL)
+            return Response(
+                status_code=404, headers={"Cache-Control": "private, no-store"}
+            )
         refused = withheld_refusal(connection_id, kind, key)
         if refused is not None:
             return refused

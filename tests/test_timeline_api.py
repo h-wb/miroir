@@ -8,13 +8,17 @@ reader role, through its read-only, time-limited sessions.
 import getpass
 import gzip
 import json
+import threading
+import time
 from contextlib import closing
 from datetime import date, datetime, timezone
 from unittest.mock import patch
 
 import psycopg2
+import sqlalchemy as sa
 from fastapi.testclient import TestClient
 
+from src.core import timeline as timeline_module
 from src.core.analysis import analysis_plan
 from src.core.config import parse_miroir
 from src.core.operations import OperationError
@@ -737,6 +741,88 @@ class TimelineQueryTests(TimelineBuildFixture):
         response = self.client().get("/api/timeline/search?q=-zzzz", headers=BEARER)
         self.assertEqual(response.status_code, 400)
         self.assertIn("at least one word", response.json()["error"])
+
+    # ---- review of #49, second look -----------------------------------------
+
+    def test_only_analyses_that_can_answer_are_asked(self):
+        for key in (path(0), path(3700)):
+            self.stored("screen", key)
+        for others in (
+            [timeline("unbuilt", BOTH, READER)],  # no tables yet
+            [timeline("unread", BOTH)],  # no reader role
+        ):
+            raw = raw_configuration(
+                [timeline("timeline", BOTH, READER), *others], MIROIR_ID
+            )
+            client = self.client(raw)
+            for size in ("360", "original", None):
+                with self.subTest(others=others[0]["id"], size=size):
+                    served = self.get_media(client, "screen", path(0), size)
+                    self.assertIn(served.status_code, (200, 302))
+                    withheld = self.get_media(client, "screen", path(3700), size)
+                    self.assertEqual(withheld.status_code, 404)
+        # None that can answer: closed.
+        for analyses in (
+            [timeline("unbuilt", BOTH, READER)],
+            [timeline("unread", BOTH)],
+        ):
+            client = self.client(raw_configuration(analyses, MIROIR_ID))
+            with self.subTest(analyses=analyses[0]["id"]):
+                response = self.get_media(client, "screen", path(0), "360")
+                self.assertEqual(response.status_code, 503)
+                self.assertIn("not been built yet", response.json()["error"])
+
+    def test_control_characters_are_refused_not_a_server_error(self):
+        client = self.client()
+        cursor = read_cursor  # the routes write cursors; this one is forged
+        forged = timeline_module._cursor(["2026-11-20T00:00:00+00:00", "a\x00b"])
+        self.assertTrue(forged)
+        with self.assertRaises(OperationError):
+            cursor(forged, (str, str))
+        for route, code in (
+            ("/media/screen/screenshots/a%00b.jpeg?size=360", 404),
+            ("/media/screen/screenshots/a%00b.jpeg", 404),
+            ("/api/timeline/search?q=a%00b", 400),
+            ("/api/timeline/search?q=invoice&app=a%00b", 400),
+            ("/api/timeline/search?q=a%01b", 400),
+            ("/api/timeline/frames/a%00b", 400),
+            (
+                "/api/timeline/events?from=2026-11-20&to=2026-11-21&after=" + forged,
+                400,
+            ),
+            (
+                "/api/timeline/search?q=invoice&kind=browser&before=" + forged,
+                400,
+            ),
+        ):
+            with self.subTest(route=route):
+                response = client.get(route, headers=BEARER, follow_redirects=False)
+                self.assertEqual(response.status_code, code, response.text)
+
+    def test_an_image_answers_while_searches_hold_the_pool(self):
+        self.stored("screen", path(0))
+        client = self.client()
+        holding = threading.Barrier(5)
+
+        def slow():
+            with self.database.engine.connect() as db:
+                holding.wait()
+                db.execute(sa.text("SELECT pg_sleep(3)"))
+
+        threads = [threading.Thread(target=slow) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        holding.wait()  # all four of the queries' connections are taken
+        time.sleep(0.2)
+        begun = time.monotonic()
+        response = self.get_media(client, "screen", path(0), "360")
+        took = time.monotonic() - begun
+        for thread in threads:
+            thread.join()
+        self.assertEqual(response.status_code, 200)
+        self.assertLess(took, 1.0)
+        # And the queries' pool was indeed full: a search waits for it.
+        self.assertEqual(self.database.engine.pool.size(), 2)
 
 
 class TimelineDayBoundTests(TimelineBuildFixture):
