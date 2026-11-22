@@ -338,6 +338,58 @@ class PrefectAdapterTests(unittest.TestCase):
         # Scheduled, not ended: observing leaves it alone.
         self.assertEqual(self.orchestrator.observe(ws), [])
 
+    def test_a_derive_run_is_scheduled_for_its_earliest_start(self):
+        from prefect import get_client
+        from prefect.client.schemas.objects import StateType
+
+        from src.core.runner import _new_operation
+
+        ws = miroir()
+        self.converge(ws)
+        self.addCleanup(self.delete_deployments, ws)
+        start_at = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(
+            minutes=5
+        )
+        derive = _new_operation(
+            self.store,
+            ws,
+            ws.connections[0],
+            "webhook",
+            kind="derive",
+            options=json.dumps({"not_before": start_at.isoformat()}),
+        )
+        self.orchestrator.submit(derive.id)
+        bound = self.store.get_operation(derive.id).backend_run_id
+        with get_client(sync_client=True) as client:
+            run = client.read_flow_run(uuid.UUID(bound))
+        self.assertEqual(run.state.type, StateType.SCHEDULED)
+        self.assertEqual(run.expected_start_time, start_at)
+        self.assertEqual(run.parameters["operation_id"], derive.id)
+
+    def test_whether_a_derive_run_is_still_waiting(self):
+        from prefect import get_client
+        from prefect.states import Failed
+
+        from src.core.runner import _new_operation
+
+        ws = miroir()
+        self.converge(ws)
+        self.addCleanup(self.delete_deployments, ws)
+        runs = []
+        for _ in range(3):
+            derive = _new_operation(
+                self.store, ws, ws.connections[0], "webhook", kind="derive"
+            )
+            self.orchestrator.submit(derive.id)
+            runs.append(self.store.get_operation(derive.id).backend_run_id)
+        scheduled, failed, deleted = runs
+        with get_client(sync_client=True) as client:
+            client.set_flow_run_state(uuid.UUID(failed), Failed(), force=True)
+            client.delete_flow_run(uuid.UUID(deleted))
+        self.assertTrue(self.orchestrator.waiting(scheduled))
+        self.assertFalse(self.orchestrator.waiting(failed))
+        self.assertFalse(self.orchestrator.waiting(deleted))
+
     def test_a_deployment_prefect_rejects_on_create_is_a_readable_error(self):
         raw = example()
         raw["id"] = "rejected"

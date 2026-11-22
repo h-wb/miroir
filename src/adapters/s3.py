@@ -1,14 +1,35 @@
 """S3-compatible storage and path-style links for connector media."""
 
-from typing import cast
+import os
+from typing import Any, cast
 
 import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
-from src.core.media import ObjectTooLarge, StoredObject
+from src.core.config import MediaConfig
+from src.core.media import ListedObject, Listing, ObjectTooLarge, StoredObject
 
 MISSING = {"404", "NoSuchKey", "NotFound"}
+ACCESS_KEY_VARIABLE = "MIROIR_MEDIA_ACCESS_KEY_ID"
+SECRET_KEY_VARIABLE = "MIROIR_MEDIA_SECRET_ACCESS_KEY"
+
+
+def from_environment(config: MediaConfig) -> "S3ObjectStore | None":
+    """The bucket of the `media` section, with the key from the environment;
+    None when either half of the key is not set."""
+    access_key = os.environ.get(ACCESS_KEY_VARIABLE)
+    secret_key = os.environ.get(SECRET_KEY_VARIABLE)
+    if not access_key or not secret_key:
+        return None
+    return S3ObjectStore(
+        config.endpoint,
+        config.link_endpoint or config.endpoint,
+        config.region,
+        config.bucket,
+        access_key,
+        secret_key,
+    )
 
 
 class S3ObjectStore:
@@ -68,6 +89,19 @@ class S3ObjectStore:
     def put(self, name: str, body: bytes, content_type: str) -> None:
         self.client.put_object(
             Bucket=self.bucket, Key=name, Body=body, ContentType=content_type
+        )
+
+    def list_objects(self, prefix: str, after: str, limit: int) -> Listing:
+        options: dict[str, Any] = {"StartAfter": after} if after else {}
+        response = self.client.list_objects_v2(
+            Bucket=self.bucket, Prefix=prefix, MaxKeys=min(limit, 1000), **options
+        )
+        return Listing(
+            [
+                ListedObject(item["Key"], int(item["Size"]), item["LastModified"])
+                for item in response.get("Contents", [])
+            ],
+            bool(response.get("IsTruncated", False)),
         )
 
     def presign_put(self, name: str, content_type: str, expires: int) -> str:

@@ -88,6 +88,9 @@ class MediaKind:
     column: str
     extensions: tuple[str, ...]
     max_bytes: int
+    # Extensions the worker makes thumbnails of (decision 040). A kind that
+    # names none is not derived: no thumbnails and no `media_objects` rows.
+    thumbnails: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

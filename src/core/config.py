@@ -226,6 +226,10 @@ class MediaConfig(StrictModel):
     prefix: str = ""
     upload_ttl_seconds: int = Field(default=900, ge=60, le=3600)
     view_ttl_seconds: int = Field(default=300, ge=30, le=3600)
+    # Thumbnails (decision 040): confirmations within this many seconds share
+    # one derive run, and one run handles at most `derive_batch` files.
+    derive_delay_seconds: int = Field(default=300, ge=30, le=3600)
+    derive_batch: int = Field(default=500, ge=1, le=5000)
 
     @field_validator("endpoint", "link_endpoint")
     @classmethod

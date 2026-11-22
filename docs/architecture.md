@@ -23,7 +23,7 @@ silently. Decision 031 records why.
 | `integrations` | `src.core.models` only |
 | `analyses` | `src.core.models` only |
 | `core` | `integrations`, `analyses` |
-| `pipelines` | `core` |
+| `pipelines` | `core`, and `adapters.s3` (the flow builds the worker's bucket client) |
 | `adapters` | `core`, `pipelines` |
 | `web` | `core`, `integrations` |
 | `cli` | `core`, `integrations`, `adapters`, `web` |
@@ -34,7 +34,10 @@ without the loading stack. `src/core/timeline.py`, the server's read-only access
 to the warehouse (decision 040), imports only `src.core.config` and
 `src.core.operations` of the server's code, and only `web` and `cli` import it.
 Nothing in `web` or the timeline module imports an image library: media is never
-decoded in the web process. The collector imports the Python standard library,
+decoded in the web process. Only `src/core/thumbnails.py` imports one (Pillow),
+and nothing in `src` imports it: the derive run starts it as a child process. Only
+the runner imports the derive module, inside a derive run. A test imports the
+server's modules and the derive module and checks that no image library loaded. The collector imports the Python standard library,
 urllib3, pydantic and a pinned secret scanner, and nothing else; its own parts have import rules too, held
 by `collector/tests/test_boundaries.py` (decision 035).
 
@@ -68,7 +71,9 @@ Some rows point at a file: a frame at its screenshot. Those files are media
 through a connector's format. A connector declares which column holds the key;
 core signs upload and view links against an object store it reaches through the
 `ObjectStore` protocol; the S3 implementation is an adapter. A device uploads
-with the links and never holds a storage credential.
+with the links and never holds a storage credential. The worker reads the
+originals of confirmed files, writes their thumbnails beside them and records
+each file in the warehouse's `media_objects` (decision 040).
 
 ## Where a new thing goes
 

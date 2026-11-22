@@ -75,6 +75,11 @@
 
 
 
+{% if c.media %}
+<p id="media">Thumbnails: {{ c.media.waiting }} file{{ "s" if c.media.waiting != 1 }} waiting
+{%- if c.media.last_attempt %} · last derive run {{ when(c.media.last_attempt.started_at) }} {{ badge(c.media.last_attempt.transformation if c.media.last_attempt.ingestion != "blocked" else "blocked") }} <span class="muted">{{ c.media.last_attempt.transformation_detail or c.media.last_attempt.error_message or "" }}</span>
+{%- elif c.media.last_requested %} · derive run requested {{ when(c.media.last_requested) }}{% endif %}</p>
+{% endif %}
 <h2>History</h2>
 <table>
   <tr><th>Requested</th><th>Operation</th><th>Attempt</th><th>Load</th><th>Models</th><th>Problem</th></tr>
