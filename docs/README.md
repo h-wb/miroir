@@ -42,7 +42,7 @@ original raw schema (decision 021); the legacy per-source flows are retired.
 | [Bike Share Toronto](sources/bikeshare.md) | every rental | `bikeshare`, daily 00:00 | `bikeshare_data` | `biking`, `crossovers` | Biking (3), Rides (26) |
 | [Browser history](sources/browser-history.md) | Zen (Firefox) visits, time on page, typing | retired 2026-11-11, to be redone in Miroir (watched folder, or the collector's `zen_history` source, built 2026-11-20) | `browser_history_data` (dropped 2026-11-22) | `browser` | Browser (31) |
 | [ScreenMemory](sources/screenmemory.md) | screen text per screenshot, front app | built 2026-11-20, not deployed; sent by the Miroir collector | the connection's dataset | – | – |
-| [Apple Messages](sources/apple-messages.md) | iMessage, SMS and RCS rows | built, not deployed; sent by the Miroir collector | the connection's dataset | – | – |
+| [Apple Messages](sources/apple-messages.md) | iMessage, SMS and RCS rows | built, not deployed; sent by the Miroir collector | the connection's dataset | `messages` | – |
 | Dawarich | location history | in progress, not deployed | `dawarich_data` | – | – |
 
 Crossover dashboards (collection "Crossovers"): Music & Heart (25), Rides (26),
