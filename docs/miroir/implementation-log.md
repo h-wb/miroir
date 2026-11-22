@@ -2137,3 +2137,91 @@ Not done: the read-only role in the installation (home-ops) and its settings; th
 `timeline` package and its models, grants and schema privilege; thumbnails and
 the stored-media table; any timeline page beyond its status. The Safari check of
 `Clear-Site-Data` belongs to the phase that caches images.
+
+## 2026-11-22 — Thumbnails and stored media (decision 040, phase 1b)
+
+The timeline needs small images of screenshots and a record, in the warehouse,
+of which media files are stored. This session built both, on the worker. Nothing
+serves the thumbnails yet, and no model reads the table; those are later slices.
+The choices are the amendment to decision 040.
+
+Built:
+
+- **The queue.** Metadata schema 8 adds `media_pending` (files confirmed and not
+  yet derived) and `media_backfills` (where a backfill's walk stopped). When the
+  server answers `stored` to a confirmation, or `present` to an upload request,
+  for a kind with thumbnails, it queues the file before answering, then asks for
+  a derive run.
+- **The derive operation.** Kind `derive`, on the connection's own deployment and
+  flow. Requests within `media.derive_delay_seconds` (300) of one that has not
+  started join it; the Prefect adapter schedules an operation for the
+  `not_before` in its options. A run takes at most `media.derive_batch` (500)
+  files per kind and schedules the next one at once when more wait. It is not a
+  load: status, last sync, pending requests and analyses ignore it, and a crash
+  is closed as a lost transformation.
+- **Thumbnails.** `src/core/thumbnails.py`, the only module importing Pillow
+  (13.0.0, added to the project and the lock; its wheels carry libwebp, so the
+  image needs no system library). Two WebP sizes, 360 and 1280 wide, never
+  enlarged, stored as `<kind>.w360/<key>.webp` and `<kind>.w1280/<key>.webp`.
+  Bounded bytes, at most 40 million pixels checked from the header, only the
+  kind's decoders, first frame only, no metadata in the copy, orientation applied.
+  `MediaKind.thumbnails` names the extensions; `screenshots` has JPEG and PNG,
+  `attachments` none yet. `pillow-heif` was not added: the screenshots source
+  writes JPEG.
+- **`media_objects`.** `src/core/derive.py` writes one row per queued file, with
+  or without thumbnails, into the connection's dataset through a dlt pipeline of
+  its own, merged on connection, kind and key. A file whose decoding ended the
+  process three times is recorded as `failed`; a storage error ends the run after
+  recording what was finished.
+- **Backfill.** `pipelines-miroir media-backfill <connection> <kind> --limit N`
+  asks the worker to walk the bucket from where the last walk stopped, queue what
+  it finds and derive it; with `--duckdb` it runs in the CLI's own process. Files
+  already derived are recognised without being read.
+- **Boundaries.** Only the derive module imports the thumbnail module, and only
+  the runner imports the derive module, inside a run; a test loads the server's
+  modules in a fresh interpreter and finds no image library. The flow may import
+  `src.adapters.s3`, which gained `list_objects` and `from_environment`.
+
+Cost, measured on generated screens of realistic sizes (text, windows and a
+noisy picture area) on the development machine, one core, Python 3.12:
+
+| Image | Thumbnails only | Whole run, per file | Thumbnail sizes |
+|---|---|---|---|
+| JPEG 2880×1800 (490 KB) | 63 ms | 145 ms | 3 KB and 56 KB |
+| JPEG 3456×2234 (740 KB) | 73 ms | 151 ms | 6 KB and 97 KB |
+| PNG 3456×2234 (1.4 MB) | 162 ms | 224 ms | 6 KB and 99 KB |
+| PNG 5120×2880 (2 MB) | 271 ms | 311 ms | 2 KB and 38 KB |
+
+"Whole run" is a 200-file derive run in process: queue, the fake bucket in
+memory, the metadata store in SQLite (whose commit per file, for the count of
+attempts, is about 17 ms of it; on Postgres a round trip) and the DuckDB write.
+Network time to the bucket (one GET and two PUTs per file) comes on top. WebP
+encoding is most of the time; libwebp's method 2 was chosen over its default 4
+for being about 40% faster for 1% more bytes. Memory: about 150 MB above the
+process for such a run; at worst, a 40-megapixel PNG, 193 MB more while it
+decodes; a 40-megapixel JPEG, 21 MB (it decodes at reduced scale). So a backfill
+of 300,000 screenshots is roughly 12 to 17 hours of worker time, in 600 runs of
+500.
+
+Validation: new tests for thumbnails of generated images (sizes, not enlarging,
+modes, metadata dropped, orientation, only the kind's decoders, truncated and
+random bytes, a header forged past the pixel limit and past Pillow's own, a
+compressed bomb under the byte limit, a very tall image, an animation), for the
+whole path from a confirmation to `media_objects` in DuckDB (debouncing, joining,
+a stale run, `present` answers, a kind without thumbnails, a refused submission
+or deployment, a queue that cannot be written, a crashed run closed as a lost
+transformation, every status, files already derived not read again, a file
+replaced during a run, a storage failure in mid-batch, a file that ends the
+process three times, a blocked run without storage, a settings edit, batches with
+and without a scheduler, the backfill walk, its cursor and its command), the same
+against a disposable Postgres as metadata store and warehouse, the schema 7 to 8
+upgrade, a derive scheduled for its `not_before` against the real temporary
+Prefect API, `list_objects` with botocore's stubber, and the boundary rules (a
+probe importing Pillow from `media.py` fails both the static and the runtime
+check). The server suite is green: 318 tests, including the Postgres and Prefect
+ones, with ruff, format, mypy and the collector's strict mypy clean.
+
+Not done: serving thumbnails, the pages, any model reading `media_objects`,
+attachment and video thumbnails. Not run against a real bucket, a real worker
+or real screenshots. The installation must add the bucket key to the flow-run
+Job and release server, worker and image together (schema 8).

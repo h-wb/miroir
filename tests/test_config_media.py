@@ -28,6 +28,8 @@ class MediaConfigTests(unittest.TestCase):
                 "prefix": "",
                 "upload_ttl_seconds": 900,
                 "view_ttl_seconds": 300,
+                "derive_delay_seconds": 300,
+                "derive_batch": 500,
             },
         )
 
@@ -40,6 +42,8 @@ class MediaConfigTests(unittest.TestCase):
             "prefix": "site_1/camera.old",
             "upload_ttl_seconds": 3600,
             "view_ttl_seconds": 30,
+            "derive_delay_seconds": 30,
+            "derive_batch": 5000,
         }
         self.assertEqual(self.load(media=fields).media.model_dump(), fields)
 
@@ -57,6 +61,11 @@ class MediaConfigTests(unittest.TestCase):
             {"upload_ttl_seconds": 59},
             {"upload_ttl_seconds": True},
             {"view_ttl_seconds": 3601},
+            {"derive_delay_seconds": 29},
+            {"derive_delay_seconds": 3601},
+            {"derive_batch": 0},
+            {"derive_batch": 5001},
+            {"derive_batch": "500"},
             {"unexpected": "field"},
         ):
             with (

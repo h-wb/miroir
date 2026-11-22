@@ -1,7 +1,12 @@
-"""Plan, confirm, and sign links for connector media without storing metadata."""
+"""Plan, confirm, and sign links for connector media.
+
+The bucket is the record of what is stored (decision 033). Confirmed files of a
+kind with thumbnails are also queued for the worker (decision 040).
+"""
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Any, ParamSpec, Protocol, TypeVar
 from unicodedata import category
@@ -11,6 +16,8 @@ from src.core.operations import OperationError
 from src.integrations.contracts import MediaKind
 
 MAX_OBJECTS = 500
+# Files one backfill run may walk (decision 040).
+MAX_BACKFILL = 1_000_000
 CONTENT_TYPES = {
     ".jpeg": "image/jpeg",
     ".jpg": "image/jpeg",
@@ -58,6 +65,13 @@ class StoredObject:
     etag: str | None
 
 
+@dataclass(frozen=True)
+class ListedObject:
+    name: str
+    size: int
+    modified: datetime
+
+
 class ObjectTooLarge(OperationError):
     """The object is larger than the caller is prepared to hold in memory."""
 
@@ -74,6 +88,10 @@ class ObjectStore(Protocol):
         ...
 
     def put(self, name: str, body: bytes, content_type: str) -> None: ...
+
+    def list_objects(self, prefix: str, after: str, limit: int) -> list[ListedObject]:
+        """Up to `limit` objects under `prefix` named after `after`, in name order."""
+        ...
 
 
 _P = ParamSpec("_P")
@@ -99,6 +117,35 @@ def valid_key(key: object) -> bool:
 
 def object_name(prefix: str, connection_id: str, kind: str, key: str) -> str:
     return "/".join(part for part in (prefix, connection_id, kind, key) if part)
+
+
+def kind_prefix(prefix: str, connection_id: str, kind: str) -> str:
+    """What every object of one kind is named after, ending in a slash."""
+    return object_name(prefix, connection_id, kind, "") + "/"
+
+
+def thumbnail_name(
+    prefix: str, connection_id: str, kind: str, key: str, width: int
+) -> str:
+    """A thumbnail beside its original, under a derived kind (decision 040)."""
+    return object_name(prefix, connection_id, f"{kind}.w{width}", f"{key}.webp")
+
+
+def derived_kind(connection: ResolvedConnection, name: str) -> MediaKind | None:
+    """The kind, if the worker makes thumbnails of it."""
+    kind = _media_kind(connection, name)
+    return kind if kind.thumbnails else None
+
+
+def backfill_options(
+    connection: ResolvedConnection, name: str, limit: int
+) -> dict[str, Any]:
+    """The options of a backfill run: which kind to walk, and how far."""
+    if derived_kind(connection, name) is None:
+        raise OperationError("The worker makes no thumbnails of this media kind")
+    if type(limit) is not int or not 1 <= limit <= MAX_BACKFILL:
+        raise OperationError(f"The limit must be between 1 and {MAX_BACKFILL}")
+    return {"kind": name, "limit": limit}
 
 
 def _media_kind(connection: ResolvedConnection, name: str) -> MediaKind:

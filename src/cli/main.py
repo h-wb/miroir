@@ -127,6 +127,23 @@ def main(argv: list[str] | None = None) -> int:
     analyses = commands.add_parser(
         "analyses", help="List analyses, their linked inputs, and build status"
     )
+    backfill = commands.add_parser(
+        "media-backfill",
+        help="Make thumbnails and media_objects rows for files already stored",
+    )
+    backfill.add_argument("connection")
+    backfill.add_argument("kind", help="Media kind, e.g. screenshots")
+    backfill.add_argument(
+        "--limit",
+        type=int,
+        default=10000,
+        help="Stored files to walk in this run (the next run continues)",
+    )
+    backfill.add_argument(
+        "--duckdb",
+        type=Path,
+        help="Run here into a local DuckDB file instead of on the Prefect worker",
+    )
     commands_with_store = (
         status,
         run,
@@ -136,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
         execute,
         serve,
         analyses,
+        backfill,
     )
     for command in (
         *commands_with_store,
@@ -214,7 +232,9 @@ def _operate(args: argparse.Namespace, miroir: Any) -> int:
             return _serve(args, miroir, store, secrets)
         if args.command in ("set-credential", "check", "rotate-secrets"):
             return _credentials(args, store, secrets)
-        if args.command in ("deployments", "refresh", "models"):
+        if args.command in ("deployments", "refresh", "models") or (
+            args.command == "media-backfill" and args.duckdb is None
+        ):
             return _orchestrate(args, miroir, store, secrets)
         return _with_store(args, miroir, store, ids, secrets)
     except SecretKeyError as error:
@@ -252,25 +272,25 @@ def _orchestrator(args: argparse.Namespace, store: Any, miroir: Any) -> Any:
 
 
 def _object_store(miroir: "ResolvedMiroir") -> "ObjectStore | None":
-    config = miroir.media
-    if config is None:
+    if miroir.media is None:
         return None
-    access_key = os.environ.get("MIROIR_MEDIA_ACCESS_KEY_ID")
-    secret_key = os.environ.get("MIROIR_MEDIA_SECRET_ACCESS_KEY")
-    if not access_key or not secret_key:
+    from src.adapters.s3 import from_environment
+
+    store = from_environment(miroir.media)
+    if store is None:
         raise ConfigurationError(
             "Set MIROIR_MEDIA_ACCESS_KEY_ID and MIROIR_MEDIA_SECRET_ACCESS_KEY to serve media"
         )
-    from src.adapters.s3 import S3ObjectStore
+    return store
 
-    return S3ObjectStore(
-        config.endpoint,
-        config.link_endpoint or config.endpoint,
-        config.region,
-        config.bucket,
-        access_key,
-        secret_key,
-    )
+
+def _worker_object_store(miroir: "ResolvedMiroir") -> "ObjectStore | None":
+    """The bucket for derive runs; without a key they are blocked, not the CLI."""
+    if miroir.media is None:
+        return None
+    from src.adapters.s3 import from_environment
+
+    return from_environment(miroir.media)
 
 
 def _timeline_database() -> "TimelineDatabase | None":
@@ -313,6 +333,11 @@ def _orchestrate(
             return _print(service.refresh())
         if args.command == "models":
             return _print({"operation_id": service.request_models(args.analysis)})
+        if args.command == "media-backfill":
+            operation_id = service.request_media_backfill(
+                args.connection, args.kind, args.limit
+            )
+            return _print({"operation_id": operation_id})
         if args.action == "plan":
             return _print(service.deployments_plan())
         return _print({"applied": service.deployments_apply()})
@@ -429,7 +454,11 @@ def _with_store(
         or Path(os.environ.get("MIROIR_ARTIFACT_DIR", DEFAULT_ARTIFACTS)),
     }
     try:
-        if args.command == "execute":
+        if args.command in ("execute", "media-backfill"):
+            common["object_store"] = _worker_object_store(miroir)
+        if args.command == "media-backfill":
+            outcome = _backfill_here(args, miroir, store, common)
+        elif args.command == "execute":
             outcome = execute_operation(
                 miroir, args.operation, lock_wait=EXECUTE_LOCK_WAIT, **common
             )
@@ -454,7 +483,41 @@ def _with_store(
     ) as error:
         print(f"Run failed: {error}", file=sys.stderr)
         return 1
-    return _print(asdict(outcome))
+    printed = asdict(outcome)
+    if args.command == "media-backfill":
+        printed["detail"] = store.attempts(outcome.operation_id)[-1][
+            "transformation_detail"
+        ]
+    return _print(printed)
+
+
+def _backfill_here(
+    args: argparse.Namespace, miroir: Any, store: Any, common: dict[str, Any]
+) -> Any:
+    from src.core.media import backfill_options
+    from src.core.operations import OperationError
+    from src.core.runner import execute_operation, request_derive
+
+    if miroir.media is None:
+        raise OperationError("Media is not configured")
+    if common["object_store"] is None:
+        raise OperationError(
+            "Set MIROIR_MEDIA_ACCESS_KEY_ID and MIROIR_MEDIA_SECRET_ACCESS_KEY first"
+        )
+    connection = next(c for c in miroir.connections if c.config.id == args.connection)
+    operation_id = request_derive(
+        miroir,
+        args.connection,
+        store=store,
+        origin="local",
+        submit=lambda operation: None,
+        backfill=backfill_options(connection, args.kind, args.limit),
+        join=False,
+    )
+    assert operation_id is not None  # a backfill never joins
+    return execute_operation(
+        miroir, operation_id, lock_wait=EXECUTE_LOCK_WAIT, **common
+    )
 
 
 def _print(result: Any) -> int:

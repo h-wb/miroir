@@ -25,6 +25,7 @@ dependencies = [
     "croniter>=2",
     "prefect-kubernetes>=0.6",
     "boto3>=1.44.7",
+    "pillow>=12",
 ]
 
 [project.scripts]

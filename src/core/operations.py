@@ -20,10 +20,13 @@ from typing import Any, Literal
 
 import sqlalchemy as sa
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 POSTGRES_SCHEMA = "miroir_meta"
 LOCK_POLL_SECONDS = 1.0
 COLLECTOR_REPORTS_KEPT = 500
+# Operations that load nothing: an analysis build, and thumbnails (decision 040).
+# What a connection did, and whether it waits for a run, is told by the others.
+NOT_LOADS = ("models", "derive")
 
 log = logging.getLogger(__name__)
 
@@ -204,6 +207,49 @@ connection_checks = sa.Table(
     sa.Column("rejected", sa.Boolean, nullable=False),
     sa.Column("message", sa.String(500), nullable=False),
 )
+
+
+# Version 8 (decision 040): files confirmed in the bucket that the worker has not
+# derived yet. The derive run drains it; a newer confirmation of the same file
+# with another size replaces the entry.
+media_pending = sa.Table(
+    "media_pending",
+    metadata,
+    sa.Column("miroir_id", sa.String(24), primary_key=True),
+    sa.Column("connection_id", sa.String(24), primary_key=True),
+    sa.Column("kind", sa.String(40), primary_key=True),
+    sa.Column("key", sa.String(512), primary_key=True),
+    sa.Column("size", sa.BigInteger, nullable=False),
+    sa.Column("stored_at", sa.DateTime(timezone=True), nullable=False),
+    # Decodes begun: a file whose decoding ended the process is not tried forever.
+    sa.Column("attempts", sa.Integer, nullable=False),
+    sa.Index(
+        "ix_media_pending_stored",
+        "miroir_id",
+        "connection_id",
+        "kind",
+        "stored_at",
+    ),
+)
+
+# Version 8: where a backfill's walk of the bucket stopped, per connection and kind.
+media_backfills = sa.Table(
+    "media_backfills",
+    metadata,
+    sa.Column("miroir_id", sa.String(24), primary_key=True),
+    sa.Column("connection_id", sa.String(24), primary_key=True),
+    sa.Column("kind", sa.String(40), primary_key=True),
+    sa.Column("after", sa.String(512), nullable=False),
+    sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+)
+
+
+@dataclass(frozen=True)
+class PendingMedia:
+    key: str
+    size: int
+    stored_at: datetime
+    attempts: int
 
 
 class OperationError(RuntimeError):
@@ -422,6 +468,10 @@ class MetadataStore:
                 # Collector reports (decision 039): new tables, nothing else changes.
                 collector_reports.create(db, checkfirst=True)
                 collector_summaries.create(db, checkfirst=True)
+            if version < 8:
+                # Thumbnails (decision 040): new tables, nothing else changes.
+                media_pending.create(db, checkfirst=True)
+                media_backfills.create(db, checkfirst=True)
             db.execute(schema_info.update().values(version=SCHEMA_VERSION))
 
     def create_operation(self, **values: Any) -> Operation:
@@ -523,7 +573,7 @@ class MetadataStore:
         scope = sa.and_(
             operations.c.miroir_id == miroir_id,
             operations.c.connection_id == connection_id,
-            operations.c.kind != "models",
+            operations.c.kind.not_in(NOT_LOADS),
         )
         joined = attempts.join(operations)
         with self.engine.connect() as db:
@@ -675,16 +725,26 @@ class MetadataStore:
 
     def unstarted_builds(self, miroir_id: str, analysis_id: str) -> list[Operation]:
         """Builds of an analysis that were requested and have no attempt yet."""
+        return self._unstarted(
+            operations.c.miroir_id == miroir_id,
+            operations.c.analysis_id == analysis_id,
+            operations.c.kind == "models",
+        )
+
+    def unstarted_derives(self, miroir_id: str, connection_id: str) -> list[Operation]:
+        """Derive runs of a connection that were requested and have no attempt yet."""
+        return self._unstarted(
+            operations.c.miroir_id == miroir_id,
+            operations.c.connection_id == connection_id,
+            operations.c.kind == "derive",
+        )
+
+    def _unstarted(self, *where: Any) -> list[Operation]:
         with self.engine.connect() as db:
             ids = db.execute(
                 sa.select(operations.c.id)
                 .select_from(operations.outerjoin(attempts))
-                .where(
-                    operations.c.miroir_id == miroir_id,
-                    operations.c.analysis_id == analysis_id,
-                    operations.c.kind == "models",
-                    attempts.c.id.is_(None),
-                )
+                .where(*where, attempts.c.id.is_(None))
                 .order_by(operations.c.created_at)
             ).scalars()
             found = list(ids)
@@ -699,7 +759,7 @@ class MetadataStore:
                 .where(
                     operations.c.miroir_id == miroir_id,
                     operations.c.connection_id == connection_id,
-                    operations.c.kind != "models",
+                    operations.c.kind.not_in(NOT_LOADS),
                     attempts.c.ingestion != "blocked",
                 )
                 .order_by(attempts.c.id.desc())
@@ -735,7 +795,7 @@ class MetadataStore:
                     else sa.true(),
                     sa.and_(
                         operations.c.parent_operation_id.is_(None),
-                        operations.c.kind != "models",
+                        operations.c.kind.not_in(NOT_LOADS),
                     )
                     if requests_only
                     else sa.true(),
@@ -1244,7 +1304,7 @@ class MetadataStore:
             if attempt_id is None:
                 kind = self.get_operation(operation_id).kind
                 attempt_id, _ = self.start_attempt(
-                    operation_id, "not_run" if kind == "models" else "running"
+                    operation_id, "not_run" if kind in NOT_LOADS else "running"
                 )
         # Guard the write: a final outcome may have been recorded since observation.
         # Preserve committed ingestion when only the model build was interrupted.
@@ -1387,6 +1447,170 @@ class MetadataStore:
                 )
                 .values(removed_at=_now())
             )
+
+    # ---- Media waiting for the worker (decision 040) --------------------------
+
+    def add_pending_media(
+        self,
+        miroir_id: str,
+        connection_id: str,
+        kind: str,
+        objects: list[tuple[str, int, datetime]],
+    ) -> None:
+        """Queue (key, size, stored at) for the derive run. A file already queued
+        with the same size keeps its entry and its count of attempts."""
+        if not objects:
+            return
+        from sqlalchemy.dialects import postgresql, sqlite
+
+        insert = (
+            postgresql.insert
+            if self.engine.dialect.name == "postgresql"
+            else sqlite.insert
+        )
+        rows = {
+            key: {
+                "miroir_id": miroir_id,
+                "connection_id": connection_id,
+                "kind": kind,
+                "key": key,
+                "size": size,
+                "stored_at": stored_at,
+                "attempts": 0,
+            }
+            for key, size, stored_at in objects
+        }
+        statement = insert(media_pending).values(list(rows.values()))
+        statement = statement.on_conflict_do_update(
+            index_elements=["miroir_id", "connection_id", "kind", "key"],
+            set_={
+                "size": statement.excluded.size,
+                "stored_at": statement.excluded.stored_at,
+                "attempts": 0,
+            },
+            where=media_pending.c.size != statement.excluded.size,
+        )
+        with self.engine.begin() as db:
+            db.execute(statement)
+
+    def pending_media(
+        self, miroir_id: str, connection_id: str, kind: str, limit: int
+    ) -> list[PendingMedia]:
+        """The most recently stored first, so new files do not wait for a backfill."""
+        with self.engine.connect() as db:
+            rows = db.execute(
+                sa.select(
+                    media_pending.c.key,
+                    media_pending.c.size,
+                    media_pending.c.stored_at,
+                    media_pending.c.attempts,
+                )
+                .where(
+                    media_pending.c.miroir_id == miroir_id,
+                    media_pending.c.connection_id == connection_id,
+                    media_pending.c.kind == kind,
+                )
+                .order_by(media_pending.c.stored_at.desc(), media_pending.c.key)
+                .limit(limit)
+            ).all()
+        return [
+            PendingMedia(row.key, row.size, _utc(row.stored_at), row.attempts)
+            for row in rows
+        ]
+
+    def count_pending_media(
+        self, miroir_id: str, connection_id: str, kind: str | None = None
+    ) -> int:
+        with self.engine.connect() as db:
+            return int(
+                db.execute(
+                    sa.select(sa.func.count()).where(
+                        media_pending.c.miroir_id == miroir_id,
+                        media_pending.c.connection_id == connection_id,
+                        media_pending.c.kind == kind if kind is not None else sa.true(),
+                    )
+                ).scalar_one()
+            )
+
+    def begin_media_attempt(
+        self, miroir_id: str, connection_id: str, kind: str, key: str
+    ) -> None:
+        with self.engine.begin() as db:
+            db.execute(
+                media_pending.update()
+                .where(
+                    media_pending.c.miroir_id == miroir_id,
+                    media_pending.c.connection_id == connection_id,
+                    media_pending.c.kind == kind,
+                    media_pending.c.key == key,
+                )
+                .values(attempts=media_pending.c.attempts + 1)
+            )
+
+    def remove_pending_media(
+        self,
+        miroir_id: str,
+        connection_id: str,
+        kind: str,
+        done: list[PendingMedia],
+    ) -> None:
+        """Drop entries the run handled, unless a confirmation replaced them since."""
+        with self.engine.begin() as db:
+            for entry in done:
+                db.execute(
+                    media_pending.delete().where(
+                        media_pending.c.miroir_id == miroir_id,
+                        media_pending.c.connection_id == connection_id,
+                        media_pending.c.kind == kind,
+                        media_pending.c.key == entry.key,
+                        media_pending.c.size == entry.size,
+                    )
+                )
+
+    def backfill_after(self, miroir_id: str, connection_id: str, kind: str) -> str:
+        """The last key a backfill walked past, or "" to start from the beginning."""
+        with self.engine.connect() as db:
+            after = db.execute(
+                sa.select(media_backfills.c.after).where(
+                    media_backfills.c.miroir_id == miroir_id,
+                    media_backfills.c.connection_id == connection_id,
+                    media_backfills.c.kind == kind,
+                )
+            ).scalar()
+        return after or ""
+
+    def set_backfill_after(
+        self, miroir_id: str, connection_id: str, kind: str, after: str
+    ) -> None:
+        """Remember where the walk stopped; "" when it reached the end."""
+        scope = (
+            media_backfills.c.miroir_id == miroir_id,
+            media_backfills.c.connection_id == connection_id,
+            media_backfills.c.kind == kind,
+        )
+        with self.engine.begin() as db:
+            db.execute(media_backfills.delete().where(*scope))
+            if after:
+                db.execute(
+                    media_backfills.insert().values(
+                        miroir_id=miroir_id,
+                        connection_id=connection_id,
+                        kind=kind,
+                        after=after,
+                        updated_at=_now(),
+                    )
+                )
+
+    def delete_media_records(self, miroir_id: str, connection_id: str) -> None:
+        """Forget the queue and the walk of a removed connection; its files stay."""
+        with self.engine.begin() as db:
+            for table in (media_pending, media_backfills):
+                db.execute(
+                    table.delete().where(
+                        table.c.miroir_id == miroir_id,
+                        table.c.connection_id == connection_id,
+                    )
+                )
 
     @contextmanager
     def connection_lock(self, pipeline_name: str, wait: float = 0) -> Iterator[None]:

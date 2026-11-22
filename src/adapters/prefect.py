@@ -9,9 +9,11 @@ synchronous). On a loop Prefect's `to_deployment` and `run_deployment` would han
 back coroutines instead of results.
 """
 
+import json
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from functools import wraps
 from typing import Any, Literal, ParamSpec, TypedDict, TypeVar
 
@@ -253,7 +255,9 @@ class PrefectOrchestrator:
         """Start the connection's deployment for a requested operation.
 
         The operation ID is the idempotency key: resubmitting after a timeout or
-        crash returns the existing flow run instead of starting another.
+        crash returns the existing flow run instead of starting another. An
+        operation that states its earliest start (`not_before`, a debounced
+        derive run) is scheduled for then.
         """
         from prefect.client.schemas.objects import FlowRun
         from prefect.deployments import run_deployment
@@ -263,6 +267,7 @@ class PrefectOrchestrator:
         name = "/".join(
             (FLOW_NAME, deployment_name(operation.miroir_id, operation.connection_id))
         )
+        not_before = json.loads(operation.options or "{}").get("not_before")
         try:
             flow_run = run_deployment(
                 name,
@@ -271,6 +276,9 @@ class PrefectOrchestrator:
                     "operation_id": operation.id,
                     "config_path": self.config_path,
                 },
+                scheduled_time=datetime.fromisoformat(not_before)
+                if not_before
+                else None,
                 timeout=0,
                 idempotency_key=operation.id,
             )

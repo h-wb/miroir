@@ -15,7 +15,7 @@ import sys
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -28,7 +28,12 @@ from src.core.config import (
     load_miroir,
     save_miroir,
 )
-from src.core.operations import ArtifactOrigin, MetadataStore, OperationError
+from src.core.operations import (
+    ArtifactOrigin,
+    ConnectionBusy,
+    MetadataStore,
+    OperationError,
+)
 from src.core.secrets import SecretResolutionError, SecretStore, make_resolver
 
 REPO = Path(__file__).resolve().parents[2]
@@ -121,18 +126,103 @@ class MiroirService:
     ) -> list[dict[str, Any]]:
         miroir = self.miroir()
         connection = self._connection(miroir, connection_id)
-        return media.request_uploads(
+        results = media.request_uploads(
             miroir.media, self.object_store, connection, kind, objects
         )
+        # A file found present may be one whose confirmation was lost.
+        self._queue_derive(miroir, connection, kind, objects, results, "present")
+        return results
 
     def confirm_media(
         self, connection_id: str, kind: str, objects: object
     ) -> list[dict[str, Any]]:
         miroir = self.miroir()
         connection = self._connection(miroir, connection_id)
-        return media.confirm_uploads(
+        results = media.confirm_uploads(
             miroir.media, self.object_store, connection, kind, objects
         )
+        self._queue_derive(miroir, connection, kind, objects, results, "stored")
+        return results
+
+    def _queue_derive(
+        self,
+        miroir: ResolvedMiroir,
+        connection: ResolvedConnection,
+        kind: str,
+        objects: object,
+        results: list[dict[str, Any]],
+        status: str,
+    ) -> None:
+        """Queue stored files of a kind with thumbnails, and ask for a derive run.
+
+        The queue is written before the answer, so a device that is told a file
+        is stored never leaves it underived. The run is only requested: if that
+        fails, the queue waits for the next request or a backfill.
+        """
+        if media.derived_kind(connection, kind) is None:
+            return
+        assert isinstance(objects, list)  # validated by request/confirm
+        now = datetime.now(timezone.utc)
+        found = [
+            (item["key"], item["size"], now)
+            for item, result in zip(objects, results, strict=True)
+            if result["status"] == status
+        ]
+        if not found:
+            return
+        try:
+            self.store.add_pending_media(miroir.id, connection.config.id, kind, found)
+        except Exception as error:
+            log.exception(
+                "Stored media of %s could not be queued", connection.config.id
+            )
+            raise OperationError(
+                "Stored files could not be recorded; send them again"
+            ) from error
+        try:
+            self._request_derive(miroir, connection.config.id, "webhook")
+        except ConnectionBusy:
+            pass  # another request is deciding now; its run starts after this one
+        except Exception:  # the queue keeps the files
+            log.warning(
+                "Derive run for %s could not be requested",
+                connection.config.id,
+                exc_info=True,
+            )
+
+    def _request_derive(
+        self,
+        miroir: ResolvedMiroir,
+        connection_id: str,
+        origin: Any,
+        backfill: dict[str, Any] | None = None,
+    ) -> str | None:
+        from src.core.runner import request_derive
+
+        def submit(operation: Any) -> None:
+            # Prepared only when a run is recorded, not on every confirmation.
+            self._submit(operation.id, prepare=connection_id)
+
+        return request_derive(
+            miroir,
+            connection_id,
+            store=self.store,
+            origin=origin,
+            submit=submit,
+            backfill=backfill,
+            join=backfill is None,
+        )
+
+    def request_media_backfill(self, connection_id: str, kind: str, limit: int) -> str:
+        """Ask the worker to walk the bucket for files stored before thumbnails."""
+        miroir = self.miroir()
+        if miroir.media is None:
+            raise OperationError("Media is not configured")
+        connection = self._connection(miroir, connection_id)
+        options = media.backfill_options(connection, kind, limit)
+        operation_id = self._request_derive(miroir, connection_id, "request", options)
+        assert operation_id is not None  # a backfill never joins
+        return operation_id
 
     def media_view_url(self, connection_id: str, kind: str, key: str) -> str:
         miroir = self.miroir()
@@ -413,12 +503,15 @@ class MiroirService:
         self._submit(operation.id)
         return operation.id
 
-    def _submit(self, operation_id: str) -> None:
-        """Hand a recorded operation to the executor. If that fails, close it
-        with a `blocked` attempt so it does not look requested forever."""
+    def _submit(self, operation_id: str, prepare: str | None = None) -> None:
+        """Hand a recorded operation to the executor, after making connection
+        `prepare` executable when given. If either fails, close it with a
+        `blocked` attempt so it does not look requested forever."""
         from src.core.runner import MAX_ERROR_LENGTH
 
         try:
+            if prepare is not None:
+                self.prepare_connection(prepare)
             self.executor.submit(operation_id)
         except Exception as error:
             attempt, _ = self.store.start_attempt(operation_id, "blocked")
@@ -824,6 +917,7 @@ class MiroirService:
         # A report in flight while a former connection of this ID was removed may
         # have landed after its cleanup; it does not belong to the new one.
         self.store.delete_collector_reports(miroir.id, connection_id)
+        self.store.delete_media_records(miroir.id, connection_id)
         try:
             for name, value in credentials.items():
                 assert secrets is not None  # checked above
@@ -917,6 +1011,7 @@ class MiroirService:
         self.store.delete_secrets(miroir.id, connection_id)
         self.store.revoke_delivery_token(miroir.id, connection_id)
         self.store.delete_collector_reports(miroir.id, connection_id)
+        self.store.delete_media_records(miroir.id, connection_id)
 
     # ---- Orchestrator -------------------------------------------------------------
 

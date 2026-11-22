@@ -15,9 +15,9 @@ import subprocess
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -37,12 +37,17 @@ from src.core.operations import (
     Origin,
 )
 
+if TYPE_CHECKING:
+    from src.core.media import ObjectStore
+
 log = logging.getLogger(__name__)
 
 REPO = Path(__file__).resolve().parents[2]
 MAX_ERROR_LENGTH = 500
 # How long a load waits for another load deciding the same analysis's build.
 BUILD_DECISION_WAIT = 60
+# How long a request waits for another deciding the same connection's derive run.
+DERIVE_DECISION_WAIT = 10
 
 
 @dataclass(frozen=True)
@@ -71,6 +76,8 @@ class Execution:
     # Starts a recorded build at a later time (decision 040). Without it every
     # analysis builds with the load, whatever its package's interval.
     defer: Callable[[str, datetime], None] | None = None
+    # Where a derive run reads originals and writes thumbnails (decision 040).
+    object_store: "ObjectStore | None" = None
 
 
 class IngestionFailed(RuntimeError):
@@ -170,6 +177,57 @@ def request_models(
         analysis_id=analysis.id,
         options=json.dumps({"analysis_receipt": analysis_plan(analysis).receipt}),
     )
+
+
+def request_derive(
+    miroir: ResolvedMiroir,
+    connection_id: str,
+    *,
+    store: MetadataStore,
+    origin: Origin,
+    submit: Callable[[Operation], None],
+    backfill: dict[str, Any] | None = None,
+    join: bool = True,
+) -> str | None:
+    """Record a derive run of a connection's media and `submit` it, or join one.
+
+    Confirmations within `derive_delay_seconds` share one run (decision 040): a
+    request joins a run that has not started and was due no longer than one delay
+    ago, since it starts after this request's files were queued; otherwise it
+    records one due a delay from now. Without `join` (a backfill, or the next
+    batch of a run that stopped at its limit) the run is due now. Returns the new
+    operation's ID, or None when joined. ConnectionBusy when another request is
+    deciding, which then covers this one.
+    """
+    if miroir.media is None:
+        raise OperationError("Media is not configured")
+    connection = _connection(miroir, connection_id)
+    delay = timedelta(seconds=miroir.media.derive_delay_seconds)
+    with store.connection_lock(
+        f"derive-request-{miroir.id}-{connection_id}", DERIVE_DECISION_WAIT
+    ):
+        now = datetime.now(timezone.utc)
+        if join:
+            for waiting in store.unstarted_derives(miroir.id, connection_id):
+                due = json.loads(waiting.options or "{}").get("not_before")
+                if due is not None and datetime.fromisoformat(due) > now - delay:
+                    return None
+        options: dict[str, Any] = {
+            "not_before": (now + delay if join else now).isoformat()
+        }
+        if backfill is not None:
+            options["backfill"] = backfill
+        operation = _new_operation(
+            store,
+            miroir,
+            connection,
+            origin,
+            kind="derive",
+            options=json.dumps(options, sort_keys=True),
+        )
+        # Inside the lock: a request that joins finds it submitted or closed.
+        submit(operation)
+        return operation.id
 
 
 def _new_operation(
@@ -277,6 +335,7 @@ def execute_operation(
     lock_wait: float = 0,
     artifact_root: Path | None = None,
     defer: Callable[[str, datetime], None] | None = None,
+    object_store: "ObjectStore | None" = None,
 ) -> RunOutcome:
     """Run one recorded operation as a new attempt and record each stage.
 
@@ -299,6 +358,7 @@ def execute_operation(
         lock_wait,
         artifact_root,
         defer,
+        object_store,
     )
     return _execute_operation(run, miroir, operation_id, backend_run_id)
 
@@ -320,6 +380,10 @@ def _execute_operation(
     if backend_run_id is not None:
         store.bind_backend_run(operation.id, backend_run_id)
 
+    if operation.kind == "derive":
+        # Its work is the queue and the media settings, not the connection's
+        # settings, so an edit since the request does not block it.
+        return _derive(run, miroir, operation, connection)
     reason = None
     make_source: Callable[[dict[str, str]], Any] | None = None
     if operation.config_revision != connection.revision:
@@ -935,3 +999,103 @@ def _build(
         transformation_detail=detail,
     )
     return transformation, recorded and ok
+
+
+def _derive(
+    run: Execution,
+    miroir: ResolvedMiroir,
+    operation: Operation,
+    connection: ResolvedConnection,
+) -> RunOutcome:
+    """Thumbnails and `media_objects` rows for queued files (decision 040).
+
+    One run at a time per connection. A run handles at most `derive_batch` files
+    per kind; when more wait, it schedules the next run where it can (Prefect),
+    and otherwise carries on itself. The outcome is a transformation: nothing
+    of the connection's own data is loaded, so its status is unchanged.
+    """
+    from src.core.derive import derive_media
+
+    store = run.store
+    if miroir.media is None or run.object_store is None:
+        reason = "Media storage is not configured where this runs"
+        _block(store, operation, "Blocked", reason)
+        raise OperationError(reason)
+    object_store = run.object_store
+
+    def batch(backfill: dict[str, Any] | None) -> Any:
+        return derive_media(
+            miroir,
+            connection,
+            store=store,
+            object_store=object_store,
+            destination=run.destination,
+            pipelines_dir=run.pipelines_dir,
+            lock_wait=run.lock_wait,
+            backfill=backfill,
+        )
+
+    try:
+        with store.connection_lock(
+            f"{connection.binding.pipeline_name}-media", run.lock_wait
+        ):
+            attempt, number = store.start_attempt(operation.id, "not_run")
+            store.update_attempt(attempt, transformation="running")
+            try:
+                summary = batch(json.loads(operation.options or "{}").get("backfill"))
+                # Without a scheduler, nothing else would take the next batch.
+                while summary.remaining and run.defer is None and summary.progressed:
+                    summary = summary.then(batch(None))
+            except Exception as error:  # noqa: BLE001 - recorded, then raised
+                error_type, message = redact(error, [])
+                store.update_attempt(
+                    attempt,
+                    transformation="failed",
+                    transformation_detail=f"{error_type}: {message}"[:200],
+                    error_type=error_type,
+                    error_message=message,
+                )
+                raise IngestionFailed(f"{error_type}: {message}") from None
+    except ConnectionBusy as error:
+        _block(store, operation, "ConnectionBusy", str(error))
+        raise
+    recorded = _record(
+        store,
+        attempt,
+        "Derive outcome",
+        transformation="succeeded",
+        transformation_detail=summary.detail()[:200],
+    )
+    if summary.remaining and run.defer is not None:
+        _continue_derive(run, miroir, operation)
+    return RunOutcome(operation.id, number, "not_run", "succeeded", (), recorded)
+
+
+def _continue_derive(
+    run: Execution, miroir: ResolvedMiroir, operation: Operation
+) -> None:
+    """Schedule the next batch now, behind whatever else waits for the deployment."""
+    defer = run.defer
+    assert defer is not None
+
+    def schedule(next_run: Operation) -> None:
+        try:
+            defer(next_run.id, datetime.now(timezone.utc))
+        except Exception:
+            # Closed, so that no confirmation joins a run that will never start.
+            _block(run.store, next_run, "NotScheduled", "Could not be scheduled")
+            raise
+
+    try:
+        request_derive(
+            miroir,
+            operation.connection_id,
+            store=run.store,
+            origin=operation.origin,
+            submit=schedule,
+            join=False,
+        )
+    except Exception as error:  # noqa: BLE001 - the queue keeps the files
+        log.warning(
+            "The next derive run could not be scheduled: %s", type(error).__name__
+        )

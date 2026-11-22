@@ -3,7 +3,9 @@
 Deployed per connection (decision 013). A flow run needs the miroir
 configuration at `config_path`, the metadata database (MIROIR_METADATA_URL or
 MIROIR_METADATA__* — see `metadata_url`), and, for built-in secrets,
-MIROIR_SECRET_KEY (decision 011).
+MIROIR_SECRET_KEY (decision 011). A derive run (thumbnails, decision 040) also
+needs MIROIR_MEDIA_ACCESS_KEY_ID and MIROIR_MEDIA_SECRET_ACCESS_KEY; without them
+it is blocked and every other operation runs as before.
 """
 
 import os
@@ -15,6 +17,7 @@ from pathlib import Path
 from prefect import flow
 from prefect.runtime import deployment, flow_run
 
+from src.adapters.s3 import from_environment
 from src.core.config import load_miroir, metadata_url
 from src.core.operations import MetadataStore
 from src.core.runner import run_connection
@@ -25,7 +28,8 @@ from src.pipelines.transform import build_connection_models
 def schedule_build(
     store: MetadataStore, deployment_id: str, connection_id: str, config_path: str
 ) -> Callable[[str, datetime], None]:
-    """Start a recorded build on this deployment at a later time (decision 040).
+    """Start a recorded operation on this deployment at a given time: a deferred
+    build, or the next batch of a derive run (decision 040).
 
     The operation ID is the idempotency key, as for any submission.
     """
@@ -75,8 +79,9 @@ def sync_connection(
     store.migrate()
     # Outside a deployment there is nothing to schedule on; builds run with the load.
     deployment_id = deployment.id
+    miroir = load_miroir(Path(config_path))
     outcome = run_connection(
-        load_miroir(Path(config_path)),
+        miroir,
         connection_id,
         store=store,
         destination="postgres",
@@ -95,6 +100,7 @@ def sync_connection(
         else None,
         # Overlapping runs of one connection queue instead of failing.
         lock_wait=3600,
+        object_store=from_environment(miroir.media) if miroir.media else None,
         # Watched folders register files where the server keeps artifacts:
         # MIROIR_ARTIFACT_DIR, or `artifacts` beside the configuration.
         artifact_root=Path(

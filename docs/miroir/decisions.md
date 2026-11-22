@@ -1828,3 +1828,126 @@ Consequences:
 - The read-only role and its settings belong to the installation. The schema
   privilege (`USAGE`) on the timeline's schema is not something dbt `grants`
   gives and has to be granted with it.
+
+### 040 amendment — Thumbnails and stored media (phase 1b)
+
+Status: proposed with the phase 1b pull request, 2026-11-22. What building
+thumbnails and `media_objects` had to decide that the plan above left open.
+Where a choice touched security, cost or the shared scheduling, the more
+conservative one was taken; those are marked *(conservative)*.
+
+**How the worker knows what to derive: a queue in the metadata store.** The
+server cannot write to the warehouse, so when it answers `stored` to a
+confirmation it first records the file (connection, kind, key, size, time) in
+`media_pending`, metadata schema 8. The derive run drains it. A failure to record
+fails the confirmation. A file answered `present` to an upload request is queued
+too: that is what a device is told on its next pass after a confirmation failed
+or was lost, and it does not confirm such a file again. A file queued again with the
+same size keeps its entry; with another size it replaces it, and a run that
+handled the old size leaves the new one queued. Two other ways were weighed:
+
+- *Listing the bucket on each run.* The listing is in name order, not time order,
+  so finding new arrivals means walking everything each time, and nothing tells a
+  run where the last stopped. It is kept for the backfill, below.
+- *Reading the source's rows in the warehouse.* Rows arrive before their files
+  (033), and some files never arrive: frames whose screenshot was withheld,
+  attachments that were not on disk. Those would be looked for on every run, and a
+  file arriving late would have to be noticed by polling.
+
+**A derive is an operation of the connection, on its existing deployment.** Kind
+`derive`, run by the same flow as a sync, so no new deployment and the same
+submission, idempotency and reconciliation. Its outcome is recorded as the
+attempt's transformation (ingestion `not_run`), with counts in the detail. It is
+not a load: connection status, the last sync, "requested, not started" and the
+analyses ignore it. A settings edit since the request does not block it, because
+its work is the queue and the media settings, not the connection's settings.
+
+**Debounced like a deferred build.** A request joins a derive run of the
+connection that has not started and was due no longer than one delay ago;
+otherwise it records one due `media.derive_delay_seconds` from now (default 300)
+and submits it with that start, under an advisory lock per connection. Prefect
+schedules it with the operation ID as idempotency key; without Prefect it starts
+at once. Requesting never fails a confirmation: if Prefect refuses, the operation
+is closed as blocked and the files wait in the queue for the next request.
+
+**Bounded runs** *(conservative)*. A run handles at most `media.derive_batch`
+files per kind (default 500, about one to three minutes) and, when more wait,
+schedules the next run due now, which nothing joins. The deployment's limit of one
+run at a time means a backlog drains in steps that the connection's loads take
+turns with, instead of one run holding the deployment for hours. Without Prefect a
+run continues itself until the queue is empty.
+
+**`media_objects`.** One table per connection's dataset (its binding), so the
+timeline's models find it beside the rows they join, as every input follows its
+connection's binding (019). It is written by a dlt pipeline of its own,
+`<pipeline_name>_media`, so the connection's load state is never touched, and the
+write holds the connection's lock because both write the same dataset. Merged on
+`(connection_id, kind, key)`. Columns: `connection_id`, `kind`, `key`, `size`,
+`content_type` (from the extension, as at upload), `stored_at` (confirmation time;
+for a backfilled file, the bucket's modification time), `thumbnail_w360`,
+`thumbnail_w1280`, `thumbnail_status`, `derived_at`, `derive_version`. The status
+is `made`, or why there is none: `unsupported`, `too_large`, `unreadable`,
+`failed`. A file gone from the bucket when the run reaches it gets no row. A
+queued file whose row has the same size and version is not read again.
+
+**The thumbnails.** WebP at quality 70 (360) and 80 (1280), libwebp method 2,
+which measured 40% faster than its default for 1% more bytes. A decodable image
+always gets both sizes, an image narrower than one keeping its width, so a reader
+never has to fall back to the original for one size only. A very tall image is
+fitted under WebP's height limit. EXIF orientation is applied and no metadata is
+written into the copy *(conservative: a photo's place does not travel into the
+thumbnail)*.
+
+**Decoding untrusted bytes** *(conservative throughout)*:
+
+- The original is read with the kind's size limit (20 MB for screenshots).
+- The header is read and the pixel count checked, at most 40 million, before
+  anything is decoded. Pillow's decompression-bomb warning is an error.
+- Only the decoders of the kind's thumbnail extensions are tried (JPEG and PNG
+  for screenshots), whatever the bytes claim; only the first frame is used. A JPEG
+  is decoded at a reduced scale no smaller than 1280 wide.
+- Any decoder error makes the file `unreadable`; it never fails the run.
+- The count of decodes begun is kept per queued file. One whose decoding ended the
+  process three times (a crash or a kill for memory) is recorded as `failed`
+  without being read again, so one file cannot stop the queue.
+- A storage error ends the run after recording what it finished; the rest stays
+  queued.
+
+**HEIC.** The screenshots kind accepts `.heic`, but the collector's Screen Memory
+source stores JPEG. `pillow-heif` is not added *(conservative: another native
+decoder for untrusted input, for a type that does not occur)*; a HEIC screenshot
+gets a row with `unsupported`. The attachments kind gets thumbnails in the
+conversations phase, with HEIC then; until then it is not derived at all
+(`MediaKind.thumbnails` is empty).
+
+**Backfill walks the bucket.** The bucket is the record (033): a walk finds exactly
+what is stored, including an archive copied in by other means, and nothing that
+never was. Keys from the source's rows were rejected for the reasons above. The
+walk lists `prefix / connection / kind /` from where the last walk of that
+connection and kind stopped (`media_backfills`), queues what it finds, and then
+derives like any run. `--limit` bounds the files walked per run. Repeating it is
+safe: files already derived are recognised from `media_objects` without being
+read, and a finished walk starts again from the beginning. It runs on the worker
+by default, or in the CLI's own process into DuckDB for development.
+
+**The worker holds the bucket key.** 033 gave the storage credentials to the server
+alone. Reading originals and writing thumbnails needs them on the worker's
+flow-run Jobs too; without them derive runs are blocked and nothing else changes.
+The key needs read and write on the bucket and nothing more.
+
+**Boundaries.** Only `src/core/thumbnails.py` imports Pillow; only
+`src/core/derive.py` imports it; only the runner imports the derive module, inside
+a derive run. A test imports the server's modules in a fresh interpreter and
+checks no image library was loaded. `src/pipelines` may now import
+`src.adapters.s3`, to build the worker's bucket client.
+
+Consequences:
+
+- Metadata schema 8: server, worker and flow-run image are released together.
+- Thumbnails lag uploads by the delay plus queueing behind the connection's loads.
+- Measured on generated screens on a development machine (one core): about
+  0.15 s per JPEG screenshot and 0.2 to 0.3 s per PNG for a whole run, and at
+  worst about 200 MB of memory above the flow's own (a 40-megapixel PNG; a JPEG
+  of that size, about 20 MB). Not yet measured on the cluster.
+- A file that keeps a decoder busy without crashing it holds the run; the Job's
+  own time limit is the bound for that case.
