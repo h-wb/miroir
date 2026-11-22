@@ -11,7 +11,6 @@ runs that ended without recording an outcome.
 
 ```bash
 mise run miroir:deploy                                    # apply Miroir deployments from miroir.json
-mise run deploy                                           # (re)register run_dbt from prefect.yaml
 mise run prefect -- deployment ls
 mise run prefect -- flow-run ls --flow-name sync-connection --limit 5
 mise run prefect -- flow-run logs <flow-run-id>
@@ -21,11 +20,11 @@ mise run prefect -- flow-run logs <flow-run-id>
 
 Every Miroir load builds each analysis linked to its connection, into that
 analysis's own schemas; a build failure leaves the load succeeded and the analysis
-stale. `run_dbt` (nightly, legacy pool) builds the original mart schemas the
-dashboards read, or a subset with `-p select=source:github+`.
+stale. The dashboards read these analysis schemas. Nothing builds the models
+outside an analysis (decision 042).
 
 Builds are serialised by the global concurrency limit `dbt`. It lives in the
-Prefect server, not in `prefect.yaml`; recreate it after a server rebuild:
+Prefect server; recreate it after a server rebuild:
 
 ```bash
 mise run prefect -- gcl create dbt --limit 1

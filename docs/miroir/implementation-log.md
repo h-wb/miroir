@@ -2137,3 +2137,52 @@ Not done: the read-only role in the installation (home-ops) and its settings; th
 `timeline` package and its models, grants and schema privilege; thumbnails and
 the stored-media table; any timeline page beyond its status. The Safari check of
 `Clear-Site-Data` belongs to the phase that caches images.
+
+## 2026-11-22 — `run_dbt` removed (decision 042)
+
+The dashboards moved onto the Miroir analysis outputs and the schemas only
+`run_dbt` built were dropped (both done in the installation, outside this repo),
+so the last legacy deployment goes.
+
+Removed:
+
+- The `run_dbt` flow from `src/pipelines/transform.py`. `build_models` folded
+  into `build_connection_models`, its only caller; the "no selector, no
+  variables" path was the legacy run's.
+- `prefect.yaml`: `run_dbt` was its only deployment, and its definitions (pool,
+  shared environment, pull steps) served nothing else.
+- The mise tasks `deploy` (`prefect deploy` of that file), `run:dbt` (a build
+  without an analysis, which would recreate the dropped schemas) and `worker`
+  (a local worker for `local-pool`), and the `GITHUB__AUTHOR_EMAILS` reference
+  in `fnox.toml`, granted only to the first two.
+- In the dbt macros, the branches only a build without an analysis reached:
+  `github_my_emails` reading `GITHUB__AUTHOR_EMAILS`, and the
+  `miroir_namespace is none` paths of `optional_input` and `input_present`.
+  Every analysis plan sets `miroir_namespace`, and the GitHub package always
+  sets `github_author_emails`; no other package selects the GitHub models.
+
+Kept:
+
+- `generate_schema_name`'s fallback to the bare group name. dbt calls it for
+  every node, also when it parses without variables; making it fail would need
+  a decision of its own.
+- `input_linked`'s "no `miroir_inputs`" branch: packages whose inputs are all
+  required (music, health, github, biking, browser) still reach it. Its comment
+  now says so.
+- The default raw schema names in `_sources.yml`: dbt parses every source, and
+  a package binds only its own.
+- The warehouse settings in `mise.toml` and the warehouse password reference
+  in `fnox.toml`, which are the operator's copies of the warehouse access, not
+  `run_dbt` settings; and the global concurrency limit `dbt`, which analysis
+  builds use.
+
+Docs: `AGENTS.md`, `README.md`, `docs/README.md`, `docs/operations.md`,
+`docs/miroir/README.md`, `docs/product-plan.md` and the GitHub and browser
+history source pages no longer say the dashboards read the original mart
+schemas, that `run_dbt` runs nightly or that this repo deploys to `local-pool`.
+
+By hand: delete or pause the `run_dbt` deployment in the Prefect server.
+
+Validation: ruff, format, mypy and the collector's strict mypy clean; the full
+suite, including the disposable Postgres dbt scenarios (GitHub `is_mine` from
+the analysis parameter, absent and optional inputs), is green (274 tests).
