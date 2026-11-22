@@ -668,6 +668,34 @@ class TimelineQueryTests(TimelineApiFixture):
         self.assertEqual(found.headers["cache-control"], "private, no-store")
         self.assertEqual([m["key"] for m in found.json()["moments"]], [path(120)])
 
+    def test_the_search_body_is_json_with_each_field_once(self):
+        client = self.client()
+        url = "/api/timeline/search"
+        body = '{"q": "invoice"}'
+        for content_type in ("text/plain", "application/x-www-form-urlencoded", ""):
+            with self.subTest(content_type=content_type):
+                response = client.post(
+                    url,
+                    content=body,
+                    headers={**BEARER, "Content-Type": content_type},
+                )
+                self.assertEqual(response.status_code, 415)
+                self.assertIn("application/json", response.json()["error"])
+                self.assertEqual(response.headers["cache-control"], "private, no-store")
+        for content_type in ("application/json", "Application/JSON; charset=utf-8"):
+            with self.subTest(content_type=content_type):
+                response = client.post(
+                    url, content=body, headers={**BEARER, "Content-Type": content_type}
+                )
+                self.assertEqual(response.status_code, 200)
+        repeated = client.post(
+            url,
+            content='{"q": "absent", "q": "invoice"}',
+            headers={**BEARER, "Content-Type": "application/json"},
+        )
+        self.assertEqual(repeated.status_code, 400)
+        self.assertEqual(repeated.json(), {"error": "A field is given more than once"})
+
     def test_without_an_analysis_or_a_database_every_route_says_so(self):
         for client, message in (
             (
@@ -1132,6 +1160,32 @@ class TimelinePageTests(TimelineApiFixture):
         self.assertEqual(empty.status_code, 200)
         self.assertIn('method="post" action="/timeline/search"', empty.text)
         self.assertNotIn('class="results"', empty.text)
+
+    def test_the_form_is_read_with_small_limits_and_long_words_are_not_echoed(self):
+        client = self.client()
+        long_words = "invoice " * 40  # 320 characters: refused, and not shown back
+        refused = self.search(client, {"q": long_words})
+        self.assertEqual(refused.status_code, 400)
+        self.assertIn("1 to 200 characters", refused.text)
+        self.assertIn('name="q" value=""', refused.text)
+        self.assertNotIn("invoice invoice", refused.text)
+        for fields in (
+            {"q": "x" * 9000},  # one part over 8 KB
+            {"q": "invoice", **{f"extra{n}": "1" for n in range(10)}},  # 11 fields
+        ):
+            with self.subTest(fields=len(fields)):
+                response = self.search(client, fields)
+                self.assertEqual(response.status_code, 400)
+                self.assertIn("The search form was too large", response.text)
+                self.assertNotIn("xxxx", response.text)
+                self.assertIn('name="q" value=""', response.text)
+        multipart = client.post(
+            "/timeline/search",
+            files={"q": ("q.txt", b"invoice")},
+            headers=BEARER,
+        )
+        self.assertEqual(multipart.status_code, 400)
+        self.assertIn("The search form was too large", multipart.text)
 
     def test_search_words_in_an_address_are_refused_and_not_echoed(self):
         client = self.client()

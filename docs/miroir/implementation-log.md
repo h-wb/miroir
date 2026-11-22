@@ -2763,3 +2763,16 @@ synthetic day: search, older results, Back, logout.
 
 The server suite is green: 420 tests, one skipped (the benchmark, on request), with
 ruff, format, mypy and the collector's strict mypy clean.
+
+## 2026-11-22 — Second look at pull request #50: search hardening
+
+- `POST /api/timeline/search` answers 415 unless the body is declared
+  `application/json` (a charset is fine), and 400 for a repeated field.
+- The page's form is read with small limits (no files, 10 fields, 8 KB a part);
+  a form over them, or words over 200 characters, is refused without writing
+  the value back into the form.
+- The JSON router was included twice; a test now walks every route (included
+  routers are kept as wrappers here) and finds no path and method twice.
+
+Validation: 423 tests, one skipped (the benchmark, on request), with ruff,
+format, mypy and the collector's strict mypy clean.

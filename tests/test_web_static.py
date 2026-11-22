@@ -226,3 +226,26 @@ class AccessLogTests(WebFixture):
         self.assertIn('"GET /static/miroir.css HTTP/1.1" 200', lines)
         self.assertNotIn("secret", lines)
         self.assertNotIn("?", lines)
+
+
+class RouteTableTests(WebFixture):
+    def test_no_path_and_method_is_registered_twice(self):
+        app = create_app(self.service, TOKEN)
+
+        def walk(routes):
+            # Included routers are kept as wrappers of the router itself.
+            for route in routes:
+                inner = getattr(route, "original_router", None)
+                if inner is not None:
+                    yield from walk(inner.routes)
+                else:
+                    yield route
+
+        seen: dict[tuple[str, str], int] = {}
+        for route in walk(app.routes):
+            for method in getattr(route, "methods", None) or ():
+                key = (route.path, method)
+                seen[key] = seen.get(key, 0) + 1
+        self.assertGreater(len(seen), 40)
+        self.assertIn(("/api/timeline/search", "POST"), seen)
+        self.assertEqual({k: n for k, n in seen.items() if n > 1}, {})

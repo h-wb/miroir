@@ -16,11 +16,14 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
+from starlette.exceptions import HTTPException
+from starlette.formparsers import MultiPartException
 
 from src.core import timeline
 from src.core.config import ResolvedMiroir
 from src.core.operations import OperationError
 from src.core.timeline import (
+    MAX_QUERY,
     MEDIA_NO_THUMBNAILS,
     MEDIA_THUMBNAILS,
     MEDIA_UNKNOWN,
@@ -49,6 +52,9 @@ LATEST_WITHIN_DAYS = 399
 SEARCH_PAGE = 20
 # What the search form sends; `limit` is the page's own.
 SEARCH_FORM_FIELDS = {"q", "kind", "app", "from", "to", "before"}
+FORM_TOO_LARGE = "The search form was too large; search again."
+# A value longer than this is not shown back in the form.
+ECHO_LIMIT = 255
 
 
 def media_url(connection: str | None, key: str, size: int | str) -> str:
@@ -178,7 +184,17 @@ def timeline_page_routes(
                     refused=refusal or "The search takes no parameters in its address",
                 ),
             )
-        form = await request.form()
+        try:
+            # Six fields at most are expected; none needs more than a few KB.
+            form = await request.form(max_files=0, max_fields=10, max_part_size=8192)
+        except (HTTPException, MultiPartException):
+            return await run_in_threadpool(
+                guarded,
+                request,
+                lambda reader: _search(
+                    request, {}, reader, page, refused=FORM_TOO_LARGE
+                ),
+            )
         fields = {
             name: value
             for name, value in form.items()
@@ -266,12 +282,13 @@ def _search(
         kind = "screen"
     context: dict[str, Any] = {
         "source": reader.source.describe(),
-        # Shown back in the form, never in an address.
-        "q": words,
+        # Shown back in the form, never in an address, and only at a length the
+        # search could have taken: an oversized value is refused, not echoed.
+        "q": words if len(words) <= MAX_QUERY else "",
         "kind": kind,
-        "app": fields.get("app", ""),
-        "from_day": fields.get("from", ""),
-        "to_day": fields.get("to", ""),
+        "app": _echo(fields.get("app", "")),
+        "from_day": _echo(fields.get("from", "")),
+        "to_day": _echo(fields.get("to", "")),
         "labels": MEDIA_LABELS,
         "results": None,
         "refused": refused,
@@ -302,6 +319,10 @@ def _search(
                 }
     name = "_timeline_results.html" if fragment else "timeline_search.html"
     return _no_store(page(request, name, **context), status)
+
+
+def _echo(value: str) -> str:
+    return value if len(value) <= ECHO_LIMIT else ""
 
 
 def _moment(moment: dict[str, Any], apps: list[dict[str, str]]) -> dict[str, Any]:

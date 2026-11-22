@@ -51,6 +51,21 @@ class _NotConfigured(TimelineUnavailable):
     pass
 
 
+class _NotJson(OperationError):
+    """A body that is not declared as JSON (415)."""
+
+
+class _RepeatedField(ValueError):
+    pass
+
+
+def _no_repeats(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    names = [name for name, _ in pairs]
+    if len(names) != len(set(names)):
+        raise _RepeatedField
+    return dict(pairs)
+
+
 class _TimelineRoute(APIRoute):
     """Errors of the API as JSON that no cache keeps: 400 for a parameter, 503 when
     the timeline cannot answer, 504 when a query reached the time limit."""
@@ -65,6 +80,8 @@ class _TimelineRoute(APIRoute):
                 return _error(str(error), 504)
             except TimelineUnavailable as error:
                 return _error(str(error), 503)
+            except _NotJson as error:
+                return _error(str(error), 415)
             except OperationError as error:
                 return _error(str(error), 400)
 
@@ -250,7 +267,6 @@ def timeline_pages(
         return _answer(request, found)
 
     router.include_router(api)
-    router.include_router(api)
     return router
 
 
@@ -270,13 +286,18 @@ async def _json_fields(request: Request) -> dict[str, str]:
             if "q" in request.query_params
             else ("The search takes no parameters in its address")
         )
+    media_type = request.headers.get("content-type", "").split(";")[0]
+    if media_type.strip().lower() != "application/json":
+        raise _NotJson("The search body must be sent as application/json")
     body = bytearray()
     async for chunk in request.stream():
         body.extend(chunk)
         if len(body) > MAX_SEARCH_BODY:
             raise OperationError("The search body is too large")
     try:
-        values = json.loads(body)
+        values = json.loads(body, object_pairs_hook=_no_repeats)
+    except _RepeatedField:
+        raise OperationError("A field is given more than once") from None
     except (ValueError, RecursionError):
         raise OperationError("The search body must be a JSON object") from None
     if not isinstance(values, dict):
