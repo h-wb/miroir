@@ -7,12 +7,15 @@ reader role, through its read-only, time-limited sessions.
 
 import getpass
 import gzip
+import html
 import json
+import re
 import threading
 import time
 from contextlib import closing
 from datetime import date, datetime, timezone
 from unittest.mock import patch
+from urllib.parse import quote
 
 import psycopg2
 import sqlalchemy as sa
@@ -41,6 +44,7 @@ from src.core.timeline import (
     timeline_source,
 )
 from src.web.app import create_app
+from src.web.timeline_pages import MEDIA_LABELS
 from tests.fakes import FakeObjectStore
 from tests.test_timeline_models import (
     MIDNIGHT,
@@ -60,6 +64,7 @@ from tests.test_timeline_models import (
     visit,
 )
 from tests.test_web import BEARER, TOKEN
+from tests.test_web_static import INLINE
 
 MAIL = "com.apple.mail"
 MIROIR_ID = "timeline_api"
@@ -82,7 +87,9 @@ def text_frame(offset, text, bundle):
     return [frame(offset, text=text), usage(offset, bundle)]
 
 
-class TimelineQueryTests(TimelineBuildFixture):
+class TimelineApiFixture(TimelineBuildFixture):
+    """The API tests' synthetic day, built once per class by the real models."""
+
     built = False
 
     def setUp(self):
@@ -90,9 +97,9 @@ class TimelineQueryTests(TimelineBuildFixture):
         self.query(f"alter role {READER} login")
         self.raw = raw_configuration([timeline("timeline", BOTH, READER)], MIROIR_ID)
         self.miroir = parse_miroir(json.dumps(self.raw))
-        if not TimelineQueryTests.built:
+        if not type(self).built:
             self.load()
-            TimelineQueryTests.built = True
+            type(self).built = True
         self.source = timeline_source(self.miroir)
         self.database = self.reader_database()
         self.reader = TimelineReader(self.database, self.source)
@@ -149,6 +156,42 @@ class TimelineQueryTests(TimelineBuildFixture):
         self.media_record(self.miroir, 3700)
         self.build(analysis_plan(self.miroir.analyses[0]))
 
+    def client(self, raw=None, database: object = True):
+        self.clients = getattr(self, "clients", 0) + 1
+        config = self.root / f"api-miroir-{self.clients}.json"
+        config.write_text(
+            json.dumps(
+                {
+                    **(raw or self.raw),
+                    "media": {"endpoint": "https://s3.example.org", "bucket": "media"},
+                }
+            )
+        )
+        service = MiroirService(
+            config,
+            self.store,
+            self.root / "artifacts",
+            InlineExecutor(self.fail),
+            object_store=self.objects,
+        )
+        if database is True:
+            database = self.database
+        app = create_app(service, TOKEN, timeline=database or None)
+        return TestClient(app)
+
+    def stored(self, connection, key):
+        self.objects.add(f"{connection}/screenshots/{key}", b"original")
+        for width in (360, 1280):
+            self.objects.add(f"{connection}/screenshots.w{width}/{key}.webp", b"thumb")
+
+    def get_media(self, client, connection, key, size=None):
+        url = f"/media/{connection}/screenshots/{key}" + (
+            f"?size={size}" if size else ""
+        )
+        return client.get(url, headers=BEARER, follow_redirects=False)
+
+
+class TimelineQueryTests(TimelineApiFixture):
     # ---- finding the tables -------------------------------------------------
 
     def test_the_first_timeline_analysis_is_read_and_others_are_named(self):
@@ -443,29 +486,6 @@ class TimelineQueryTests(TimelineBuildFixture):
 
     # ---- the API --------------------------------------------------------------
 
-    def client(self, raw=None, database: object = True):
-        self.clients = getattr(self, "clients", 0) + 1
-        config = self.root / f"api-miroir-{self.clients}.json"
-        config.write_text(
-            json.dumps(
-                {
-                    **(raw or self.raw),
-                    "media": {"endpoint": "https://s3.example.org", "bucket": "media"},
-                }
-            )
-        )
-        service = MiroirService(
-            config,
-            self.store,
-            self.root / "artifacts",
-            InlineExecutor(self.fail),
-            object_store=self.objects,
-        )
-        if database is True:
-            database = self.database
-        app = create_app(service, TOKEN, timeline=database or None)
-        return TestClient(app)
-
     def test_every_route_needs_the_login(self):
         client = self.client()
         for route in (
@@ -631,17 +651,6 @@ class TimelineQueryTests(TimelineBuildFixture):
         )
 
     # ---- a withheld frame's files ----------------------------------------------
-
-    def stored(self, connection, key):
-        self.objects.add(f"{connection}/screenshots/{key}", b"original")
-        for width in (360, 1280):
-            self.objects.add(f"{connection}/screenshots.w{width}/{key}.webp", b"thumb")
-
-    def get_media(self, client, connection, key, size=None):
-        url = f"/media/{connection}/screenshots/{key}" + (
-            f"?size={size}" if size else ""
-        )
-        return client.get(url, headers=BEARER, follow_redirects=False)
 
     def test_a_withheld_frames_file_is_not_served_at_any_size(self):
         unknown = "2026/11/20/not-a-frame-yet.jpeg"
@@ -903,4 +912,210 @@ class TimelineDayBoundTests(TimelineBuildFixture):
         self.assertEqual(
             (index["start"], index["end"]),
             ("2026-11-01T00:00:00-04:00", "2026-11-02T00:00:00-05:00"),
+        )
+
+
+class TimelinePageTests(TimelineApiFixture):
+    """The Day view and search pages (phase 1c, part 2), on the same built data."""
+
+    def page(self, client, url, **headers):
+        response = client.get(
+            url, headers={**BEARER, **headers}, follow_redirects=False
+        )
+        if response.status_code < 300:
+            self.assertEqual(response.headers["cache-control"], "private, no-store")
+            self.assertIsNone(INLINE.search(response.text), url)
+        return response
+
+    def test_the_latest_day_opens_and_a_day_lists_its_calendar(self):
+        client = self.client()
+        home = self.page(client, "/timeline")
+        self.assertEqual(
+            (home.status_code, home.headers["location"]), (303, "/timeline/2026-11-21")
+        )
+        day = self.page(client, "/timeline/2026-11-20")
+        self.assertEqual(day.status_code, 200)
+        self.assertIn('data-day="2026-11-20"', day.text)
+        self.assertIn('data-timezone="America/Toronto"', day.text)
+        self.assertIn(
+            '<script type="module" src="/static/timeline.js"></script>', day.text
+        )
+        self.assertIn("7 screen frames, 6 browser visits.", day.text)
+        self.assertIn('id="scrubber"', day.text)
+        for code, label in MEDIA_LABELS.items():
+            self.assertIn(f'data-label-{code}="{label}"', day.text)
+        # The month around it, shaded by activity; the day itself marked.
+        self.assertIn(
+            '<a href="/timeline/2026-11-20" class="heat heat-2 selected" aria-current="date"',
+            day.text,
+        )
+        self.assertIn('href="/timeline/2026-11-19" class="heat heat-1"', day.text)
+        self.assertIn('href="/timeline/2026-11-01" class="heat heat-0"', day.text)
+        self.assertIn('href="/timeline/2026-11-19" rel="prev"', day.text)
+        # The header now links the timeline.
+        self.assertIn('<a href="/timeline">Timeline</a>', day.text)
+
+    def test_an_empty_day_says_so_and_loads_no_scrubber(self):
+        empty = self.page(self.client(), "/timeline/2026-01-01")
+        self.assertEqual(empty.status_code, 200)
+        self.assertIn("Nothing was recorded on this day.", empty.text)
+        self.assertNotIn('id="scrubber"', empty.text)
+
+    def test_a_frame_shows_its_image_or_a_tile_for_each_media_code(self):
+        client = self.client()
+        cases = (
+            (path(0), MEDIA_THUMBNAILS),
+            (path(60), MEDIA_NO_THUMBNAILS),
+            (path(120), MEDIA_UNKNOWN),
+            (path(3700), MEDIA_WITHHELD),
+        )
+        for key, code in cases:
+            with self.subTest(key=key, code=code):
+                found = self.page(client, f"/timeline/2026-11-20?frame={key}")
+                self.assertEqual(found.status_code, 200)
+                self.assertIn(f'data-frame="{key}"', found.text)
+                original = f'href="/media/screen/screenshots/{key}?size=original"'
+                if code in (MEDIA_THUMBNAILS, MEDIA_NO_THUMBNAILS):
+                    self.assertIn(original, found.text)
+                else:
+                    self.assertNotIn(original, found.text)
+                if code == MEDIA_THUMBNAILS:
+                    self.assertIn(
+                        f'<img id="frame-image" src="/media/screen/screenshots/{key}?size=1280"',
+                        found.text,
+                    )
+                else:
+                    self.assertIn(
+                        f'<span id="frame-tile" class="tile tile-{code}" >{MEDIA_LABELS[code]}</span>',
+                        found.text,
+                    )
+                    # No image: neither thumbnail size is asked for.
+                    self.assertNotIn("?size=360", found.text)
+                    self.assertNotIn("?size=1280", found.text)
+        withheld = self.page(client, f"/timeline/2026-11-20?frame={path(3700)}")
+        self.assertIn("Withheld (excluded_app): no text, no screenshot.", withheld.text)
+        self.assertIn('<pre id="frame-text" class="frame-text"></pre>', withheld.text)
+        shown = self.page(client, f"/timeline/2026-11-20?frame={path(0)}")
+        self.assertIn(">Morning invoice review</pre>", shown.text)
+        self.assertIn('data-colour="#2196f3">Safari</span>', shown.text)
+        # A frame opens on its own day; an unknown one says so.
+        moved = self.page(client, f"/timeline/2026-11-20?frame={path(-10)}")
+        self.assertEqual(moved.status_code, 303)
+        self.assertEqual(
+            moved.headers["location"],
+            f"/timeline/2026-11-19?frame={quote(path(-10), safe='')}",
+        )
+        unknown = self.page(client, "/timeline/2026-11-20?frame=2026/11/20/none.jpeg")
+        self.assertIn("That frame is not in the timeline.", unknown.text)
+        for url in (
+            "/timeline/20261120",
+            "/timeline/2026-13-01",
+            "/timeline/2026-11-20?frame=a%00b",
+        ):
+            with self.subTest(url=url):
+                self.assertEqual(self.page(client, url).status_code, 400)
+
+    def test_search_shows_moments_visits_nothing_or_why_it_refused(self):
+        client = self.client()
+        found = self.page(client, "/timeline/search?q=invoice")
+        self.assertEqual(found.status_code, 200)
+        self.assertIn('<script src="/static/htmx.min.js" defer></script>', found.text)
+        self.assertEqual(found.text.count('<article class="moment">'), 5)
+        self.assertIn(
+            f'<img class="thumb" src="/media/screen/screenshots/{path(0)}?size=360"',
+            found.text,
+        )
+        self.assertIn('<span class="tile tile-0">Not stored yet</span>', found.text)
+        self.assertIn(
+            f'href="/timeline/2026-11-20?frame={quote(path(0), safe="")}"', found.text
+        )
+        self.assertIn("Morning <mark>invoice</mark> review", found.text)
+        self.assertIn("2 frames, until 00:01:00", found.text)
+        browser = self.page(client, "/timeline/search?q=invoice&kind=browser")
+        self.assertEqual(browser.text.count('<article class="visit">'), 6)
+        self.assertIn("<mark>Invoice</mark> portal", browser.text)
+        self.assertIn(
+            '<a href="https://billing.example.com/invoices" rel="noreferrer noopener"',
+            browser.text,
+        )
+        none = self.page(client, "/timeline/search?q=absent")
+        self.assertIn("Nothing found on screen.", none.text)
+        refused = self.page(client, "/timeline/search?q=-zzzz")
+        self.assertEqual(refused.status_code, 400)
+        self.assertIn(
+            '<p class="error" id="search-refused">The search must look for',
+            refused.text,
+        )
+        empty = self.page(client, "/timeline/search")
+        self.assertEqual(empty.status_code, 200)
+        self.assertNotIn("results", empty.text.split("</form>")[-1])
+
+    def test_older_results_page_with_the_routes_tokens_and_htmx_fragments(self):
+        client = self.client()
+        with patch("src.web.timeline_pages.SEARCH_PAGE", 2):
+            first = self.page(client, "/timeline/search?q=invoice")
+            more = re.search(r'class="button-link more" href="([^"]+)"', first.text)
+            assert more is not None
+            url = html.unescape(more.group(1))
+            self.assertIn("before=", url)
+            fragment = self.page(client, url, **{"HX-Request": "true"})
+            plain = self.page(client, url)
+        self.assertNotIn("<html", fragment.text)
+        self.assertEqual(fragment.text.count('<article class="moment">'), 2)
+        self.assertIn("<html", plain.text)
+        self.assertIn(f"frame={quote(path(0), safe='')}", fragment.text)
+
+    def test_data_is_text_never_markup(self):
+        from src.web.app import templates
+
+        rendered = templates.get_template("_timeline_results.html").render(
+            kind="screen",
+            labels=MEDIA_LABELS,
+            more=None,
+            results=[
+                {
+                    "open": "/timeline/2026-11-20",
+                    "code": 0,
+                    "thumbnail": None,
+                    "clock": "10:00:00",
+                    "at": "x",
+                    "day": "2026-11-20",
+                    "app": {"name": "<img src=x onerror=alert(1)>", "colour": '"><b>'},
+                    "matches": 1,
+                    "snippet": ["<script>", "<b>hit</b>", "&"],
+                }
+            ],
+        )
+        self.assertNotIn("<script>", rendered)
+        self.assertNotIn("<img src=x", rendered)
+        self.assertIn(
+            "&lt;script&gt;<mark>&lt;b&gt;hit&lt;/b&gt;</mark>&amp;", rendered
+        )
+        self.assertIn('data-colour="&#34;&gt;&lt;b&gt;"', rendered)
+
+    def test_pages_say_when_there_is_no_timeline_or_it_is_not_built(self):
+        unbuilt = raw_configuration([timeline("unbuilt", BOTH, READER)], MIROIR_ID)
+        for client, message in (
+            (self.client(database=False), "MIROIR_TIMELINE_DATABASE_URL"),
+            (
+                self.client(raw_configuration([], MIROIR_ID)),
+                "no analysis of the timeline",
+            ),
+            (self.client(unbuilt), "not been built yet"),
+        ):
+            for url in (
+                "/timeline",
+                "/timeline/2026-11-20",
+                "/timeline/search?q=invoice",
+            ):
+                with self.subTest(url=url, message=message):
+                    response = self.page(client, url)
+                    self.assertEqual(response.status_code, 503)
+                    self.assertIn(message, response.text)
+                    self.assertEqual(
+                        response.headers["cache-control"], "private, no-store"
+                    )
+        anonymous = self.client().get("/timeline/2026-11-20", follow_redirects=False)
+        self.assertEqual(
+            (anonymous.status_code, anonymous.headers["location"]), (303, "/login")
         )

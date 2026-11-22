@@ -39,6 +39,7 @@ from src.core.timeline import (
     TimelineTimeout,
     TimelineUnavailable,
     media_withheld,
+    timeline_source,
 )
 from src.integrations.validation import InvalidArtifact
 from src.web.metrics import render_metrics
@@ -717,8 +718,18 @@ def create_app(
 
     # ---- Web interface ---------------------------------------------------------
 
+    def timeline_link() -> bool:
+        """The header links the timeline only where there is one to see."""
+        if timeline is None:
+            return False
+        try:
+            return timeline_source(service.miroir()) is not None
+        except (ConfigurationError, OperationError):
+            return False
+
     def page(request: Request, name: str, **context: Any) -> HTMLResponse:
         context["notice"] = NOTICES.get(request.query_params.get("notice", ""))
+        context.setdefault("timeline_link", timeline_link())
         return templates.TemplateResponse(request, name, context)
 
     @app.get("/login", response_class=HTMLResponse)
@@ -745,17 +756,20 @@ def create_app(
     def logout() -> Response:
         response = RedirectResponse("/login", status_code=303)
         response.delete_cookie(SESSION_COOKIE)
-        # Screenshots stay in the browser's cache for a year otherwise (decision 040).
-        response.headers["Clear-Site-Data"] = '"cache"'
+        # Screenshots stay in the browser's cache for a year otherwise, and htmx
+        # keeps the last address (a search's words) in session storage.
+        response.headers["Clear-Site-Data"] = '"cache", "storage"'
         return response
 
     from src.web.analyses import analysis_pages
     from src.web.connections import connection_pages
     from src.web.timeline import timeline_pages
+    from src.web.timeline_pages import timeline_page_routes
 
     app.include_router(connection_pages(service, page))
     app.include_router(analysis_pages(service, page))
     app.include_router(timeline_pages(timeline, page, service.miroir))
+    app.include_router(timeline_page_routes(timeline, page, service.miroir))
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @app.get("/", response_class=HTMLResponse)

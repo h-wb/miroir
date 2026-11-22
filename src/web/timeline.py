@@ -184,14 +184,6 @@ def timeline_pages(
             raise _NotConfigured(NO_ANALYSIS)
         return TimelineReader(database, source)
 
-    @router.get("/timeline", response_class=HTMLResponse)
-    def timeline_home(request: Request) -> HTMLResponse:
-        state = timeline.status(database, miroir() if database else None)
-        response = page(request, "timeline.html", timeline=state)
-        response.status_code = 200 if state["ready"] else 503
-        response.headers["Cache-Control"] = NO_STORE
-        return response
-
     @router.get("/api/timeline/health")
     def timeline_health() -> JSONResponse:
         state = timeline.status(database, miroir() if database else None)

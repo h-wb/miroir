@@ -1,0 +1,42 @@
+{# Pieces of the timeline's pages. Everything from data is a value Jinja escapes. #}
+
+{# A frame's image, or a plain tile saying why there is none. #}
+{% macro media(code, labels, image, alt) -%}
+{%- if image -%}
+<img class="thumb" src="{{ image }}" alt="{{ alt }}" loading="lazy" decoding="async">
+{%- else -%}
+<span class="tile tile-{{ code }}">{{ labels[code] }}</span>
+{%- endif -%}
+{%- endmacro %}
+
+{# An app's name on its colour; the colour is set by the page's script from
+   data-colour (the policy refuses style attributes). #}
+{% macro app_chip(app) -%}
+{%- if app -%}<span class="app-chip" data-colour="{{ app.colour }}">{{ app.name }}</span>
+{%- else -%}<span class="app-chip">No app</span>{%- endif -%}
+{%- endmacro %}
+
+{# Alternating plain and matched parts, plain first. #}
+{% macro snippet(parts) -%}
+{%- for part in parts -%}
+{%- if loop.index0 is odd -%}<mark>{{ part }}</mark>{%- else -%}{{ part }}{%- endif -%}
+{%- endfor -%}
+{%- endmacro %}
+
+{% macro search_form(q="", kind="screen", app="", from_day="", to_day="") -%}
+<form class="timeline-search" method="get" action="/timeline/search" role="search">
+  <label class="grow">Search <input type="search" name="q" value="{{ q }}" maxlength="200" required placeholder="Words on screen or in page titles"></label>
+  <fieldset class="kinds">
+    <legend class="visually-hidden">Search in</legend>
+    <label><input type="radio" name="kind" value="screen" {% if kind != "browser" %}checked{% endif %}> Screen text</label>
+    <label><input type="radio" name="kind" value="browser" {% if kind == "browser" %}checked{% endif %}> Browser visits</label>
+  </fieldset>
+  <details class="filters" {% if app or from_day or to_day %}open{% endif %}>
+    <summary>Filters</summary>
+    <label>App (bundle identifier) <input type="text" name="app" value="{{ app }}" maxlength="255" placeholder="com.apple.Safari"></label>
+    <label>From <input type="date" name="from" value="{{ from_day }}"></label>
+    <label>To <input type="date" name="to" value="{{ to_day }}"></label>
+  </details>
+  <button>Search</button>
+</form>
+{%- endmacro %}

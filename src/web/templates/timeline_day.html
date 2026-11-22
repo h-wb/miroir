@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% import "_timeline.html" as t %}
+{% block title %}Timeline · {{ day }}{% endblock %}
+{% block head %}<script type="module" src="/static/timeline.js"></script>{% endblock %}
+{% block body %}
+<div class="timeline-page">
+<main class="timeline-day" id="timeline-day"
+  data-day="{{ day }}" data-timezone="{{ source.timezone }}"
+  data-frame="{{ frame.key if frame else '' }}"
+  {% for code, label in labels.items() %}data-label-{{ code }}="{{ label }}" {% endfor %}>
+  <h1>{{ title }}</h1>
+  <nav class="day-nav" aria-label="Days">
+    <a href="/timeline/{{ previous }}" rel="prev">‹ {{ previous }}</a>
+    <a href="/timeline/{{ next }}" rel="next">{{ next }} ›</a>
+    <a href="/timeline/search">Search</a>
+  </nav>
+  {% if source.warning %}<p class="notice">{{ source.warning }}</p>{% endif %}
+  <p class="muted" id="day-summary">{{ frames }} screen frame{{ "" if frames == 1 else "s" }}, {{ visits }} browser visit{{ "" if visits == 1 else "s" }}. Times in {{ source.timezone }}.</p>
+  {% if missing_frame %}<p class="error">That frame is not in the timeline.</p>{% endif %}
+  {% if frames == 0 and visits == 0 %}
+  <p class="empty-day" id="empty-day">Nothing was recorded on this day.</p>
+  {% else %}
+  <section class="viewer" aria-label="Screen">
+    <figure class="frame-view">
+      <img id="frame-image" {% if frame and frame.image %}src="{{ frame.image }}" alt="Screenshot at {{ frame.clock }}"{% else %}alt="" hidden{% endif %}>
+      <span id="frame-tile" class="tile{% if frame %} tile-{{ frame.code }}{% endif %}" {% if not frame or frame.image %}hidden{% endif %}>{% if frame and not frame.image %}{{ labels[frame.code] }}{% endif %}</span>
+    </figure>
+    <aside class="frame-detail" id="frame-detail" aria-live="polite">
+      <p class="frame-heading"><time id="frame-time">{{ frame.clock if frame else "" }}</time>
+        <span id="frame-app">{% if frame %}{{ t.app_chip(frame.app) }}{% endif %}</span></p>
+      <p id="frame-state" class="muted">{% if frame %}{% if frame.withheld %}Withheld ({{ frame.withheld }}): no text, no screenshot.{% else %}{{ labels[frame.code] }}{% if frame.masked %} · {{ frame.masked }} masked{% endif %}{% endif %}{% endif %}</p>
+      <pre id="frame-text" class="frame-text">{% if frame and frame.text %}{{ frame.text }}{% endif %}</pre>
+      <p><a id="frame-original" {% if frame and frame.original %}href="{{ frame.original }}"{% else %}hidden{% endif %}>Open the original</a></p>
+      {% if frame and frame.text_truncated %}<p class="muted" id="frame-cut">The text is cut here.</p>{% endif %}
+    </aside>
+  </section>
+  <section class="lanes" aria-label="Lanes through the day">
+    <div class="lane">
+      <span class="lane-name" id="lane-screen-name">Screen</span>
+      <div class="lane-track"><canvas id="lane-screen" tabindex="0" aria-labelledby="lane-screen-name" aria-describedby="lane-help"></canvas><span class="cursor" aria-hidden="true"></span></div>
+    </div>
+    <div class="lane">
+      <span class="lane-name" id="lane-browser-name">Browser</span>
+      <div class="lane-track"><canvas id="lane-browser" tabindex="0" aria-labelledby="lane-browser-name" aria-describedby="lane-help"></canvas><span class="cursor" aria-hidden="true"></span></div>
+    </div>
+    <div class="hours" aria-hidden="true"><span>0</span><span>6</span><span>12</span><span>18</span><span>24</span></div>
+  </section>
+  <label class="scrubber-label" for="scrubber">Frame</label>
+  <input type="range" id="scrubber" class="scrubber" min="0" max="0" step="1" value="0" disabled>
+  <p class="muted" id="lane-help">Drag or tap the lanes or the slider. Arrow keys: a frame; Shift: a minute; Page Up and Page Down: an hour; Home and End: the first and last frame.</p>
+  <ul class="app-legend" id="app-legend" aria-label="Apps"></ul>
+  <section class="near" aria-labelledby="near-heading">
+    <h2 id="near-heading">Browser visits around this time</h2>
+    <ul id="visits-near" class="visits"></ul>
+  </section>
+  <noscript><p class="notice">The scrubber and the lanes need JavaScript. Search works without it.</p></noscript>
+  {% endif %}
+  <p id="timeline-status" class="muted" role="status"></p>
+</main>
+<aside class="calendar" aria-label="{{ month }}">
+  <nav class="month-nav"><a href="/timeline/{{ previous_month }}">‹</a> <strong>{{ month }}</strong> <a href="/timeline/{{ next_month }}">›</a></nav>
+  <table class="month">
+    <thead><tr>{% for name in ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"] %}<th scope="col">{{ name }}</th>{% endfor %}</tr></thead>
+    <tbody>
+    {% for week in weeks %}<tr>
+      {% for cell in week %}<td>{% if cell.in_month %}<a href="/timeline/{{ cell.day }}" class="heat heat-{{ cell.level }}{% if cell.selected %} selected{% endif %}" {% if cell.selected %}aria-current="date"{% endif %} title="{{ cell.day }}: {{ cell.count }}">{{ cell.number }}</a>{% endif %}</td>{% endfor %}
+    </tr>{% endfor %}
+    </tbody>
+  </table>
+  {{ t.search_form() }}
+</aside>
+</div>
+{% endblock %}

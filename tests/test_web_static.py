@@ -94,12 +94,22 @@ class StaticFileTests(WebFixture):
             '"allowScriptTags":false',
             '"includeIndicatorStyles":false',
             '"selfRequestsOnly":true',
+            '"historyEnabled":false',
+            '"historyCacheSize":0',
         ):
             self.assertIn(setting, config.group(1))
 
     def test_the_moved_handlers_are_wired_to_their_elements(self):
         script = (Path(STATIC_DIR) / "miroir.js").read_text()
         self.assertIn("button[data-copy-previous]", script)
+        # Logging out empties the page's storage (htmx keeps an address there).
+        self.assertIn('matches("form[data-logout]")', script)
+        self.assertIn("sessionStorage.clear()", script)
+        self.login()
+        self.assertIn(
+            '<form method="post" action="/logout" data-logout>',
+            self.client.get("/").text,
+        )
         self.assertIn("a[data-history-back]", script)
         self.login()
         error = self.client.get("/connections/missing")
