@@ -1,0 +1,34 @@
+version: 2
+
+# No data tests on screen_frames or events: each would read the whole table on
+# every build. Their unique indexes hold the keys instead.
+models:
+  - name: screen_frames
+    description: >
+      One row per ScreenMemory frame: captured_at (its second), bundle_id (the app
+      usage row of that second, or null), text (masked on the collector; null when
+      withheld) and its media key, image_path. The only place screen text is indexed:
+      search with to_tsvector('simple', text). Incremental on image_path.
+  - name: timeline_screen
+    description: >
+      Screen events: one row per app session (frames of one app with no pause over
+      five minutes). Internal: keeps removed sessions as deleted rows for events.
+  - name: timeline_browser
+    description: >
+      Browser events: one row per page visit. Internal: keeps visits that are not
+      navigations as deleted rows for events.
+  - name: events
+    description: >
+      Every source's events with the same columns: source, connection, event_id,
+      started_at, ended_at, kind, title, body, media_kind, media_key, group_key,
+      payload, and search (title weighted over body, 'simple' configuration).
+      Incremental, merged on event_id.
+  - name: days
+    description: >
+      Per local day (the analysis's timezone) and source: events that started that
+      day and, for the screen, frames captured.
+  - name: apps
+    description: Bundle identifier to a readable name and a colour.
+    columns:
+      - name: bundle_id
+        data_tests: [unique, not_null]

@@ -5,6 +5,7 @@ named roles, each accepting certain integrations through one dbt source. An
 analysis in the configuration links each role to a connection.
 """
 
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
@@ -41,6 +42,41 @@ class GitHubParameters(StrictModel):
         return sorted({v.strip().lower() for v in values})
 
 
+# Lower-case unquoted identifiers only: dbt writes grantees into GRANT unquoted.
+_ROLE = re.compile(r"[a-z_][a-z0-9_]{0,62}")
+_RESERVED_ROLES = {"public", "current_role", "current_user", "session_user", "all"}
+
+
+class TimelineParameters(StrictModel):
+    reader_role: str | None = Field(
+        default=None,
+        title="Server's read-only role",
+        description="The warehouse role the Miroir server reads the timeline with "
+        "(for example miroir_timeline). Builds grant it read access to the "
+        "timeline's tables; empty grants nothing.",
+    )
+
+    @field_validator("reader_role", mode="before")
+    @classmethod
+    def empty_is_none(cls, value: Any) -> Any:
+        return None if isinstance(value, str) and not value.strip() else value
+
+    @field_validator("reader_role")
+    @classmethod
+    def role_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if (
+            not _ROLE.fullmatch(value)
+            or value in _RESERVED_ROLES
+            or value.startswith("pg_")
+        ):
+            raise ValueError(
+                "expected a lower-case role name: letters, digits and underscores"
+            )
+        return value
+
+
 @dataclass(frozen=True)
 class InputSpec:
     """One role a package reads: which integrations fill it, via which dbt source."""
@@ -53,6 +89,12 @@ class InputSpec:
 
 def _no_variables(inputs: Mapping[str, Any], parameters: Any) -> dict[str, Any]:
     return {}
+
+
+def _timeline_variables(
+    inputs: Mapping[str, Any], parameters: TimelineParameters
+) -> dict[str, Any]:
+    return {"timeline_reader_role": parameters.reader_role}
 
 
 def _github_variables(
@@ -82,6 +124,9 @@ class Package:
     # Loads inside this interval after a build coalesce into one build at its end
     # (decision 040). None builds after every load.
     min_build_interval: timedelta | None = None
+    # Pass linked connection IDs by role (`miroir_connections`) to the models.
+    # Off by default so other packages' plan receipts do not change.
+    connection_ids: bool = False
 
     def variables(
         self, settings_by_role: Mapping[str, Any], parameters: dict[str, Any]
@@ -196,6 +241,30 @@ PACKAGES: Mapping[str, Package] = {
                     "Bike share account", ("bikeshare",), "bikeshare", False
                 ),
             },
+        ),
+        Package(
+            "timeline",
+            "Timeline",
+            "Screen frames, app sessions and visits on one time axis, for the "
+            "Miroir server's timeline. Link at least one input.",
+            "+path:models/timeline",
+            "timeline",
+            ("screen_frames", "events", "days", "apps"),
+            {
+                "screen": InputSpec(
+                    "Screen text and app usage",
+                    ("screenmemory",),
+                    "screenmemory",
+                    False,
+                ),
+                "browser": InputSpec(
+                    "Browser history", ("browser_history",), "browser_history", False
+                ),
+            },
+            TimelineParameters,
+            bind=_timeline_variables,
+            min_build_interval=timedelta(minutes=5),
+            connection_ids=True,
         ),
     )
 }
