@@ -15,9 +15,8 @@ per source ([ListenBrainz](docs/sources/listenbrainz.md), [GitHub](docs/sources/
 src/core/        Miroir: configuration, operations, runner, services
 src/integrations/ one connector package per service (settings, checks, dlt sources)
 src/web, src/cli  the interface and CLI over the same services
-src/pipelines/   miroir.py (the sync-connection flow) and transform.py (dbt, run_dbt)
-dbt/             staging views + mart schemas (music, health, biking, github, browser, crossovers)
-prefect.yaml     the legacy nightly run_dbt deployment (Miroir deployments come from its config)
+src/pipelines/   miroir.py (the sync-connection flow) and transform.py (an analysis's dbt build)
+dbt/             staging views + model groups (music, health, biking, github, browser, crossovers)
 fnox.toml        secret references (Proton Pass `Automation General`)
 mise.toml        tools, shared config, task secret grants; mise.local.toml: machine overrides
 docs/            documentation
@@ -48,8 +47,6 @@ The data paths default to the Prefect worker's mounts; override them for local i
 mise run dev                                      # local Miroir UI, no Proton access
 mise run dev:infra                                # UI against the existing installation (see prerequisites)
 mise run miroir:deploy                            # apply Miroir deployments from miroir.json
-mise run deploy                                   # register the nightly run_dbt deployment
-mise run run:dbt                                  # build + test the dbt models
 uv run ruff check src/
 ```
 

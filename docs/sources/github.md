@@ -55,8 +55,8 @@ weren't kept (mostly bots). The archive itself stays on the laptop.
 
 ## What "mine" means (dbt)
 
-- `is_mine` on commits: author email in `GITHUB__AUTHOR_EMAILS` (a JSON list, in
-  Proton Pass `dlt/github/author-emails`, passed to the **dbt** deployment only),
+- `is_mine` on commits: author email in the GitHub analysis parameter
+  `author_emails` (set in the Miroir interface, kept out of this public repo),
   or my login, or my name on commits made with no email configured. Git emails
   are often not linked to the account: ~1,000 commits (and all 2017–2021 school
   work) only show up this way.
