@@ -3,10 +3,6 @@
    Calling source() even during parsing retains the real dependency in dbt's graph. #}
 {% macro optional_input(source_name, table_name, columns, required=[]) %}
     {% set raw = source(source_name, table_name) %}
-    {% if var('miroir_namespace', none) is none %}
-        {# Keep legacy view column types and inferred schemas unchanged. #}
-        select * from {{ raw }}
-    {% else %}
     {% set ns = namespace(relation=none, available=[]) %}
     {% if execute and source_name not in var('miroir_unlinked_sources', []) %}
         {% set ns.relation = adapter.get_relation(database=raw.database, schema=raw.schema, identifier=raw.identifier) %}
@@ -29,14 +25,12 @@
         {% elif name in ns.available %}{{ adapter.quote(name) }}{% else %}null{% endif %}::{{ type }} as {{ adapter.quote(name) }}{% if not loop.last %},{% endif %}
     {% endfor %}
     {% if ns.relation is not none %}from {{ ns.relation }}{% else %}where false{% endif %}
-    {% endif %}
 {% endmacro %}
 
 {# Whether an input table exists: measures over an absent table are unknown (null),
-   over an existing one no rows means zero. Legacy builds read every source. #}
+   over an existing one no rows means zero. #}
 {% macro input_present(source_name, table_name) %}
     {% set raw = source(source_name, table_name) %}
-    {% if var('miroir_namespace', none) is none %}{{ return(true) }}{% endif %}
     {% if not execute or source_name in var('miroir_unlinked_sources', []) %}{{ return(false) }}{% endif %}
     {{ return(adapter.get_relation(database=raw.database, schema=raw.schema, identifier=raw.identifier) is not none) }}
 {% endmacro %}

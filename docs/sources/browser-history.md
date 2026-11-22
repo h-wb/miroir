@@ -3,9 +3,9 @@
 Browsing history from Zen (Firefox-based) on the MacBook, from 2025-01-07 on,
 including how long each page was in view and how much I typed on it.
 
-- **Status**: legacy load retired 2026-11-11; the data stays in `browser_history_data`. To be redone as a Miroir connection with a watched folder at `/miroir/data/browser` (the same synced NAS folder the legacy flow read)
+- **Status**: legacy load retired 2026-11-11; `browser_history_data` and the models built from it were dropped on 2026-11-22 (decision 042). To be redone as a Miroir connection with a watched folder at `/miroir/data/browser` (the same synced NAS folder the legacy flow read)
 - **Code**: connector [`src/integrations/browser_history/`](../../src/integrations/browser_history/) (two formats: a full snapshot, and incremental batches from the collector); source [`collector/miroir_collector/sources/zen_history.py`](../../collector/miroir_collector/sources/zen_history.py), built 2026-11-20, not deployed
-- **Raw schema**: `browser_history_data.zen_*`
+- **Raw schema**: `browser_history_data.zen_*` (dropped; a new connection gets its own dataset)
 - **dbt**: `staging.stg_browser__{visits, page_interactions}` → `browser.{visits, domains_daily}`
 - **Dashboard**: Browser (31): Overview (pages, hours in view, top sites, how I got there) / When (weekday × hour heatmap, hour and weekday charts, recent visits); Date, Group by and Site filters
 

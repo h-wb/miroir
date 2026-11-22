@@ -57,17 +57,6 @@ secrets = [
 ]
 run = "uv run --locked python -m scripts.dev infra"
 
-[tasks.deploy]
-depends = ["pass:login"]
-description = "Deploy all flows to Prefect"
-secrets = [
-  "DESTINATION__POSTGRES__CREDENTIALS__PASSWORD",
-  "PREFECT_API_URL",
-  "PREFECT_API_AUTH_STRING",
-  "GITHUB__AUTHOR_EMAILS",
-]
-run = "prefect deploy --all --prefect-file prefect.yaml"
-
 # Miroir reconciliation with the cluster's Prefect (decision 013). The local
 # miroir.json must match the copy on the NFS export; flow runs read the
 # cluster path (MIROIR_PREFECT_CONFIG_PATH), not this file.
@@ -97,15 +86,3 @@ depends = ["pass:login"]
 description = "Run the prefect CLI with secrets (e.g. mise run prefect -- deployment ls)"
 secrets = ["PREFECT_API_URL", "PREFECT_API_AUTH_STRING"]
 run = "prefect"
-
-[tasks.worker]
-depends = ["pass:login"]
-description = "Start Prefect worker"
-secrets = ["PREFECT_API_URL", "PREFECT_API_AUTH_STRING"]
-run = "prefect worker start --pool local-pool"
-
-[tasks."run:dbt"]
-depends = ["pass:login"]
-description = "Build and test the dbt models (needs DESTINATION__POSTGRES__CREDENTIALS__*)"
-secrets = ["DESTINATION__POSTGRES__CREDENTIALS__PASSWORD", "GITHUB__AUTHOR_EMAILS"]
-run = "dbt build --project-dir dbt --profiles-dir dbt"

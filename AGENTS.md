@@ -85,8 +85,8 @@ mise run prefect -- <cmd> # prefect CLI with cluster credentials
 
 Lint `src tests scripts`; mypy `src`. CI (`.github/workflows/test.yml`) runs the
 same lint, format check, mypy and the full suite on pull requests and `main`;
-`image.yml` only builds. The nightly `run_dbt` deployment clones `main` at run
-time, so a broken model on `main` reaches the dashboards' mart schemas at once. Secrets for mise tasks come from ProtonPass via fnox
+`image.yml` only builds. Models reach the dashboards through Miroir analysis
+builds, which run the pinned image, not `main`. Secrets for mise tasks come from ProtonPass via fnox
 (`mise run pass:login`); grants are per task in `mise.toml`/`fnox.toml`.
 
 ## The deployed system (home-ops cluster, `automation` namespace)
@@ -101,8 +101,9 @@ time, so a broken model on `main` reaches the dashboards' mart schemas at once. 
   - `automation/miroir/` — the CNPG cluster `postgres-miroir` (cnpg/initdb
     component) and the server HelmRelease (`pipelines-mirroir serve`, route
     `miroir.<SECRET_DOMAIN>` behind envoy-internal).
-  - `automation/prefect/app/` — the Prefect server + legacy process worker
-    (`local-pool`) and the miroir Kubernetes worker (`miroir-k8s`), the job
+  - `automation/prefect/app/` — the Prefect server + process worker
+    (`local-pool`, flows from other repositories; this repo no longer deploys
+    to it) and the miroir Kubernetes worker (`miroir-k8s`), the job
     template ConfigMap (NFS mount at `/miroir/data`, credentials via
     secretKeyRef), the `miroir` ExternalSecret (→ `miroir-secret`), RBAC.
 - **State**: `miroir.json` + artifacts live on the NFS export
@@ -154,12 +155,13 @@ time, so a broken model on `main` reaches the dashboards' mart schemas at once. 
   Health run on Miroir, bound to their original raw schemas. Operator leftovers:
   drop the unused `ws_8_personal_listenbrainz` and `ws_8_personal_health`
   schemas.
-- Browser history: redo as a Miroir connection bound to `browser_history_data`
-  with a watched folder at `/miroir/data/browser`: the same Nextcloud-synced
-  snapshot file the legacy flow loaded, so its row IDs match what is stored.
-- Dashboards still read the original mart schemas built by the legacy `run_dbt`
-  on `local-pool` (which also runs dawarich). Moving them to the Miroir analysis
-  outputs would let `run_dbt` go.
+- Browser history: redo as a Miroir connection with a watched folder at
+  `/miroir/data/browser` (the same Nextcloud-synced snapshot file the legacy
+  flow loaded). `browser_history_data` was dropped on 2026-11-22, so the new
+  connection starts from its own dataset.
+- Dashboards read the Miroir analysis outputs and `run_dbt` is removed
+  (decision 042). Operator leftover: delete or pause the `run_dbt` deployment
+  in Prefect if it is still there.
 - Cloud blockers (decision-adjacent, from the OSS+hosted analysis):
   per-tenant key separation, artifact storage abstraction (NFS paths are
   absolute on purpose today — they must resolve identically everywhere),
