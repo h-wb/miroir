@@ -2312,6 +2312,144 @@ Validation:
   An ordinary build reads in full only `days` and dlt's bookkeeping tables.
 - 6 random seeds still match incremental and fresh builds.
 
+## 2026-11-22 — Thumbnails and stored media (decision 040, phase 1b)
+
+The timeline needs small images of screenshots and a record, in the warehouse,
+of which media files are stored. This session built both, on the worker. Nothing
+serves the thumbnails yet, and no model reads the table; those are later slices.
+The choices are the amendment to decision 040.
+
+Built:
+
+- **The queue.** Metadata schema 8 adds `media_pending` (files confirmed and not
+  yet derived) and `media_backfills` (where a backfill's walk stopped). When the
+  server answers `stored` to a confirmation, or `present` to an upload request,
+  for a kind with thumbnails, it queues the file before answering, then asks for
+  a derive run.
+- **The derive operation.** Kind `derive`, on the connection's own deployment and
+  flow. Requests within `media.derive_delay_seconds` (300) of one that has not
+  started join it; the Prefect adapter schedules an operation for the
+  `not_before` in its options. A run takes at most `media.derive_batch` (500)
+  files per kind and schedules the next one at once when more wait. It is not a
+  load: status, last sync, pending requests and analyses ignore it, and a crash
+  is closed as a lost transformation.
+- **Thumbnails.** `src/core/thumbnails.py`, the only module importing Pillow
+  (13.0.0, added to the project and the lock; its wheels carry libwebp, so the
+  image needs no system library). Two WebP sizes, 360 and 1280 wide, never
+  enlarged, stored as `<kind>.w360/<key>.webp` and `<kind>.w1280/<key>.webp`.
+  Bounded bytes, at most 40 million pixels checked from the header, only the
+  kind's decoders, first frame only, no metadata in the copy, orientation applied.
+  `MediaKind.thumbnails` names the extensions; `screenshots` has JPEG and PNG,
+  `attachments` none yet. `pillow-heif` was not added: the screenshots source
+  writes JPEG.
+- **`media_objects`.** `src/core/derive.py` writes one row per queued file, with
+  or without thumbnails, into the connection's dataset through a dlt pipeline of
+  its own, merged on connection, kind and key. A file whose decoding ended the
+  process three times is recorded as `failed`; a storage error ends the run after
+  recording what was finished.
+- **Backfill.** `pipelines-miroir media-backfill <connection> <kind> --limit N`
+  asks the worker to walk the bucket from where the last walk stopped, queue what
+  it finds and derive it; with `--duckdb` it runs in the CLI's own process. Files
+  already derived are recognised without being read.
+- **Boundaries.** Only the derive module imports the thumbnail module, and only
+  the runner imports the derive module, inside a run; a test loads the server's
+  modules in a fresh interpreter and finds no image library. The flow may import
+  `src.adapters.s3`, which gained `list_objects` and `from_environment`.
+
+Cost, measured on generated screens of realistic sizes (text, windows and a
+noisy picture area) on the development machine, one core, Python 3.12:
+
+| Image | Thumbnails only | Whole run, per file | Thumbnail sizes |
+|---|---|---|---|
+| JPEG 2880×1800 (490 KB) | 63 ms | 145 ms | 3 KB and 56 KB |
+| JPEG 3456×2234 (740 KB) | 73 ms | 151 ms | 6 KB and 97 KB |
+| PNG 3456×2234 (1.4 MB) | 162 ms | 224 ms | 6 KB and 99 KB |
+| PNG 5120×2880 (2 MB) | 271 ms | 311 ms | 2 KB and 38 KB |
+
+"Whole run" is a 200-file derive run in process: queue, the fake bucket in
+memory, the metadata store in SQLite (whose commit per file, for the count of
+attempts, is about 17 ms of it; on Postgres a round trip) and the DuckDB write.
+Network time to the bucket (one GET and two PUTs per file) comes on top. WebP
+encoding is most of the time; libwebp's method 2 was chosen over its default 4
+for being about 40% faster for 1% more bytes. Memory: about 150 MB above the
+process for such a run; at worst, a 40-megapixel PNG, 193 MB more while it
+decodes; a 40-megapixel JPEG, 21 MB (it decodes at reduced scale). So a backfill
+of 300,000 screenshots is roughly 12 to 17 hours of worker time, in 600 runs of
+500.
+
+Validation: new tests for thumbnails of generated images (sizes, not enlarging,
+modes, metadata dropped, orientation, only the kind's decoders, truncated and
+random bytes, a header forged past the pixel limit and past Pillow's own, a
+compressed bomb under the byte limit, a very tall image, an animation), for the
+whole path from a confirmation to `media_objects` in DuckDB (debouncing, joining,
+a stale run, `present` answers, a kind without thumbnails, a refused submission
+or deployment, a queue that cannot be written, a crashed run closed as a lost
+transformation, every status, files already derived not read again, a file
+replaced during a run, a storage failure in mid-batch, a file that ends the
+process three times, a blocked run without storage, a settings edit, batches with
+and without a scheduler, the backfill walk, its cursor and its command), the same
+against a disposable Postgres as metadata store and warehouse, the schema 7 to 8
+upgrade, a derive scheduled for its `not_before` against the real temporary
+Prefect API, `list_objects` with botocore's stubber, and the boundary rules (a
+probe importing Pillow from `media.py` fails both the static and the runtime
+check). The server suite is green: 318 tests, including the Postgres and Prefect
+ones, with ruff, format, mypy and the collector's strict mypy clean.
+
+Not done: serving thumbnails, the pages, any model reading `media_objects`,
+attachment and video thumbnails. Not run against a real bucket, a real worker
+or real screenshots. The installation must add the bucket key to the flow-run
+Job and release server, worker and image together (schema 8).
+
+## 2026-11-22 — Thumbnails: the review of pull request #44, and what changed
+
+An independent review of phase 1b found six defects and seven lesser points, with
+scripts that reproduced the first two. Each was decided by the lead and handled
+here, on the same pull request.
+
+| Finding | Decided | Done |
+|---|---|---|
+| 1. A file whose decoding ended the process marked every file before it in the batch as failed | Fix | A file's attempt count is raised only while it decodes and reset when the decode has an outcome; rows are written and queue entries removed every 100 files. The reviewer's case (five good files, a death on the sixth, three runs, a clean run) is in the suite: five `made`, one `failed` |
+| 2. The pixel cap did not bound memory (a 1 × 40M PNG cost 790 MB) | Fix | At most 16,384 on a side and a ratio of 16 either way, checked from the header; decoding in a child with a 1 GiB address-space limit, where running out of memory is `too_large`. Peaks measured in a fresh process per case (table below); the documented figure corrected |
+| 3. `media-backfill --duckdb` could drain the installation's queue | Fix | Refused unless `--metadata` names a local SQLite file; the README no longer offers it as an alternative |
+| 4. A run that changed nothing scheduled the next one forever | Fix | Scheduled only after progress; waiting files counted over derived kinds only. The reviewer's case is in the suite |
+| 5. A short page ended the walk; a long invalid name could overflow the cursor | Fix | `list_objects` returns the store's `IsTruncated`; the cursor is text and holds the last name listed, valid or not. Tests with short pages and a 600-character name |
+| 6. A rotated JPEG was drafted to a quarter of its resolution | Fix | The draft target is computed from the width after rotation (8000 × 1000 at orientation 6 now gives 1000 × 8000 and 360 × 2880) |
+| a. A slow decode was bounded only by the Job's time limit | Fix if safe | Built: the child process, a 30-second timeout per file enforced by the worker (it kills the child), a CPU limit per file, no credentials in the child's environment. A crash or a kill of the child costs that file one try; three and it is `failed` |
+| b. Empty derive runs piled up behind a long load | Fix | A waiting run with its own bound backend run absorbs confirmations whatever its age |
+| c. A run never started can be joined until it is closed | Document | In the amendment and the README, with what brings the queue back |
+| d. Same key, same size is not derived again | Document | Known limit, in both |
+| e. What a missing row means; a row outlives its object | Document | In both |
+| f. Every flow-run Job can read and write the whole bucket | Document | In both |
+| g. Derive runs crowded the connection's history | Fix | Left out of the history; one line shows files waiting and the last derive run |
+
+Peaks inside the decoder, each in a fresh process, above its own 32 MB (40
+million pixels unless said): grey with alpha (becomes RGBA) 480 MB, palette with
+transparency 365 MB, RGBA 328 MB, 16-bit grey 252 MB, grey and 1-bit 213 MB, RGB
+and 16-bit RGB 176 MB, 16,384 × 2,441 RGBA 303 MB and rotated by EXIF 304 MB,
+16,384 × 1,024 RGBA 119 MB and grey 70 MB; a 40-megapixel JPEG,
+RGB or CMYK, 26 MB. The shapes over the bounds (1 × 40,000,000, 20,000 wide,
+a ratio of 16.4) are refused with nothing decoded. Through the child under its
+real limit the worst case peaked at 513 MB resident. A flow-run Job needs about
+1 GiB for a derive run at worst; 1.5 GiB is suggested.
+
+Cost after the change, the same 200-file runs as before: 163 ms per JPEG at
+2880 × 1800, 187 ms at 3456 × 2234, 279 ms per PNG at 3456 × 2234 and 369 ms at
+5120 × 2880; the worker's process near 300 MB. The pipe to the child adds little;
+writing rows every 25 files cost 20 ms per file more than every 100, which is why
+it is 100.
+
+Validation: new tests for each finding (the reviewer's poison and endless-run
+cases, short pages, a 600-character name as cursor, a rotated JPEG, every shape
+over the bounds both ways round, a memory error), for the child decoder with real
+generated images (a decode over its timeout, a child killed while decoding, the
+memory limit giving `too_large`, no credentials in its environment), for joining
+a long-overdue bound run and not an unbound one, for the connection page's media
+line, and for the local backfill refusing any store but a local SQLite file. The
+boundary test now also checks that importing the derive module loads no image
+library. The server suite is green: 331 tests, none skipped, including the
+Postgres and Prefect ones, with ruff, format, mypy and the collector's strict
+mypy clean.
+
 ## 2026-11-22 — `run_dbt` removed (decision 042)
 
 The dashboards moved onto the Miroir analysis outputs and the schemas only
@@ -2360,6 +2498,37 @@ By hand: delete or pause the `run_dbt` deployment in the Prefect server.
 Validation: ruff, format, mypy and the collector's strict mypy clean; the full
 suite, including the disposable Postgres dbt scenarios (GitHub `is_mine` from
 the analysis parameter, absent and optional inputs), is green (274 tests).
+
+## 2026-11-22 — Thumbnails: the second review of pull request #44
+
+The second review confirmed the six earlier findings fixed and found five more in
+the child decoder and the rule for joining a waiting run, each reproduced or
+reasoned with a script. All five were fixed, on the same pull request.
+
+| Finding | Done |
+|---|---|
+| 1. A decoder that fails on every file (it cannot start; a memory limit too small) turned the whole queue into permanent `failed` or `too_large` rows | Every fresh child must first make thumbnails of a 1-pixel PNG and the costliest image the bounds accept (40 MP grey with alpha, zeros, 78 KB; about 1 s). A child that cannot is "decoder unavailable": the run stops as failed with a fixed reason, the file in flight gets its try back, nothing is recorded or scheduled. After a lost file the next child is checked at once, so only a loss followed by a working child costs the file a try. The reviewer's two cases are in the suite (30 files with a child that dies at start, locally and with a scheduler; 20 files with an 8 MB limit): no file charged, no table written, nothing scheduled. `media-backfill --retry-failed` queues the kind's `failed` files again and removes their rows |
+| 2. The child could read the worker's environment through `/proc/<parent>/environ` | The worker calls `prctl(PR_SET_DUMPABLE, 0)` before starting a child (Linux; nothing elsewhere). A test on Linux shows the read succeeding before and refused after. The decision says what the child still has: the network and the files of the worker's user, the volumes included |
+| 3. A bound run that died before recording an attempt absorbed every confirmation until `refresh` | A waiting run due more than a delay ago is joined only if the orchestrator says its flow run is scheduled, pending or running (`PrefectOrchestrator.waiting`); without an answer it is not. A recent one is joined without asking. Tests with a fake orchestrator and against the real temporary Prefect API (scheduled, failed, deleted) |
+| 4. Writing to the child had no deadline | The child's input is non-blocking and written under the file's deadline. A child that never reads is lost within the deadline |
+| 5. Core dumps | `RLIMIT_CORE` 0 in the child |
+
+Memory: the reviewer measured the child at 530 MB and the worker and child at
+711 MB at the worst accepted shape, which every run now reaches once in its
+check (517 MB in the child here). A flow-run Job needs at least about 1 GiB;
+1.5 GiB is suggested. On macOS the address-space limit is not enforced (the child
+carries on without it there; anywhere else a refused limit stops the child, and so
+the run).
+
+Validation: the reviewer's startup and memory cases, a decoder breaking mid-run
+(the files after it keep their tries), a child that never reads, the `/proc` read
+before and after `prctl`, overdue runs joined on the orchestrator's word and not
+without it, `waiting` against the real temporary Prefect API, and the retry of
+`failed` rows through a backfill and the command. The reviewer's own scripts were
+run against the new code too: the startup and memory cases now end with the run
+stopped and nothing charged. The server suite is green: 353 tests, none skipped,
+including the Postgres and Prefect ones, with ruff, format, mypy and the
+collector's strict mypy clean.
 
 ## 2026-11-22 — The messages analysis package (decision 041)
 

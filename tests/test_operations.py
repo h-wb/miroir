@@ -29,6 +29,8 @@ from src.core.operations import (
     MetadataStore,
     OperationError,
     delivery_tokens,
+    media_backfills,
+    media_pending,
     schema_info,
 )
 from src.core.operations import (
@@ -445,6 +447,31 @@ class OperationTests(unittest.TestCase):
             self.assertEqual(
                 db.execute(sa.select(schema_info.c.version)).scalar(), SCHEMA_VERSION
             )
+
+    def test_version_7_upgrade_adds_the_media_queue_and_keeps_history(self):
+        from datetime import datetime, timezone
+
+        from src.core.runner import request_sync
+
+        operation = request_sync(
+            self.miroir(), "music", store=self.store, origin="request"
+        )
+        with self.store.engine.begin() as db:
+            media_pending.drop(db)
+            media_backfills.drop(db)
+            db.execute(schema_info.update().values(version=7))
+        self.store.migrate()
+        self.store.migrate()
+        self.assertEqual(self.store.get_operation(operation.id).connection_id, "music")
+        now = datetime.now(timezone.utc)
+        self.store.add_pending_media("personal", "screen", "shots", [("a", 1, now)])
+        self.assertEqual(
+            self.store.count_pending_media("personal", "screen", ["shots"]), 1
+        )
+        self.store.set_backfill_after("personal", "screen", "shots", "a")
+        self.assertEqual(self.store.backfill_after("personal", "screen", "shots"), "a")
+        with self.store.engine.connect() as db:
+            self.assertEqual(db.execute(sa.select(schema_info.c.version)).scalar(), 8)
 
 
 class SecretTests(unittest.TestCase):

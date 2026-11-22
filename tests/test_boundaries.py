@@ -1,4 +1,6 @@
 import ast
+import subprocess
+import sys
 import unittest
 from collections.abc import Iterator
 from importlib.util import resolve_name
@@ -8,7 +10,8 @@ _ALLOWED = {
     "integrations": ("src.core.models",),
     "analyses": ("src.core.models",),
     "core": ("src.integrations", "src.analyses"),
-    "pipelines": ("src.core",),
+    # The flow builds the worker's object store from its environment.
+    "pipelines": ("src.core", "src.adapters.s3"),
     "adapters": ("src.core", "src.pipelines"),
     "web": ("src.core", "src.integrations"),
     "cli": ("src.core", "src.integrations", "src.adapters", "src.web"),
@@ -18,8 +21,13 @@ _ALLOWED = {
 _TIMELINE = "src.core.timeline"
 _TIMELINE_IMPORTS = ("src.core.config", "src.core.operations")
 _TIMELINE_IMPORTERS = ("src.web", "src.cli")
-# Media is never decoded in the web process: thumbnails are the worker's.
+# Media is never decoded in the web process, nor in the worker's own: one module
+# decodes, and it runs as a child process that nothing imports. Only the runner
+# imports the derive run that starts it, inside the run.
 _IMAGE_LIBRARIES = ("PIL", "pillow_heif")
+_DECODER = "src.core.thumbnails"
+_DERIVE = "src.core.derive"
+_DERIVE_IMPORTER = "src.core.runner"
 
 
 def _within(name: str, prefix: str) -> bool:
@@ -87,6 +95,26 @@ class BoundaryTests(unittest.TestCase):
                         _within(name, library) for library in _IMAGE_LIBRARIES
                     ):
                         errors.append(f"{location}: {module} may not decode images")
+                    elif module != _DECODER and any(
+                        _within(name, library) for library in _IMAGE_LIBRARIES
+                    ):
+                        errors.append(f"{location}: only {_DECODER} imports {name}")
+                    if _within(name, _DECODER) and module != _DECODER:
+                        errors.append(f"{location}: {name} runs as its own process")
+                    if _within(name, _DERIVE) and module not in (
+                        _DERIVE,
+                        _DERIVE_IMPORTER,
+                    ):
+                        errors.append(f"{location}: only the runner imports {name}")
+            if module == _DERIVE_IMPORTER:
+                for node in _outside_functions(tree):
+                    if isinstance(node, (ast.Import, ast.ImportFrom)) and any(
+                        _within(name, _DERIVE) for name in _import_names(node, package)
+                    ):
+                        errors.append(
+                            f"src/{relative}:{node.lineno}: "
+                            f"the runner imports {_DERIVE} inside the run only"
+                        )
 
             if part == "integrations" and path.name in {"formats.py", "contracts.py"}:
                 for node in _outside_functions(tree):
@@ -99,3 +127,37 @@ class BoundaryTests(unittest.TestCase):
                         )
 
         self.assertFalse(errors, "\n".join(errors))
+
+    def test_the_server_and_the_worker_load_no_image_library(self) -> None:
+        # What `serve` imports, what its routes import while answering, and the
+        # worker's derive run, whose decoding happens in a child process.
+        modules = (
+            "src.web.app",
+            "src.web.connections",
+            "src.web.timeline",
+            "src.core.service",
+            "src.core.runner",
+            "src.core.media",
+            "src.core.timeline",
+            "src.adapters.prefect",
+            "src.adapters.s3",
+        )
+        probe = (
+            "import importlib, sys\n"
+            f"for name in {modules!r}: importlib.import_module(name)\n"
+            "server = sorted(m for m in sys.modules if m.split('.')[0] in"
+            f" {_IMAGE_LIBRARIES!r} or m in ({_DECODER!r}, {_DERIVE!r}))\n"
+            f"importlib.import_module({_DERIVE!r})\n"
+            "worker = sorted(m for m in sys.modules if m.split('.')[0] in"
+            f" {_IMAGE_LIBRARIES!r} or m == {_DECODER!r})\n"
+            "print(server + worker)"
+        )
+        root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            [sys.executable, "-c", probe],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertEqual(result.stdout.strip(), "[]")

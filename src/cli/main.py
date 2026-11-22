@@ -132,6 +132,33 @@ def main(argv: list[str] | None = None) -> int:
     analyses = commands.add_parser(
         "analyses", help="List analyses, their linked inputs, and build status"
     )
+    backfill = commands.add_parser(
+        "media-backfill",
+        help="Make thumbnails and media_objects rows for files already stored",
+    )
+    backfill.add_argument("connection")
+    backfill.add_argument("kind", help="Media kind, e.g. screenshots")
+    backfill.add_argument(
+        "--limit",
+        type=int,
+        default=10000,
+        help="Stored files to walk in this run (the next run continues)",
+    )
+    backfill.add_argument(
+        "--duckdb",
+        type=Path,
+        help="Development: run here into a local DuckDB file, with --metadata"
+        " naming a local SQLite store",
+    )
+    backfill.add_argument(
+        "--metadata",
+        help="SQLAlchemy URL of the metadata store; required with --duckdb",
+    )
+    backfill.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="Derive again the files recorded as failed (after an incident)",
+    )
     commands_with_store = (
         status,
         run,
@@ -157,6 +184,16 @@ def main(argv: list[str] | None = None) -> int:
             help="SQLAlchemy URL of the metadata store",
         )
     args = parser.parse_args(argv)
+    if args.command == "media-backfill":
+        if args.duckdb is not None and not _local_sqlite(args.metadata):
+            # A local run would drain the shared queue and move the shared walk.
+            print(
+                "media-backfill --duckdb needs --metadata naming a local SQLite"
+                " file, never the installation's store",
+                file=sys.stderr,
+            )
+            return 2
+        args.metadata = args.metadata or metadata_url() or DEFAULT_METADATA
 
     result: Any
     if args.command == "generate-key":
@@ -219,7 +256,9 @@ def _operate(args: argparse.Namespace, miroir: Any) -> int:
             return _serve(args, miroir, store, secrets)
         if args.command in ("set-credential", "check", "rotate-secrets"):
             return _credentials(args, store, secrets)
-        if args.command in ("deployments", "refresh", "models"):
+        if args.command in ("deployments", "refresh", "models") or (
+            args.command == "media-backfill" and args.duckdb is None
+        ):
             return _orchestrate(args, miroir, store, secrets)
         return _with_store(args, miroir, store, ids, secrets)
     except SecretKeyError as error:
@@ -257,25 +296,25 @@ def _orchestrator(args: argparse.Namespace, store: Any, miroir: Any) -> Any:
 
 
 def _object_store(miroir: "ResolvedMiroir") -> "ObjectStore | None":
-    config = miroir.media
-    if config is None:
+    if miroir.media is None:
         return None
-    access_key = os.environ.get("MIROIR_MEDIA_ACCESS_KEY_ID")
-    secret_key = os.environ.get("MIROIR_MEDIA_SECRET_ACCESS_KEY")
-    if not access_key or not secret_key:
+    from src.adapters.s3 import from_environment
+
+    store = from_environment(miroir.media)
+    if store is None:
         raise ConfigurationError(
             "Set MIROIR_MEDIA_ACCESS_KEY_ID and MIROIR_MEDIA_SECRET_ACCESS_KEY to serve media"
         )
-    from src.adapters.s3 import S3ObjectStore
+    return store
 
-    return S3ObjectStore(
-        config.endpoint,
-        config.link_endpoint or config.endpoint,
-        config.region,
-        config.bucket,
-        access_key,
-        secret_key,
-    )
+
+def _worker_object_store(miroir: "ResolvedMiroir") -> "ObjectStore | None":
+    """The bucket for derive runs; without a key they are blocked, not the CLI."""
+    if miroir.media is None:
+        return None
+    from src.adapters.s3 import from_environment
+
+    return from_environment(miroir.media)
 
 
 def _timeline_database() -> "TimelineDatabase | None":
@@ -324,6 +363,11 @@ def _orchestrate(
                     )
                 }
             )
+        if args.command == "media-backfill":
+            operation_id = service.request_media_backfill(
+                args.connection, args.kind, args.limit, args.retry_failed
+            )
+            return _print({"operation_id": operation_id})
         if args.action == "plan":
             return _print(service.deployments_plan())
         return _print({"applied": service.deployments_apply()})
@@ -440,7 +484,11 @@ def _with_store(
         or Path(os.environ.get("MIROIR_ARTIFACT_DIR", DEFAULT_ARTIFACTS)),
     }
     try:
-        if args.command == "execute":
+        if args.command in ("execute", "media-backfill"):
+            common["object_store"] = _worker_object_store(miroir)
+        if args.command == "media-backfill":
+            outcome = _backfill_here(args, miroir, store, common)
+        elif args.command == "execute":
             outcome = execute_operation(
                 miroir,
                 args.operation,
@@ -470,7 +518,58 @@ def _with_store(
     ) as error:
         print(f"Run failed: {error}", file=sys.stderr)
         return 1
-    return _print(asdict(outcome))
+    printed = asdict(outcome)
+    if args.command == "media-backfill":
+        printed["detail"] = store.attempts(outcome.operation_id)[-1][
+            "transformation_detail"
+        ]
+    return _print(printed)
+
+
+def _backfill_here(
+    args: argparse.Namespace, miroir: Any, store: Any, common: dict[str, Any]
+) -> Any:
+    from src.core.media import backfill_options
+    from src.core.operations import OperationError
+    from src.core.runner import execute_operation, request_derive
+
+    if miroir.media is None:
+        raise OperationError("Media is not configured")
+    if common["object_store"] is None:
+        raise OperationError(
+            "Set MIROIR_MEDIA_ACCESS_KEY_ID and MIROIR_MEDIA_SECRET_ACCESS_KEY first"
+        )
+    connection = next(c for c in miroir.connections if c.config.id == args.connection)
+    operation_id = request_derive(
+        miroir,
+        args.connection,
+        store=store,
+        origin="local",
+        submit=lambda operation: None,
+        backfill=backfill_options(connection, args.kind, args.limit, args.retry_failed),
+        join=False,
+    )
+    assert operation_id is not None  # a backfill never joins
+    return execute_operation(
+        miroir, operation_id, lock_wait=EXECUTE_LOCK_WAIT, **common
+    )
+
+
+def _local_sqlite(url: str | None) -> bool:
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.exc import ArgumentError
+
+    if not url:
+        return False
+    try:
+        parsed = make_url(url)
+    except ArgumentError:
+        return False
+    return parsed.get_backend_name() == "sqlite" and parsed.database not in (
+        None,
+        "",
+        ":memory:",
+    )
 
 
 def _print(result: Any) -> int:

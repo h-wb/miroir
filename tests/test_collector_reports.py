@@ -699,7 +699,8 @@ class MetricsTests(ReportFixture):
 
 class MigrationTests(unittest.TestCase):
     def test_version_6_store_gains_the_table_and_keeps_its_data(self):
-        self.assertEqual(SCHEMA_VERSION, 7)
+        # Version 7 added these tables; later versions upgrade through it.
+        self.assertGreaterEqual(SCHEMA_VERSION, 7)
         with TemporaryDirectory() as tmp:
             store = MetadataStore(f"sqlite:///{Path(tmp) / 'meta.sqlite'}")
             self.addCleanup(store.engine.dispose)
@@ -723,7 +724,8 @@ class MigrationTests(unittest.TestCase):
             )
             with store.engine.connect() as db:
                 self.assertEqual(
-                    db.execute(sa.select(schema_info.c.version)).scalar(), 7
+                    db.execute(sa.select(schema_info.c.version)).scalar(),
+                    SCHEMA_VERSION,
                 )
             self.assertTrue(
                 store.record_collector_report(

@@ -1,13 +1,17 @@
 import io
+import os
 import unittest
+from datetime import datetime, timezone
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
 from botocore.exceptions import ClientError
 from botocore.response import StreamingBody
 from botocore.stub import Stubber
 
-from src.adapters.s3 import S3ObjectStore
-from src.core.media import ObjectTooLarge, StoredObject
+from src.adapters.s3 import S3ObjectStore, from_environment
+from src.core.config import MediaConfig
+from src.core.media import ListedObject, Listing, ObjectTooLarge, StoredObject
 from tests.fakes import FakeObjectStore
 
 
@@ -94,6 +98,53 @@ class S3AdapterTests(unittest.TestCase):
             with self.assertRaises(ObjectTooLarge):
                 self.store.get(name, 4)
             stub.assert_no_pending_responses()
+
+    def test_list_objects(self):
+        modified = datetime(2026, 11, 20, tzinfo=timezone.utc)
+        prefix = "screen/screenshots/"
+        with Stubber(self.store.client) as stub:
+            stub.add_response(
+                "list_objects_v2",
+                {
+                    "Contents": [
+                        {"Key": f"{prefix}a.jpg", "Size": 3, "LastModified": modified}
+                    ],
+                    "IsTruncated": True,
+                },
+                {"Bucket": "media", "Prefix": prefix, "MaxKeys": 1000},
+            )
+            self.assertEqual(
+                self.store.list_objects(prefix, "", 5000),
+                Listing([ListedObject(f"{prefix}a.jpg", 3, modified)], True),
+            )
+            stub.add_response(
+                "list_objects_v2",
+                {},
+                {
+                    "Bucket": "media",
+                    "Prefix": prefix,
+                    "MaxKeys": 10,
+                    "StartAfter": f"{prefix}a.jpg",
+                },
+            )
+            self.assertEqual(
+                self.store.list_objects(prefix, f"{prefix}a.jpg", 10),
+                Listing([], False),
+            )
+            stub.assert_no_pending_responses()
+
+    def test_the_key_comes_from_the_environment(self):
+        config = MediaConfig(endpoint="http://internal.test:3900", bucket="media")
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(from_environment(config))
+        keys = {
+            "MIROIR_MEDIA_ACCESS_KEY_ID": "fake",
+            "MIROIR_MEDIA_SECRET_ACCESS_KEY": "fake",
+        }
+        with patch.dict(os.environ, keys, clear=True):
+            store = from_environment(config)
+        self.assertEqual(store.bucket, "media")
+        self.assertEqual(store.link_client.meta.endpoint_url, config.endpoint)
 
     def test_the_test_store_behaves_like_the_adapter(self):
         store = FakeObjectStore()
