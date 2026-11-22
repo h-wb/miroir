@@ -202,16 +202,17 @@ def request_derive(
     submit: Callable[[Operation], None],
     backfill: dict[str, Any] | None = None,
     join: bool = True,
+    still_waiting: Callable[[str], bool] | None = None,
 ) -> str | None:
     """Record a derive run of a connection's media and `submit` it, or join one.
 
     Confirmations share one run (decision 040): a request joins a derive run
-    that has not started and is bound to its own backend run, however long ago it
-    was due (a long load may hold the deployment), since it starts after this
-    request's files were queued. Otherwise it records one due
-    `derive_delay_seconds` from now. A bound run that is lost is closed by
-    `refresh` when the orchestrator reports it ended; a backfill requests a run
-    regardless. Without `join` (a backfill, or the next batch of a run that
+    that has not started and is bound to its own backend run, since it starts
+    after this request's files were queued. One due more than a delay ago (a long
+    load may hold the deployment, or the run died before recording anything) is
+    joined only if `still_waiting` says its backend run is still to run; without
+    an answer it is not. Otherwise the request records one due
+    `derive_delay_seconds` from now; a backfill requests a run regardless. Without `join` (a backfill, or the next batch of a run that
     stopped at its limit) the run is due now. Returns the new operation's ID, or
     None when joined. ConnectionBusy when another request is deciding, which then
     covers this one.
@@ -225,7 +226,7 @@ def request_derive(
     ):
         now = datetime.now(timezone.utc)
         if join and any(
-            waiting.backend_run_id is not None
+            _still_waiting(waiting, now - delay, still_waiting)
             for waiting in store.unstarted_derives(miroir.id, connection_id)
         ):
             return None
@@ -245,6 +246,27 @@ def request_derive(
         # Inside the lock: a request that joins finds it submitted or closed.
         submit(operation)
         return operation.id
+
+
+def _still_waiting(
+    waiting: Operation,
+    overdue: datetime,
+    ask: Callable[[str], bool] | None,
+) -> bool:
+    """A bound derive run that will still start: one due recently is taken on
+    trust, an overdue one only on the orchestrator's word."""
+    if waiting.backend_run_id is None:
+        return False
+    due = json.loads(waiting.options or "{}").get("not_before")
+    if due is not None and datetime.fromisoformat(due) > overdue:
+        return True
+    if ask is None:
+        return False
+    try:
+        return ask(waiting.backend_run_id)
+    except Exception:  # noqa: BLE001 - no answer: do not join
+        log.warning("Could not ask whether a derive run is still waiting")
+        return False
 
 
 def _new_operation(

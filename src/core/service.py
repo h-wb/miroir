@@ -56,6 +56,10 @@ class Orchestrator(Executor, Protocol):
 
     def observe(self, miroir: ResolvedMiroir) -> list[dict[str, Any]]: ...
 
+    def waiting(self, backend_run_id: str) -> bool:
+        """Whether a submitted run is still scheduled, pending or running."""
+        ...
+
 
 @dataclass
 class InlineExecutor:
@@ -211,15 +215,18 @@ class MiroirService:
             submit=submit,
             backfill=backfill,
             join=backfill is None,
+            still_waiting=self.orchestrator.waiting if self.orchestrator else None,
         )
 
-    def request_media_backfill(self, connection_id: str, kind: str, limit: int) -> str:
+    def request_media_backfill(
+        self, connection_id: str, kind: str, limit: int, retry_failed: bool = False
+    ) -> str:
         """Ask the worker to walk the bucket for files stored before thumbnails."""
         miroir = self.miroir()
         if miroir.media is None:
             raise OperationError("Media is not configured")
         connection = self._connection(miroir, connection_id)
-        options = media.backfill_options(connection, kind, limit)
+        options = media.backfill_options(connection, kind, limit, retry_failed)
         operation_id = self._request_derive(miroir, connection_id, "request", options)
         assert operation_id is not None  # a backfill never joins
         return operation_id

@@ -184,7 +184,14 @@ def serve(source: BinaryIO, sink: BinaryIO, cpu_seconds: int = 0) -> None:
 
 def main(argv: list[str]) -> int:
     memory, cpu_seconds = int(argv[1]), int(argv[2])
-    resource.setrlimit(resource.RLIMIT_AS, (memory, memory))
+    # No core file: it would hold the decoded image and whatever else was mapped.
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    try:
+        resource.setrlimit(resource.RLIMIT_AS, (memory, memory))
+    except (ValueError, OSError):
+        # macOS (development) does not take it; elsewhere, refuse to run unbounded.
+        if sys.platform != "darwin":
+            raise
     serve(sys.stdin.buffer, sys.stdout.buffer, cpu_seconds)
     return 0
 

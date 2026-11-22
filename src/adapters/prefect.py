@@ -291,6 +291,24 @@ class PrefectOrchestrator:
         self.store.bind_backend_run(operation.id, str(flow_run.id))
 
     @_readable_errors
+    def waiting(self, backend_run_id: str) -> bool:
+        """Whether the flow run is still scheduled, pending or running."""
+        from prefect import get_client
+        from prefect.client.schemas.objects import StateType
+        from prefect.exceptions import ObjectNotFound
+
+        with get_client(sync_client=True) as client:
+            try:
+                run = client.read_flow_run(uuid.UUID(backend_run_id))
+            except ObjectNotFound:
+                return False
+        return run.state is not None and run.state.type in (
+            StateType.SCHEDULED,
+            StateType.PENDING,
+            StateType.RUNNING,
+        )
+
+    @_readable_errors
     def observe(self, miroir: ResolvedMiroir) -> list[dict[str, Any]]:
         """Close attempts whose flow run ended without recording an outcome."""
         from prefect import get_client

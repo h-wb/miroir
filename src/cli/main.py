@@ -154,6 +154,11 @@ def main(argv: list[str] | None = None) -> int:
         "--metadata",
         help="SQLAlchemy URL of the metadata store; required with --duckdb",
     )
+    backfill.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="Derive again the files recorded as failed (after an incident)",
+    )
     commands_with_store = (
         status,
         run,
@@ -360,7 +365,7 @@ def _orchestrate(
             )
         if args.command == "media-backfill":
             operation_id = service.request_media_backfill(
-                args.connection, args.kind, args.limit
+                args.connection, args.kind, args.limit, args.retry_failed
             )
             return _print({"operation_id": operation_id})
         if args.action == "plan":
@@ -541,7 +546,7 @@ def _backfill_here(
         store=store,
         origin="local",
         submit=lambda operation: None,
-        backfill=backfill_options(connection, args.kind, args.limit),
+        backfill=backfill_options(connection, args.kind, args.limit, args.retry_failed),
         join=False,
     )
     assert operation_id is not None  # a backfill never joins

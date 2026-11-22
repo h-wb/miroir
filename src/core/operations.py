@@ -1557,6 +1557,12 @@ class MetadataStore:
         run counts against this file."""
         self._media_attempts(miroir_id, connection_id, kind, key, 0)
 
+    def restore_media_attempt(
+        self, miroir_id: str, connection_id: str, kind: str, key: str, attempts: int
+    ) -> None:
+        """Give back a try counted for a decode that failed for no fault of the file."""
+        self._media_attempts(miroir_id, connection_id, kind, key, attempts)
+
     def _media_attempts(
         self, miroir_id: str, connection_id: str, kind: str, key: str, value: Any
     ) -> None:

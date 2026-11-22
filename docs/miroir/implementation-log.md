@@ -2498,3 +2498,34 @@ By hand: delete or pause the `run_dbt` deployment in the Prefect server.
 Validation: ruff, format, mypy and the collector's strict mypy clean; the full
 suite, including the disposable Postgres dbt scenarios (GitHub `is_mine` from
 the analysis parameter, absent and optional inputs), is green (274 tests).
+
+## 2026-11-22 — Thumbnails: the second review of pull request #44
+
+The second review confirmed the six earlier findings fixed and found five more in
+the child decoder and the rule for joining a waiting run, each reproduced or
+reasoned with a script. All five were fixed, on the same pull request.
+
+| Finding | Done |
+|---|---|
+| 1. A decoder that fails on every file (it cannot start; a memory limit too small) turned the whole queue into permanent `failed` or `too_large` rows | Every fresh child must first make thumbnails of a 1-pixel PNG and the costliest image the bounds accept (40 MP grey with alpha, zeros, 78 KB; about 1 s). A child that cannot is "decoder unavailable": the run stops as failed with a fixed reason, the file in flight gets its try back, nothing is recorded or scheduled. After a lost file the next child is checked at once, so only a loss followed by a working child costs the file a try. The reviewer's two cases are in the suite (30 files with a child that dies at start, locally and with a scheduler; 20 files with an 8 MB limit): no file charged, no table written, nothing scheduled. `media-backfill --retry-failed` queues the kind's `failed` files again and removes their rows |
+| 2. The child could read the worker's environment through `/proc/<parent>/environ` | The worker calls `prctl(PR_SET_DUMPABLE, 0)` before starting a child (Linux; nothing elsewhere). A test on Linux shows the read succeeding before and refused after. The decision says what the child still has: the network and the files of the worker's user, the volumes included |
+| 3. A bound run that died before recording an attempt absorbed every confirmation until `refresh` | A waiting run due more than a delay ago is joined only if the orchestrator says its flow run is scheduled, pending or running (`PrefectOrchestrator.waiting`); without an answer it is not. A recent one is joined without asking. Tests with a fake orchestrator and against the real temporary Prefect API (scheduled, failed, deleted) |
+| 4. Writing to the child had no deadline | The child's input is non-blocking and written under the file's deadline. A child that never reads is lost within the deadline |
+| 5. Core dumps | `RLIMIT_CORE` 0 in the child |
+
+Memory: the reviewer measured the child at 530 MB and the worker and child at
+711 MB at the worst accepted shape, which every run now reaches once in its
+check (517 MB in the child here). A flow-run Job needs at least about 1 GiB;
+1.5 GiB is suggested. On macOS the address-space limit is not enforced (the child
+carries on without it there; anywhere else a refused limit stops the child, and so
+the run).
+
+Validation: the reviewer's startup and memory cases, a decoder breaking mid-run
+(the files after it keep their tries), a child that never reads, the `/proc` read
+before and after `prctl`, overdue runs joined on the orchestrator's word and not
+without it, `waiting` against the real temporary Prefect API, and the retry of
+`failed` rows through a backfill and the command. The reviewer's own scripts were
+run against the new code too: the startup and memory cases now end with the run
+stopped and nothing charged. The server suite is green: 353 tests, none skipped,
+including the Postgres and Prefect ones, with ruff, format, mypy and the
+collector's strict mypy clean.

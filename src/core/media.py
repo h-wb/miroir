@@ -163,14 +163,18 @@ def derived_kind(connection: ResolvedConnection, name: str) -> MediaKind | None:
 
 
 def backfill_options(
-    connection: ResolvedConnection, name: str, limit: int
+    connection: ResolvedConnection, name: str, limit: int, retry_failed: bool = False
 ) -> dict[str, Any]:
-    """The options of a backfill run: which kind to walk, and how far."""
+    """The options of a backfill run: which kind to walk, how far, and whether
+    files recorded as `failed` are derived again (after an incident)."""
     if derived_kind(connection, name) is None:
         raise OperationError("The worker makes no thumbnails of this media kind")
     if type(limit) is not int or not 1 <= limit <= MAX_BACKFILL:
         raise OperationError(f"The limit must be between 1 and {MAX_BACKFILL}")
-    return {"kind": name, "limit": limit}
+    options: dict[str, Any] = {"kind": name, "limit": limit}
+    if retry_failed:
+        options["retry_failed"] = True
+    return options
 
 
 def _media_kind(connection: ResolvedConnection, name: str) -> MediaKind:

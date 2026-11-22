@@ -654,8 +654,14 @@ For a kind with thumbnails (so far only `screenshots`; Messages `attachments` ha
 none yet), the worker makes two WebP copies of each stored image, 360 and 1280
 pixels wide, and records every stored file in the warehouse (decision 040). The
 web server never decodes an image, and neither does the worker's own process: a
-child process does, one file at a time, with no credentials, a 1 GiB memory limit
-and a 30-second timeout per file.
+child process does, one file at a time, with no credentials in its environment, a
+1 GiB memory limit and a 30-second deadline per file. On Linux the worker makes
+itself undumpable first, so the child cannot read the worker's environment through
+`/proc`; the child still has the network and can read the mounted volumes. Each
+fresh child must first make thumbnails of two built-in images (the smallest and
+the costliest the bounds accept). If it cannot, the run stops as failed ("The image
+decoder could not start or failed its check"), the files stay queued, none is
+charged and none is recorded.
 
 - **Names.** Beside the original, under a derived kind:
   `prefix / connection / screenshots.w360 / <key>.webp` and
@@ -670,9 +676,10 @@ and a 30-second timeout per file.
   run. A run handles at most `derive_batch` files of each kind and, if more wait
   and it made progress, schedules the next run at once; loads of the connection
   take turns with it on the deployment. Without Prefect the run starts at once
-  and empties the queue itself. If Prefect loses a waiting run, `refresh` closes
-  it once Prefect reports it ended, and the next confirmation asks for a new one;
-  a backfill always asks for its own. The files stay queued meanwhile.
+  and empties the queue itself. A run that is overdue is joined only while Prefect
+  says it is still scheduled, pending or running; if Prefect lost it, the next
+  confirmation asks for a new one. A backfill always asks for its own. The files
+  stay queued meanwhile.
 - **What is recorded.** One row per stored file in `media_objects`, in the
   connection's own dataset (its binding's `dataset_name`), written by a dlt
   pipeline of its own (`<pipeline_name>_media`), merged on
@@ -685,7 +692,7 @@ and a 30-second timeout per file.
   | `content_type` | From the key's extension, as when it was uploaded |
   | `stored_at` | When the server confirmed it; for a backfilled file, the bucket's modification time |
   | `thumbnail_w360`, `thumbnail_w1280` | Whether that size exists |
-  | `thumbnail_status` | `made`; or why there is none: `unsupported` (a type without thumbnails: video, HEIC, PDF), `too_large` (over the kind's size, 40 million pixels, 16,384 on a side, a side 16 times the other, or the decoder's memory), `unreadable` (truncated, corrupt or not the format its name says), `failed` (its decode did not finish three times: the decoder crashed, was killed or took over 30 seconds, or the run died meanwhile) |
+  | `thumbnail_status` | `made`; or why there is none: `unsupported` (a type without thumbnails: video, HEIC, PDF), `too_large` (over the kind's size, 40 million pixels, 16,384 on a side, a side 16 times the other, or the decoder's memory), `unreadable` (truncated, corrupt or not the format its name says), `failed` (its decode did not finish three times while the decoder worked: the decoder crashed, was killed or took over 30 seconds, or the run died meanwhile) |
   | `derived_at`, `derive_version` | When the row was written, and by which version of the thumbnail code |
 
   A file that has a row is not read again unless it is queued again with another
@@ -717,9 +724,13 @@ runs") and everything else runs as before. The files stay queued. Put in the
 shared Job template, the key reaches every connector's runs, which can then read
 and write the whole bucket.
 
-A flow-run Job needs about 1 GiB of memory for a derive run at worst: the worker's
-own process (about 300 MB) and the decoder (at most 1 GiB of address space; the
-worst image the bounds accept measured 513 MB resident). Give the Job 1.5 GiB.
+A flow-run Job needs at least about 1 GiB of memory for a derive run: every run
+checks its decoder with the costliest image the bounds accept, and at that shape
+the decoder was measured at 530 MB resident and the worker and decoder together
+at 711 MB. Give the Job 1.5 GiB. With less, the check is killed and every derive
+run stops as "decoder unavailable" without charging files. On macOS (development)
+the decoder's memory limit is not enforced: an image that would need more takes it
+from the machine instead of being refused; the shape bounds still apply.
 
 Files stored before this existed are found by a backfill, which walks the bucket
 under `prefix / connection / kind /`, queues what it finds and derives it:
@@ -728,6 +739,11 @@ under `prefix / connection / kind /`, queues what it finds and derives it:
 # On the Prefect worker (needs the deployment section); prints the operation ID.
 uv run --locked pipelines-miroir media-backfill screen screenshots --limit 10000
 ```
+
+`--retry-failed` also queues the kind's files recorded as `failed` and removes
+their rows, so they are derived again: the repair after an incident (a broken
+image, a decoder fault) without a new `DERIVE_VERSION`. A plain backfill leaves
+`failed` rows alone.
 
 For development only, `--duckdb FILE --metadata sqlite:///FILE` runs it in the
 CLI's own process. It refuses without `--metadata` naming a local SQLite file, so
@@ -746,8 +762,9 @@ time, in batches between loads.
 Upgrading to metadata schema 8 (two new tables, `media_pending` and
 `media_backfills`; nothing else changes): runtimes before it refuse schema 8, so
 release the server, the worker and the flow-run image together, after draining
-Miroir runs. Then add the bucket key to the flow-run Job, and run the backfill
-for each connection with screenshots.
+Miroir runs. Then add the bucket key to the flow-run Job, give the Job at least
+1 GiB of memory (1.5 GiB suggested, above), and run the backfill for each
+connection with screenshots.
 
 ### Timeline: reading the warehouse
 

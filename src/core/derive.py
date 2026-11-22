@@ -9,6 +9,7 @@ queues what it finds. Only the runner imports this module, inside the run.
 Images are decoded in a child process (`Decoder`), never here.
 """
 
+import functools
 import json
 import os
 import select
@@ -16,6 +17,7 @@ import struct
 import subprocess
 import sys
 import time
+import zlib
 from collections import Counter
 from collections.abc import Callable
 from contextlib import closing
@@ -56,6 +58,8 @@ LIST_PAGE = 1000
 WRITE_EVERY = 100
 # One file's decode, measured at about 1.2 s for the slowest accepted image.
 DECODE_TIMEOUT = 30
+# A fresh decoder's check (two images, about 1.5 s together).
+PROBE_TIMEOUT = 60
 DECODE_CPU_SECONDS = 25
 # The decoder's address space. The worst accepted image measured 480 MB above
 # the child's own 32 MB (a 40-megapixel PNG with grey and alpha).
@@ -86,10 +90,22 @@ _T = TypeVar("_T")
 
 
 class DecoderLost(Exception):
-    """The decoder ended or took too long on a file; it is tried again later."""
+    """The decoder ended or took too long on a file, and a fresh one passed its
+    check: the file is to blame, and is tried again later."""
 
 
-class _TooSlow(Exception):
+class DecoderUnavailable(OperationError):
+    """A fresh decoder could not make thumbnails of the built-in images: the fault
+    is the decoder's or the machine's, not a file's."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "The image decoder could not start or failed its check;"
+            " no file was charged and none was recorded"
+        )
+
+
+class _Lost(Exception):
     pass
 
 
@@ -97,9 +113,15 @@ class Decoder:
     """Thumbnails made by `python -m src.core.thumbnails` in a child process.
 
     One child serves a run, one file at a time. It has an address-space limit, a
-    CPU limit per file, a wall-clock timeout per file enforced here, and no
-    credentials in its environment. When it crashes, is killed or is too slow,
-    the file in flight is DecoderLost and the next file starts a new child.
+    CPU limit per file, a wall-clock timeout per file enforced here (reading and
+    writing), and no credentials in its environment; on Linux the worker also
+    makes itself undumpable first, so the child cannot read the worker's memory
+    or environment through /proc.
+
+    Every fresh child must first make thumbnails of two built-in images, the
+    smallest and the costliest the bounds accept. One that cannot is
+    DecoderUnavailable: nothing about a file follows from it. When a child is
+    lost on a file and a fresh one passes, the file is DecoderLost.
     """
 
     def __init__(
@@ -129,38 +151,69 @@ class Decoder:
             child.wait()
 
     def _start(self) -> subprocess.Popen[bytes]:
-        if self._child is None or self._child.poll() is not None:
-            self.close()
-            self._child = subprocess.Popen(
-                [
-                    sys.executable,
-                    "-m",
-                    "src.core.thumbnails",
-                    str(self.memory),
-                    str(self.cpu_seconds),
-                ],
-                cwd=REPO,
-                # Nothing of the worker's environment: no bucket key, no passwords.
-                env={"PATH": os.environ.get("PATH", "")},
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-            )
-        return self._child
+        if self._child is not None and self._child.poll() is None:
+            return self._child
+        self.close()
+        _undumpable()
+        child = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "src.core.thumbnails",
+                str(self.memory),
+                str(self.cpu_seconds),
+            ],
+            cwd=REPO,
+            # Nothing of the worker's environment: no bucket key, no passwords.
+            env={"PATH": os.environ.get("PATH", "")},
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        assert child.stdin is not None
+        os.set_blocking(child.stdin.fileno(), False)
+        self._child = child
+        try:
+            for body, formats in _probes():
+                if self._exchange(body, formats, PROBE_TIMEOUT)[0] != "made":
+                    raise _Lost()
+        except _Lost:
+            self._kill()
+            raise DecoderUnavailable() from None
+        return child
+
+    def _kill(self) -> None:
+        if self._child is not None:
+            self._child.kill()
+        self.close()
 
     def thumbnails(
         self, body: bytes, formats: tuple[str, ...]
     ) -> tuple[str, dict[int, bytes]]:
-        """(status, thumbnails by width), or DecoderLost."""
-        child = self._start()
-        assert child.stdin is not None and child.stdout is not None
+        """(status, thumbnails by width), DecoderLost or DecoderUnavailable."""
+        self._start()
+        try:
+            return self._exchange(body, formats, self.timeout)
+        except _Lost:
+            self._kill()
+        # Which was it, the file or the decoder? A fresh child answers.
+        self._start()
+        raise DecoderLost()
+
+    def _exchange(
+        self, body: bytes, formats: tuple[str, ...], timeout: float
+    ) -> tuple[str, dict[int, bytes]]:
+        child = self._child
+        assert child is not None and child.stdin is not None
+        assert child.stdout is not None
         request = json.dumps(
             {"formats": formats, "widths": WIDTHS, "size": len(body)}
         ).encode()
-        deadline = time.monotonic() + self.timeout
+        deadline = time.monotonic() + timeout
         try:
-            child.stdin.write(struct.pack(">I", len(request)) + request + body)
-            child.stdin.flush()
+            _write(
+                child.stdin, struct.pack(">I", len(request)) + request + body, deadline
+            )
             (length,) = struct.unpack(">I", _read(child.stdout, 4, deadline))
             if length > 4096:
                 raise ValueError("answer header too long")
@@ -175,24 +228,74 @@ class Decoder:
                 raise ValueError("unexpected thumbnails")
             made = {width: _read(child.stdout, size, deadline) for width, size in sizes}
             self.peak_kb = int(answer.get("peak_kb", 0))
-        except (OSError, ValueError, KeyError, TypeError, struct.error, _TooSlow):
-            child.kill()
-            self.close()
-            raise DecoderLost() from None
+        except (OSError, ValueError, KeyError, TypeError, struct.error) as error:
+            raise _Lost() from error
         return status, made
 
 
+def _undumpable() -> None:
+    """Linux: other processes of this user, the decoder among them, can no
+    longer read this process's memory or environment through /proc."""
+    if not sys.platform.startswith("linux"):
+        return
+    import ctypes
+
+    PR_SET_DUMPABLE = 4
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "prctl(PR_SET_DUMPABLE) refused")
+
+
+@functools.cache
+def _probes() -> tuple[tuple[bytes, tuple[str, ...]], ...]:
+    """A 1-pixel PNG and the costliest image the bounds accept: 40 million grey
+    and alpha pixels (measured 480 MB to decode), all zero, so they are small."""
+    return (_png(1, 1), ("PNG",)), (_png(6324, 6324), ("PNG",))
+
+
+def _png(width: int, height: int) -> bytes:
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        crc = zlib.crc32(kind + data) & 0xFFFFFFFF
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", crc)
+
+    # Grey with alpha, 8 bits: two bytes a pixel, a filter byte a row.
+    row = b"\x00" * (1 + 2 * width)
+    packer = zlib.compressobj(9)
+    data = b"".join(packer.compress(row) for _ in range(height)) + packer.flush()
+    header = struct.pack(">IIBBBBB", width, height, 8, 4, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", header)
+        + chunk(b"IDAT", data)
+        + chunk(b"IEND", b"")
+    )
+
+
+def _write(stream: IO[bytes], data: bytes, deadline: float) -> None:
+    """All of `data` to the child's input before the deadline, or _Lost: a child
+    that stops reading cannot hold the run."""
+    fd, view = stream.fileno(), memoryview(data)
+    while view:
+        left = deadline - time.monotonic()
+        if left <= 0 or not select.select([], [fd], [], left)[1]:
+            raise _Lost()
+        try:
+            view = view[os.write(fd, view[: 1 << 20]) :]
+        except BlockingIOError:
+            continue
+
+
 def _read(stream: IO[bytes], size: int, deadline: float) -> bytes:
-    """Exactly `size` bytes, or _TooSlow at the deadline, or ValueError at EOF."""
+    """Exactly `size` bytes, or _Lost at the deadline or at the end of input."""
     chunks, wanted = [], size
     fd = stream.fileno()
     while wanted:
         left = deadline - time.monotonic()
         if left <= 0 or not select.select([fd], [], [], left)[0]:
-            raise _TooSlow()
+            raise _Lost()
         chunk = os.read(fd, min(wanted, 1 << 20))
         if not chunk:
-            raise ValueError("the decoder ended")
+            raise _Lost()
         chunks.append(chunk)
         wanted -= len(chunk)
     return b"".join(chunks)
@@ -208,6 +311,8 @@ class DeriveSummary:
     remaining: int = 0
     walked: int = 0
     walk_finished: bool | None = None
+    # Files recorded as failed and queued again by a backfill that asked.
+    retried: int = 0
 
     @property
     def progressed(self) -> bool:
@@ -219,6 +324,7 @@ class DeriveSummary:
             later.remaining,
             self.walked,
             self.walk_finished,
+            self.retried,
         )
 
     def detail(self) -> str:
@@ -227,6 +333,8 @@ class DeriveSummary:
         if self.walk_finished is not None:
             state = "walk finished" if self.walk_finished else "walk continues"
             text += f"; backfill walked {self.walked}, {state}"
+        if self.retried:
+            text += f"; {self.retried} failed queued again"
         return text
 
 
@@ -251,6 +359,14 @@ def derive_media(
     with closing(Decoder()) as decoder:
         for kind in kinds:
             if backfill is not None and backfill["kind"] == kind.name:
+                if backfill.get("retry_failed"):
+                    failed = writer.failed(kind.name)
+                    store.add_pending_media(
+                        miroir.id, connection.config.id, kind.name, failed
+                    )
+                    # Without their rows they are not "known": any run derives them.
+                    writer.forget_failed(kind.name)
+                    summary.retried = len(failed)
                 summary.walked, summary.walk_finished = _walk(
                     store, object_store, config, connection, kind, backfill["limit"]
                 )
@@ -393,6 +509,10 @@ class _Batch:
                     )
                 except DecoderLost:
                     return _INTERRUPTED
+                except DecoderUnavailable:
+                    # Not this file's fault: its try is given back, and the run stops.
+                    self.store.restore_media_attempt(*scope, entry.attempts)
+                    raise
                 self.store.end_media_attempt(*scope)
             for width, body in thumbnails.items():
                 target = thumbnail_name(
@@ -483,6 +603,41 @@ class _Writer:
         except DatabaseUndefinedRelation:
             return {}  # nothing was derived into this dataset yet
         return {row[0]: int(row[1]) for row in rows or []}
+
+    def failed(self, kind: str) -> list[tuple[str, int, datetime]]:
+        """(key, size, stored at) of the files of `kind` recorded as failed."""
+        rows = self._query(
+            "SELECT {key}, {size}, stored_at FROM {table}"
+            " WHERE connection_id = %s AND kind = %s AND thumbnail_status = 'failed'",
+            self.connection.config.id,
+            kind,
+        )
+        return [(row[0], int(row[1]), _utc(row[2])) for row in rows]
+
+    def forget_failed(self, kind: str) -> None:
+        with self.store.connection_lock(
+            self.connection.binding.pipeline_name, self.lock_wait
+        ):
+            self._query(
+                "DELETE FROM {table}"
+                " WHERE connection_id = %s AND kind = %s AND thumbnail_status = 'failed'",
+                self.connection.config.id,
+                kind,
+            )
+
+    def _query(self, sql: str, *args: Any) -> list[Any]:
+        from dlt.destinations.exceptions import DatabaseUndefinedRelation
+
+        try:
+            with self.pipeline.sql_client() as client:
+                key, size = (client.escape_column_name(c) for c in ("key", "size"))
+                table = client.make_qualified_table_name(TABLE)
+                rows = client.execute_sql(
+                    sql.format(table=table, key=key, size=size), *args
+                )
+        except DatabaseUndefinedRelation:
+            return []  # nothing was derived into this dataset yet
+        return list(rows or [])
 
     def write(self, rows: list[dict[str, Any]]) -> None:
         import dlt

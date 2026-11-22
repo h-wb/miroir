@@ -1991,20 +1991,24 @@ since the request does not block it, because its work is the queue and the media
 settings, not the connection's settings.
 
 **Debounced like a deferred build.** A request joins a derive run of the
-connection that has not started and is bound to its own backend run, however
-long ago it was due: while a long load holds the deployment, confirmations keep
-joining the one waiting run instead of piling up empty ones. Otherwise it records
-a run due `media.derive_delay_seconds` from now (default 300) and submits it with
-that start, under an advisory lock per connection; Prefect schedules it with the
+connection that has not started and is bound to its own backend run. One due no
+longer than a delay ago is joined as it is. One due longer ago is joined only if
+the orchestrator says its flow run is still scheduled, pending or running: a long
+load may hold the deployment, and then confirmations keep joining the one waiting
+run instead of piling up empty ones; but a run that died before recording an
+attempt is not joined. If the orchestrator cannot be asked, or there is none, an
+overdue run is not joined. Otherwise the request records a run due
+`media.derive_delay_seconds` from now (default 300) and submits it with that
+start, under an advisory lock per connection; Prefect schedules it with the
 operation ID as idempotency key. A run without a bound backend run (a local
 executor, which starts it at once) is never joined. Requesting never fails a
 confirmation: if Prefect refuses, or the deployment cannot be prepared, the
 operation is closed as blocked and the files wait in the queue for the next
-request. If Prefect loses a bound run, `refresh` closes it when Prefect reports
-it ended (crashed, cancelled, deleted), and the next confirmation requests a new
-one; a run Prefect keeps scheduled but never starts holds the queue until then,
-and a backfill requests a run regardless. Files are never lost by any of this:
-they stay queued.
+request. If Prefect loses a bound run, the next confirmation after it is overdue
+asks Prefect, finds it ended, and requests a new one; `refresh` closes the lost
+one. A run Prefect keeps scheduled but never starts is still joined, as Prefect
+says it waits; a backfill requests a run regardless. Files are never lost by any
+of this: they stay queued.
 
 **Bounded runs** *(conservative)*. A run handles at most `media.derive_batch`
 files per kind (default 500, two to three minutes) and, when more of a derived kind
@@ -2054,12 +2058,18 @@ worker never decodes in its own process. `src/core/thumbnails.py` runs as a chil
 (`python -m src.core.thumbnails`), started once per run and given one file at a
 time over a pipe:
 
-- No credentials: its environment holds `PATH` only, not the bucket key or the
-  database passwords. (It runs as the same user, so this keeps secrets out of
-  reach of an ordinary decoder bug, not out of reach of an exploit.)
+- What it can reach. Its environment holds `PATH` only, not the bucket key or the
+  database passwords. On Linux the worker makes itself undumpable
+  (`prctl(PR_SET_DUMPABLE, 0)`) before starting it, so the child cannot read the
+  worker's environment or memory through `/proc`; without that it could, as it
+  runs as the same user. It still has the network and every file the worker's
+  user can read, the mounted volumes included (the configuration, the artifacts).
+  It has no core file (`RLIMIT_CORE` 0).
 - An address-space limit of 1 GiB, a CPU limit per file, and a 30-second
-  timeout per file enforced by the worker, which then kills the child. Running out
-  of memory inside the child is `too_large`, not a crash.
+  deadline per file, for writing the file to it and for reading its answer,
+  enforced by the worker, which then kills the child. On macOS (development) the
+  address-space limit is not enforced: a file that would need more takes it from
+  the machine instead of being refused; the shape bounds still apply.
 - The original is read with the kind's size limit (20 MB for screenshots).
 - The header is read and the shape checked before anything is decoded: at most
   40 million pixels, at most 16,384 on either side, and at most 16 times longer
@@ -2070,11 +2080,25 @@ time over a pipe:
 - Only the decoders of the kind's thumbnail extensions are tried (JPEG and PNG
   for screenshots), whatever the bytes claim; only the first frame is used.
 - Any decoder error makes the file `unreadable`; it never fails the run.
+- Every fresh child must first make thumbnails of two built-in images, a 1-pixel
+  PNG and the costliest image the bounds accept (40 million grey-and-alpha pixels,
+  all zero, so 78 KB), about a second together. A child that cannot means the
+  decoder is unavailable (it did not start, a limit was refused, the memory limit
+  is too small for what the bounds accept, a module is missing): the run stops as
+  failed with a fixed reason, the file in flight gets its try back, no row is
+  written for it and nothing is scheduled. After a child is lost on a file the
+  next one is checked at once, so a loss followed by a working child is the file's
+  fault and costs it a try, and a loss followed by a broken one costs it nothing.
+  Because the check covers the costliest accepted image, running out of memory on
+  a real file afterwards is that file's own `too_large`.
 - A file's count of decodes begun is raised only while it decodes, and reset when
   the decode reaches an outcome. A file whose decode did not finish three times
-  (the child crashed, was killed or took too long, or the run itself died while
-  it decoded) is `failed`, and not read again. Nothing that happens to the run
-  after a file was decoded counts against that file.
+  while the decoder worked (the child crashed, was killed or took too long, or the
+  run itself died while it decoded) is `failed`, and not read again by a plain
+  run. A backfill asked to (`--retry-failed`) queues the kind's `failed` files
+  again and removes their rows, to repair a past incident without a new
+  `DERIVE_VERSION`. Nothing that happens to the run after a file was decoded
+  counts against that file.
 - Rows are written, and their files leave the queue, every 100 files. A run that
   dies loses at most that much finished work, which the next run redoes.
 - A storage error ends the run after recording what it finished; the rest stays
@@ -2084,9 +2108,12 @@ Measured peaks inside the child, above its own 32 MB, for the worst images the
 bounds accept (40 million pixels unless said): grey with alpha 480 MB (it becomes
 RGBA), palette with transparency 365 MB, RGBA 328 MB, 16-bit grey 252 MB, grey or
 1-bit 213 MB, RGB 176 MB, 16,384 × 2,441 RGBA 303 MB (304 MB rotated by EXIF),
-16,384 × 1,024 RGBA 119 MB; a 40-megapixel JPEG 26 MB. The worker's own process
-stayed near 300 MB in a 200-file run. A flow-run Job therefore needs about 1 GiB
-for a derive run at worst; 1.5 GiB leaves room.
+16,384 × 1,024 RGBA 119 MB; a 40-megapixel JPEG 26 MB. The review measured the
+child at 530 MB resident and the worker and child together at 711 MB at the worst
+accepted shape. Every run reaches that once, in the check. A flow-run Job
+therefore needs at least about 1 GiB for a derive run; 1.5 GiB leaves room. A Job
+limit below that kills the child in the check, and the run stops as
+"decoder unavailable" rather than charging files.
 
 **HEIC.** The screenshots kind accepts `.heic`, but the collector's Screen Memory
 source stores JPEG. `pillow-heif` is not added *(conservative: another native
@@ -2136,6 +2163,15 @@ missing row means, that a row outlives its file, the same-key same-size limit,
 that a run never started is joined until it is closed, and that every flow-run Job
 holds the bucket key.
 
+A second review confirmed those fixed and found five more, all fixed: a decoder
+that failed on every file (one that could not start, or a memory limit too small)
+turned the whole queue into permanent `failed` or `too_large` rows, which the
+check of each fresh child now prevents; the child could read the worker's
+environment through `/proc`, which `prctl` now refuses on Linux; an overdue bound
+run that had died absorbed every confirmation until `refresh`, now asked of the
+orchestrator; writing to the child had no deadline; and the child could leave a
+core file. `--retry-failed` was added to repair rows left by such an incident.
+
 Consequences:
 
 - Metadata schema 8: server, worker and flow-run image are released together.
@@ -2143,7 +2179,9 @@ Consequences:
 - Measured on generated screens on a development machine (one core): about
   0.16 to 0.19 s per JPEG screenshot and 0.28 to 0.37 s per large PNG for a whole
   run, network to the bucket not included. Not yet measured on the cluster.
-- A flow-run Job needs about 1 GiB of memory for a derive run at worst (above).
+- A flow-run Job needs at least about 1 GiB of memory for a derive run (above).
+- Each derive run spends about a second, and the memory above, on checking its
+  decoder, and as much again after each lost file.
 
 ## 042 — Dashboards read the analysis outputs; `run_dbt` is removed
 

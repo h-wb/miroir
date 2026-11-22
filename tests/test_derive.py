@@ -11,7 +11,9 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import threading
+import time
 import unittest
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
@@ -30,7 +32,7 @@ from PIL import Image
 
 from src.cli.main import main
 from src.core.config import load_miroir
-from src.core.derive import Decoder, DecoderLost
+from src.core.derive import Decoder, DecoderLost, DecoderUnavailable, _Lost, _write
 from src.core.media import ObjectTooLarge
 from src.core.operations import (
     ConnectionBusy,
@@ -57,6 +59,42 @@ def jpeg(width: int = 1600, height: int = 1000) -> bytes:
     return out.getvalue()
 
 
+REPO = Path(__file__).resolve().parents[1]
+# A worker with a secret in its environment starts a child that tries to read it
+# from /proc, before and after making itself undumpable.
+WORKER_READS_ITSELF = """
+import os, subprocess, sys
+from src.core.derive import _undumpable
+
+os.environ["MIROIR_MEDIA_SECRET_ACCESS_KEY"] = "synthetic"
+CHILD = (
+    "import os\\n"
+    "try:\\n"
+    "    open(f'/proc/{os.getppid()}/environ', 'rb').read()\\n"
+    "    print('read')\\n"
+    "except PermissionError:\\n"
+    "    print('refused')\\n"
+)
+for undumpable in (False, True):
+    if undumpable:
+        _undumpable()
+    run = subprocess.run(
+        [sys.executable, "-c", CHILD],
+        env={"PATH": os.environ["PATH"]},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    print(run.stdout.strip())
+"""
+
+
+def png_body() -> bytes:
+    out = BytesIO()
+    Image.new("RGB", (64, 48)).save(out, "PNG")
+    return out.getvalue()
+
+
 class Recorder:
     """An executor that records what it was handed and binds a backend run to
     it, as the Prefect adapter does."""
@@ -72,6 +110,24 @@ class Recorder:
         self.submitted.append(operation_id)
         if self.store is not None:
             self.store.bind_backend_run(operation_id, f"run-{operation_id}")
+
+
+class FakeOrchestrator:
+    """Only what a derive request asks of the orchestrator: is a run waiting."""
+
+    def __init__(self, fails: bool = False):
+        self.waiting_runs: set[str] = set()
+        self.asked: list[str] = []
+        self.fails = fails
+
+    def plan(self, miroir: Any) -> list:
+        return []
+
+    def waiting(self, backend_run_id: str) -> bool:
+        self.asked.append(backend_run_id)
+        if self.fails:
+            raise OperationError("Prefect is down")
+        return backend_run_id in self.waiting_runs
 
 
 class Killed(BaseException):
@@ -254,19 +310,49 @@ class DeriveRequestTests(DeriveFixture):
             (attempt["ingestion"], attempt["transformation"]), ("not_run", "lost")
         )
 
-    def test_a_waiting_run_is_joined_however_late_it_is(self):
-        # A long load holds the deployment: the derive run is long overdue.
-        self.upload({"a.jpeg": jpeg()})
-        first = self.executor.submitted[0]
+    def overdue(self, operation_id: str) -> None:
+        """As if a long load held the deployment past the run's start."""
         with self.store.engine.begin() as db:
             stale = datetime.now(timezone.utc) - timedelta(hours=6)
             db.execute(
                 operations.update()
-                .where(operations.c.id == first)
+                .where(operations.c.id == operation_id)
                 .values(options=json.dumps({"not_before": stale.isoformat()}))
             )
+
+    def test_an_overdue_run_is_joined_only_on_the_orchestrator_word(self):
+        orchestrator = FakeOrchestrator()
+        self.service.orchestrator = orchestrator
+        self.upload({"a.jpeg": jpeg()})
+        first = self.executor.submitted[0]
+        self.overdue(first)
+        orchestrator.waiting_runs = {f"run-{first}"}
         self.upload({"b.jpeg": jpeg()})
-        self.assertEqual(len(self.executor.submitted), 1)
+        self.assertEqual(self.executor.submitted, [first])
+        self.assertEqual(orchestrator.asked, [f"run-{first}"])
+        # Its flow run failed or was deleted: a new run is requested.
+        orchestrator.waiting_runs = set()
+        self.upload({"c.jpeg": jpeg()})
+        self.assertEqual(len(self.executor.submitted), 2)
+
+    def test_an_overdue_run_is_not_joined_without_an_answer(self):
+        self.upload({"a.jpeg": jpeg()})  # no orchestrator to ask
+        self.overdue(self.executor.submitted[0])
+        self.upload({"b.jpeg": jpeg()})
+        self.assertEqual(len(self.executor.submitted), 2)
+        orchestrator = FakeOrchestrator(fails=True)
+        self.service.orchestrator = orchestrator
+        self.overdue(self.executor.submitted[1])
+        with self.assertLogs("src.core.runner", "WARNING"):
+            self.upload({"c.jpeg": jpeg()})
+        self.assertEqual(len(self.executor.submitted), 3)
+
+    def test_a_run_due_recently_is_joined_without_asking(self):
+        orchestrator = FakeOrchestrator()
+        self.service.orchestrator = orchestrator
+        self.upload({"a.jpeg": jpeg()})
+        self.upload({"b.jpeg": jpeg()})
+        self.assertEqual((len(self.executor.submitted), orchestrator.asked), (1, []))
 
     def test_a_waiting_run_without_its_own_backend_run_is_not_joined(self):
         self.executor.store = None  # e.g. a local executor: nothing bound
@@ -556,6 +642,67 @@ class DeriveRunTests(DeriveFixture):
         )
         self.assertEqual(self.pending(), [])
 
+    def assert_untouched(self, operation_id: str, files: dict[str, bytes]) -> None:
+        self.assertEqual(self.attempts(), dict.fromkeys(files, 0))
+        self.assertEqual(
+            self.store.attempts(operation_id)[-1]["transformation"], "failed"
+        )
+        self.assertIn("decoder could not start", self.detail(operation_id))
+        with duckdb.connect(str(self.warehouse)) as db:
+            tables = db.execute(
+                "SELECT table_name FROM information_schema.tables"
+            ).fetchall()
+        self.assertNotIn(("media_objects",), tables)
+
+    def test_a_decoder_that_cannot_start_stops_the_run_and_charges_nothing(self):
+        # The reviewer's first case, locally and with a scheduler.
+        files = {f"{i:03d}.jpeg": jpeg(400, 300) for i in range(30)}
+        self.queue(files)
+        for defer in (None, self.schedule):
+            operation_id = self.request()
+            with (
+                patch("src.core.derive.subprocess.Popen", side_effect=dies_at_start),
+                self.assertRaises(IngestionFailed),
+            ):
+                self.derive(operation_id, defer=defer)
+            self.assert_untouched(operation_id, files)
+        self.assertEqual(self.scheduled, [])
+
+    def test_a_decoder_without_enough_memory_stops_the_run(self):
+        # The reviewer's second case: every file would have been too_large.
+        files = {f"{i:03d}.jpeg": jpeg(400, 300) for i in range(20)}
+        self.queue(files)
+        operation_id = self.request()
+        small = (30, 8 * 1024 * 1024, 25)
+        with (
+            patch.object(Decoder.__init__, "__defaults__", small),
+            self.assertRaises(IngestionFailed),
+        ):
+            self.derive(operation_id, defer=self.schedule)
+        self.assert_untouched(operation_id, files)
+        self.assertEqual(self.scheduled, [])
+
+    def test_a_decoder_that_breaks_mid_run_charges_nothing_after_it(self):
+        files = {f"{i:02d}.jpeg": jpeg(400, 300) for i in range(4)}
+        self.queue(files)
+        calls: list[int] = []
+
+        def breaks_after_two(decoder, body, formats):
+            calls.append(1)
+            if len(calls) > 2:
+                raise DecoderUnavailable()
+            return decode(decoder, body, formats)
+
+        operation_id = self.request()
+        with (
+            patch.object(Decoder, "thumbnails", breaks_after_two),
+            self.assertRaises(IngestionFailed),
+        ):
+            self.derive(operation_id, defer=self.schedule)
+        self.assertEqual(sorted(self.rows()), ["00.jpeg", "01.jpeg"])
+        self.assertEqual(self.attempts(), {"02.jpeg": 0, "03.jpeg": 0})
+        self.assertEqual(self.scheduled, [])
+
     def test_without_storage_the_run_is_blocked(self):
         self.queue({"a.jpeg": jpeg()})
         operation_id = self.request()
@@ -611,22 +758,56 @@ class DecoderTests(unittest.TestCase):
             decoder.thumbnails(b"not an image", ("JPEG",))[0], "unreadable"
         )
 
-    def test_the_memory_limit_makes_too_large_not_a_crash(self):
-        decoder = Decoder(memory=200 * 1024 * 1024)
+    def test_a_memory_limit_below_the_costliest_image_is_unavailable(self):
+        decoder = Decoder(memory=300 * 1024 * 1024)
         self.addCleanup(decoder.close)
-        self.assertEqual(decoder.thumbnails(self.large, ("PNG",)), ("too_large", {}))
-        self.assertEqual(decoder.thumbnails(jpeg(), ("JPEG",))[0], "made")
+        with self.assertRaises(DecoderUnavailable):
+            decoder.thumbnails(jpeg(), ("JPEG",))
 
-    def test_the_child_has_no_credentials(self):
+    def test_a_child_that_cannot_start_is_unavailable(self):
         decoder = Decoder()
         self.addCleanup(decoder.close)
-        secrets = {"MIROIR_MEDIA_SECRET_ACCESS_KEY": "secret", "PGPASSWORD": "x"}
         with (
-            patch.dict("os.environ", secrets),
-            patch("src.core.derive.subprocess.Popen", wraps=subprocess.Popen) as popen,
+            patch("src.core.derive.subprocess.Popen", side_effect=dies_at_start),
+            self.assertRaises(DecoderUnavailable),
         ):
             decoder.thumbnails(jpeg(), ("JPEG",))
-        self.assertEqual(set(popen.call_args.kwargs["env"]), {"PATH"})
+
+    def test_a_child_that_does_not_read_cannot_hold_the_worker(self):
+        decoder = Decoder()
+        self.addCleanup(decoder.close)
+        started = time.monotonic()
+        with (
+            patch("src.core.derive.subprocess.Popen", side_effect=never_reads),
+            patch("src.core.derive.PROBE_TIMEOUT", 1),
+            self.assertRaises(DecoderUnavailable),
+        ):
+            decoder.thumbnails(jpeg(), ("JPEG",))
+        self.assertLess(time.monotonic() - started, 10)
+        reader, writer = os.pipe()
+        self.addCleanup(os.close, reader)
+        with os.fdopen(writer, "wb") as stream:
+            os.set_blocking(writer, False)
+            started = time.monotonic()
+            with self.assertRaises(_Lost):
+                _write(stream, b"x" * (4 * 1024 * 1024), time.monotonic() + 0.2)
+        self.assertLess(time.monotonic() - started, 2)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux /proc")
+    def test_the_child_cannot_read_the_worker_environment(self):
+        # As the worker does before starting the decoder, in a process of its own.
+        with TemporaryDirectory() as tmp:
+            script = Path(tmp) / "worker.py"
+            script.write_text(WORKER_READS_ITSELF)
+            result = subprocess.run(
+                [sys.executable, str(script)],
+                cwd=REPO,
+                env={**os.environ, "PYTHONPATH": str(REPO)},
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        self.assertEqual(result.stdout.split(), ["read", "refused"])
 
 
 class DeriveBatchTests(DeriveFixture):
@@ -741,6 +922,46 @@ class BackfillTests(DeriveFixture):
         self.derive(resumed)
         self.assertIn("walked 4, walk finished", self.detail(resumed))
 
+    def test_a_backfill_can_derive_failed_files_again(self):
+        # After an incident: a good file recorded as failed, the decoder fixed since.
+        self.queue({"2025/0.png": png_body()})
+        for _ in range(3):
+            self.store.begin_media_attempt(
+                "test", "screen", "screenshots", "2025/0.png"
+            )
+        self.derive(self.request())
+        self.assertEqual(self.rows()["2025/0.png"]["thumbnail_status"], "failed")
+        # A plain walk takes the failed row as known and leaves it.
+        plain = self.request({"kind": "screenshots", "limit": 100})
+        self.derive(plain)
+        self.assertEqual(self.rows()["2025/0.png"]["thumbnail_status"], "failed")
+        retry = self.request({"kind": "screenshots", "limit": 1, "retry_failed": True})
+        self.derive(retry)
+        self.assertIn("1 failed queued again", self.detail(retry))
+        self.assertEqual(self.rows()["2025/0.png"]["thumbnail_status"], "made")
+
+    def test_the_command_passes_retry_failed(self):
+        out = io.StringIO()
+        arguments = [
+            "--config",
+            str(self.config_path),
+            "media-backfill",
+            "screen",
+            "screenshots",
+            "--retry-failed",
+            "--duckdb",
+            str(self.warehouse),
+            "--metadata",
+            str(self.store.url),
+        ]
+        with (
+            patch("src.cli.main._worker_object_store", return_value=self.objects),
+            contextlib.redirect_stdout(out),
+        ):
+            self.assertEqual(main(arguments), 0)
+        operation = self.store.get_operation(json.loads(out.getvalue())["operation_id"])
+        self.assertTrue(json.loads(operation.options)["backfill"]["retry_failed"])
+
     def test_the_command_runs_a_backfill_here(self):
         out = io.StringIO()
         arguments = [
@@ -830,6 +1051,16 @@ class BackfillTests(DeriveFixture):
 
 
 decode = Decoder.thumbnails
+RealPopen = subprocess.Popen
+
+
+def dies_at_start(args, **options):
+    """A child that cannot start: a broken image, a refused limit, a missing module."""
+    return RealPopen([sys.executable, "-c", "raise SystemExit(1)"], **options)
+
+
+def never_reads(args, **options):
+    return RealPopen([sys.executable, "-c", "import time; time.sleep(120)"], **options)
 
 
 class DerivePostgresTests(DeriveFixture):
