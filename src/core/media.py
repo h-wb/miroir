@@ -18,6 +18,11 @@ from src.integrations.contracts import MediaKind
 MAX_OBJECTS = 500
 # Thumbnail sizes, by width (decision 040).
 THUMBNAIL_WIDTHS = (360, 1280)
+# A thumbnail larger than this is not a thumbnail the decoder could have made.
+MAX_THUMBNAIL_BYTES = 16 * 1024 * 1024
+# The largest original image the server copies through itself; larger ones, and
+# files that are not images, keep the redirect to a signed link.
+MAX_STREAMED_IMAGE = 25 * 1024 * 1024
 # Pillow decoders by extension; an image is read only by the decoders of the
 # extensions its kind makes thumbnails of, whatever its bytes claim to be.
 IMAGE_DECODERS = {
@@ -99,13 +104,22 @@ class ObjectTooLarge(OperationError):
     """The object is larger than the caller is prepared to hold in memory."""
 
 
+class StorageUnavailable(OperationError):
+    """The bucket could not be asked."""
+
+
+class NotStreamed(OperationError):
+    """Not copied through the server (not an image, or too large): use a link."""
+
+
 class ObjectStore(Protocol):
     def head(self, name: str) -> int | None: ...
     def presign_put(self, name: str, content_type: str, expires: int) -> str: ...
     def presign_get(self, name: str, expires: int) -> str: ...
 
-    # For derived files such as thumbnails, made by the worker (decision 040).
-    # The web process signs links and never reads or writes objects itself.
+    # The worker reads originals and writes thumbnails (decision 040). The web
+    # process reads thumbnails and small images to copy them to a browser, and
+    # never writes.
     def get(self, name: str, max_bytes: int) -> StoredObject | None:
         """The object, or None if absent; ObjectTooLarge past `max_bytes`."""
         ...
@@ -124,8 +138,10 @@ _T = TypeVar("_T")
 def _storage_call(call: Callable[_P, _T], *args: _P.args, **kwargs: _P.kwargs) -> _T:
     try:
         return call(*args, **kwargs)
+    except ObjectTooLarge:
+        raise
     except Exception as error:
-        raise OperationError("Media storage is unavailable") from error
+        raise StorageUnavailable("Media storage is unavailable") from error
 
 
 def valid_key(key: object) -> bool:
@@ -304,3 +320,63 @@ def view_url(
         raise OperationError("Invalid media key")
     target = object_name(config.prefix, connection.config.id, kind.name, key)
     return _storage_call(store.presign_get, target, config.view_ttl_seconds)
+
+
+def _viewed(
+    config: MediaConfig | None,
+    store: ObjectStore | None,
+    connection: ResolvedConnection,
+    name: str,
+    key: str,
+) -> tuple[MediaConfig, ObjectStore, MediaKind]:
+    """The checks of the upload path: a kind of this connection (never a derived
+    one, which no integration names), a valid key, one of the kind's extensions."""
+    config, store = _configured(config, store)
+    kind = _media_kind(connection, name)
+    if not valid_key(key) or PurePosixPath(key).suffix.lower() not in kind.extensions:
+        raise OperationError("Invalid media key")
+    return config, store, kind
+
+
+def read_thumbnail(
+    config: MediaConfig | None,
+    store: ObjectStore | None,
+    connection: ResolvedConnection,
+    name: str,
+    key: str,
+    width: int,
+) -> StoredObject | None:
+    """A thumbnail's bytes (WebP), or None if the worker made none."""
+    config, store, kind = _viewed(config, store, connection, name, key)
+    if not kind.thumbnails or width not in THUMBNAIL_WIDTHS:
+        return None
+    target = thumbnail_name(config.prefix, connection.config.id, kind.name, key, width)
+    try:
+        return _storage_call(store.get, target, MAX_THUMBNAIL_BYTES)
+    except ObjectTooLarge:
+        return None  # not one the worker made
+
+
+def image_type(key: str) -> str | None:
+    """The content type of an image original, by extension; None for other files."""
+    content_type = CONTENT_TYPES.get(PurePosixPath(key).suffix.lower(), "")
+    return content_type if content_type.startswith("image/") else None
+
+
+def read_image(
+    config: MediaConfig | None,
+    store: ObjectStore | None,
+    connection: ResolvedConnection,
+    name: str,
+    key: str,
+) -> StoredObject | None:
+    """An original image's bytes, or None if absent. NotStreamed for a file that
+    is not an image or is too large to copy through the server."""
+    config, store, kind = _viewed(config, store, connection, name, key)
+    if image_type(key) is None:
+        raise NotStreamed("Not an image")
+    target = object_name(config.prefix, connection.config.id, kind.name, key)
+    try:
+        return _storage_call(store.get, target, min(kind.max_bytes, MAX_STREAMED_IMAGE))
+    except ObjectTooLarge:
+        raise NotStreamed("Too large to stream") from None

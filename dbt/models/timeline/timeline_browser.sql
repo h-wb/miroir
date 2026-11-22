@@ -13,6 +13,7 @@
     pre_hook=[
         {'sql': "{{ timeline_raw_indexes('browser_history', {'zen_historyvisits': ['_dlt_load_id', 'place_id'], 'zen_places': ['_dlt_load_id', 'id'], '_dlt_loads': ['load_id', 'inserted_at']}) }}", 'transaction': false},
         "{{ timeline_remove_foreign(['browser']) }}",
+        "{{ timeline_add_media_columns() }}",
     ],
     post_hook="{{ timeline_exact_acl(false) }}",
 ) }}
@@ -72,6 +73,10 @@ select
     p.url as body,
     null::text as media_kind,
     null::text as media_key,
+    null::text as media_status,
+    null::boolean as thumbnail_w360,
+    null::boolean as thumbnail_w1280,
+    null::boolean as media_withheld,
     nullif(regexp_replace(lower(substring(
         p.url from '^[A-Za-z][A-Za-z0-9+.-]*://(?:[^/?#@]*@)?([^/?#:]+)'
     )), '^www\.', ''), '') as group_key,

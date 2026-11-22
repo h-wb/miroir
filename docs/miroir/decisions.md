@@ -2202,6 +2202,187 @@ Consequences:
 - A flow run that Prefect shows as running after its pod died before recording an
   attempt holds the queue until it is cancelled in Prefect or a backfill runs.
 
+### 040 amendment — Queries, the API and images through the server (phase 1c, part 1)
+
+Status: proposed with the phase 1c pull request, 2026-11-22. What the server side
+of the timeline had to decide that the plan above left open. Choices that touched
+security, privacy or cost took the more conservative option; those are marked
+*(conservative)*. The routes and their answers are in the README (*The timeline
+API*).
+
+**Which tables.** The server reads the first analysis of the `timeline` package in
+configuration order, in the schema its build writes, derived by the same code
+(`analysis_plan`), so no setting names it. Further timeline analyses are allowed
+and named in a `warning` on the health check and on every answer. Without one,
+every timeline route, the status page and the health check included, says the
+timeline is not configured (503). The timeline module may therefore import
+`src.core.analysis`, which computes names and touches nothing.
+
+**Stored files in the models.** `screen_frames` joins `media_objects` of the
+screen connection's dataset (kind `screenshots`, that connection's rows only) and
+gains `media_status`, `thumbnail_w360` and `thumbnail_w1280`; a session in
+`events` takes its first frame's. The table is an optional input: without it the
+columns are null. Null means no record, which is unknown, not absent (phase 1b).
+The derive worker's loads are listed in the same dataset's `_dlt_loads`, so the
+existing load cursor already sees them: a build reads again the frames whose
+records a newly completed load wrote (an index on the raw `key` finds them), and a
+frame arriving after its record finds it. That re-read moves the frame's stamp, so
+the sessions around it are recomputed as for any changed frame; a derive run's
+batch of at most 500 files costs one such recomputation. Tables built before these
+columns gain them in a pre-hook (nullable, no rewrite) and read every frame and
+session once. dbt's `on_schema_change` was not used: it would also have added the
+`_deleted` column of the new rows to `events` and `days`. A test checks records
+written before and after their frames, another connection's record in the same
+dataset, a replaced record, the upgrade, and that the result equals a first build.
+
+**Withheld wins** *(conservative)*. A frame with a withholding reason is shown as
+withheld, with no thumbnail, whatever a record says: in a day's index, in a
+frame, and in an event, whose `media_withheld` column (on every table with the
+media columns) carries its first frame's reason from `screen_frames` through
+`timeline_screen`. A frame withheld after it was built is a changed frame, so its
+session is recomputed and the incremental tables still equal a first build.
+
+*The media route asks the timeline too* *(conservative)*. A file can be in the
+bucket for a frame that is withheld: stored before a newer rule withheld the frame
+when it was sent again (034 never deletes). So `/media/{connection}/{kind}/{key}`,
+at every size and for the plain redirect, first asks every timeline analysis
+whose `screen` input is that connection, when the kind is `screenshots`:
+
+- the key's frame withheld in any of them: 404, as if there were no file;
+- a key none of them has a frame for (not loaded yet): not withheld, served as
+  before;
+- no such analysis: nothing to ask, the route behaves as before;
+- an analysis exists but the timeline cannot answer: the route fails closed with
+  the timeline routes' error, never the file: 503 when the reader is not
+  configured (no `MIROIR_TIMELINE_DATABASE_URL`), the tables are not built yet or
+  the warehouse is unreachable, 504 at the time limit. Without the reader setting
+  this refuses that connection's screenshots outright, the stricter reading of
+  "cannot answer".
+
+This costs one lookup on `screen_frames`' unique `image_path` index per image.
+It leaves one case open: the stored file of a frame that became withheld is
+hidden, not deleted. Anyone with the bucket's key, or a link signed before, can
+still read it.
+
+**Queries.** Each runs in one read-only session with the 5-second limit and is
+bounded: a days range of at most 400 days; at most 20,000 frames in a day's index
+(`truncated` beyond); a frame's text cut at 100,000 characters; at most 500 events
+a page, titles and bodies cut at 2,000 characters; at most 50 search results a
+page; a search of at most 200 characters. Parameters are always bound. A query at
+the time limit answers 504 with a fixed message; a table, schema or column that is
+missing, or not readable by the role, answers 503 "not built yet".
+
+*One rule for a time's day.* A local day runs from `(day::timestamp AT TIME ZONE
+tz)` to the next day's. Where clocks go back at midnight (America/Havana on
+2026-11-01) the local midnight comes twice, and Postgres reads it as the later
+one, so the hour before belongs to the previous day. The index selects frames by
+these bounds, which keeps the time index usable; selecting by `(captured_at AT
+TIME ZONE tz)::date = day` would not use it. Everything that names a time's day
+follows the same bounds: a frame's `day` and `t`, a moment's `day`, and the
+models' `days` (`timeline_local_day` gives the day whose bounds hold a time, which
+is the local date everywhere else). Before, `days` and a frame took the local date
+while the index took the bounds, so a frame of that hour was counted on one day,
+listed on another, and given a negative `t`. Toronto's 23- and 25-hour days are
+tested too. `days` rows built before keep the old rule in such a timezone until a
+rebuild from scratch.
+
+*Searches the index cannot answer are refused* (400). A query whose every part is
+negated (`-a`, `-"a b"`, `a or -b`) cannot use the text index and would read every
+frame until the time limit, holding one of the server's four connections. The
+server asks Postgres first: `querytree(websearch_to_tsquery('simple', q))` keeps
+the part of a query an index can use, and is `T` when there is none and empty
+when there is no word at all (`-`, `!!!`, `""`). Both are refused with a plain
+message. `a -b`, phrases and `a or b` are searched. The `simple` configuration has
+no stop words, so `the` is a word like any other.
+
+- *Days* are read for the analysis's current timezone only; after a timezone
+  change, nothing shows until the next build recounts.
+- *Events* are those that started in the range, not those overlapping it: an
+  overlap needs a scan from the beginning of time *(conservative: cost)*. A page
+  that needs a session already in progress asks from earlier. Each source is one
+  index range, merged; the keyset is `(started_at, event_id)`.
+- *Moments* are fixed five-minute windows, aligned to multiples of five minutes,
+  per app. Fixed windows page with a stable keyset; windows by pause would move as
+  frames arrive. A moment shows its first match, its count and a snippet computed
+  for the returned moments only. Newest first.
+- *Snippets* are returned as alternating plain and matched strings, never as
+  markup *(conservative)*: `ts_headline` marks matches with two private-use
+  characters, removed from the text first, and the server splits on them.
+- *Browser search* matches titles and addresses through `events.search`, newest
+  first, one result per visit. The app filter applies to screen results only.
+- Unknown parameters, and a parameter given twice, are refused *(conservative)*.
+  An unencoded `+` in a time offset arrives as a space and is read back as `+`.
+
+**Caching.** Every answer is `Cache-Control: private, no-store`, except a day's
+screen index: `private, no-cache` with a weak ETag of its content, answered 304
+when it matches. It holds keys, times and apps, no screen text; late frames can
+still change a past day, so it is revalidated, never immutable. The ETag saves the
+transfer, not the query. The timeline's JSON answers of 1 KB or more are gzipped
+for a client that accepts it; nothing else is. They hold no secret and are
+answered only to the logged-in administrator, so compressing them next to a query
+the client chose discloses nothing it did not have.
+
+**Images through the server.** `/media/{connection}/{kind}/{key}` without
+parameters is unchanged: a redirect to a short signed link. With `size=360` or
+`1280` it copies that thumbnail, with `size=original` an image original. This
+revises phase 0's "the web process does not call" `ObjectStore.get`: it now reads,
+and never writes.
+
+- Checked as an upload is: a kind of that connection, a valid key, one of the
+  kind's extensions. A thumbnail's kind (`screenshots.w360`) is not a kind of any
+  integration, so it can be neither read nor uploaded by name; the server builds
+  its object name from the base kind.
+- The content type is fixed by the server (`image/webp`, or the original's by its
+  extension), never the bucket's *(conservative)*, and `nosniff` applies.
+- `Cache-Control: private, max-age=31536000, immutable`, the bucket's ETag as a
+  strong tag, and 304 for a matching `If-None-Match`. The object is still fetched
+  to learn its tag, so a 304 saves the browser's transfer, not the bucket's.
+- 404 when the thumbnail does not exist or the kind has none; 400 for another size
+  or any other parameter; 503 when the bucket cannot be asked.
+- Originals are copied only for image types and up to 25 MB and the kind's own
+  limit *(conservative: memory per request)*; anything else, video included, gets
+  the signed-link redirect. A thumbnail is read with the worker's own bound,
+  16 MB. Bytes are held in memory, not streamed in pieces: these bounds keep that
+  small.
+- Logging out sends `Clear-Site-Data: "cache"`.
+
+Known limits:
+
+- A record can outlive its file (phase 1b): the index then says thumbnails exist
+  and the image answers 404; the page shows its placeholder.
+- The stored file and thumbnails of a frame that became withheld stay in the
+  bucket, hidden by the media route only.
+- A thumbnail made again under a new `DERIVE_VERSION` keeps its old copy in a
+  browser's cache until it is evicted or the user logs out.
+- The day index's `connection` is its first frame's: a table holds one screen
+  connection's rows (others are removed at the next build).
+
+Measured on synthetic data, one development machine, Postgres 17: a day's index
+of 3,001 frames takes 7 ms to query and 14 ms through the route, 109 KB of JSON,
+15 KB gzipped. On 303,000 frames of a year with 80 skewed words each, the first
+page of a screen search takes 108 ms (median; one run of 712 ms) for a word on 30%
+of frames, 216 ms for two words that are on nearly every frame, 5 ms for a word on
+1%, 2 ms for a rare one, 13 ms for the common word within a month, and 72 ms
+within one app. `tests/test_timeline_benchmark.py` repeats this
+(`MIROIR_TIMELINE_BENCHMARK=1`).
+
+Left for later: deleting the stored file and its thumbnails when a frame becomes
+withheld (the worker would have to learn of it from the rows, which the server
+cannot write to).
+
+*Review (2026-11-22).* An independent review of pull request #49 found one high
+and two low defects and two missing tests; all are fixed as above, each with a
+test from its reproduction:
+1. A withheld frame's screenshot was reported available in events and served at
+   every size: withheld wins in events, and the media route asks the timeline.
+2. Day bounds disagreed where clocks go back at midnight: one rule.
+3. A search with only negated terms read every frame: refused.
+4. A record that changes after the first build (`failed` to `made`) reaching
+   `timeline_screen` and `events`: tested; it did.
+5. The reader reading raw `media_objects`: tested; it cannot. The test of a
+   table lacking only some media columns found that `events` did not read its
+   rows again; it now does.
+
 ## 041 — A messages analysis: conversations by identifier, no text
 
 Status: accepted, 2026-11-22. Builds on 022, 038 and 040. Revised the same day

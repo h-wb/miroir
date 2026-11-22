@@ -12,16 +12,22 @@
         {'columns': ['source', '_stamp']},
     ],
     grants=timeline_grants(),
-    pre_hook="{{ timeline_remove_foreign(['screen', 'browser'], by_source=true) }}",
+    pre_hook=[
+        "{{ timeline_remove_foreign(['screen', 'browser'], by_source=true) }}",
+        "{{ timeline_add_media_columns() }}",
+    ],
     post_hook="{{ timeline_exact_acl(true) }}",
 ) }}
 -- Every source's events with the same columns; each source reaches it through one
 -- model, timeline_<source>. An incremental build reads the rows each of those
 -- models wrote since this one last read it, merges them on event_id and removes
 -- the ones they mark deleted. A source whose input was unlinked or replaced loses
--- its rows here first and is read again in full.
+-- its rows here first and is read again in full. Media columns: what the worker
+-- recorded of the event's file (timeline_media_columns), null when unknown.
 {% set sources = [('screen', 'timeline_screen'), ('browser', 'timeline_browser')] %}
 {% set replaced = timeline_replaced(['screen', 'browser'], by_source=true) %}
+{# A table built before the media columns reads every source's rows once. #}
+{% set upgrade = not timeline_has_media_columns() %}
 {% for source, model in sources %}
 select
     source,
@@ -34,6 +40,10 @@ select
     body,
     media_kind,
     media_key,
+    media_status,
+    thumbnail_w360,
+    thumbnail_w1280,
+    media_withheld,
     group_key,
     payload,
     setweight(to_tsvector('simple', coalesce(title, '')), 'A')
@@ -42,7 +52,7 @@ select
     _stamp
     {% if is_incremental() %}, deleted as _deleted{% endif %}
 from {{ ref(model) }}
-{% if is_incremental() and source not in replaced %}
+{% if is_incremental() and source not in replaced and not upgrade %}
 where _stamp > {{ timeline_literal(timeline_resume(this, "source = '" ~ source ~ "'")) }}
 {% elif is_incremental() %}
 where true

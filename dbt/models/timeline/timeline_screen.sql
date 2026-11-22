@@ -11,7 +11,7 @@
         {'columns': ['_stamp']},
     ],
     grants={'select': []},
-    pre_hook="{{ timeline_remove_foreign(['screen']) }}",
+    pre_hook=["{{ timeline_remove_foreign(['screen']) }}", "{{ timeline_add_media_columns() }}"],
     post_hook="{{ timeline_exact_acl(false) }}",
 ) }}
 -- Screen events: one row per app session, a run of frames of the same app with
@@ -29,13 +29,16 @@
 -- Internal: the reader has no access (an empty grant list makes dbt revoke).
 -- The windows are found first, by a query of their own, and inlined as
 -- literal ranges, so frames and sessions are read through their time indexes.
+-- A session's media is its first frame's, with what the worker recorded of it;
+-- a frame whose record arrives later is a changed frame of screen_frames. A
+-- table built before the media columns recomputes every session once.
 {% set gap_seconds = 300 %}
 {% set upper = timeline_resume(ref('screen_frames')) %}
 {% set replaced = timeline_replaced(['screen']) | length > 0 %}
 {% set incremental = is_incremental() and not replaced %}
 {% set consumed = timeline_consumed([('days', "source = 'screen'")]) %}
 {% set ns = namespace(windows=[('-infinity', 'infinity')]) %}
-{% if incremental %}
+{% if incremental and timeline_has_media_columns() %}
     {% set lower = timeline_resume(this) %}
     {% set reach_sql %}
         with changed as (
@@ -143,6 +146,10 @@ current_sessions as (
         null::text as body,
         'screenshots'::text as media_kind,
         s.first_frame as media_key,
+        f.media_status,
+        f.thumbnail_w360,
+        f.thumbnail_w1280,
+        f.media_withheld,
         s.bundle_id as group_key,
         jsonb_build_object(
             'bundle_id', s.bundle_id, 'frames', s.frames, 'last_frame', s.last_frame
@@ -155,6 +162,7 @@ current_sessions as (
         {{ timeline_literal(upper) }} as _stamp
     from sessions s
     left join {{ ref('timeline_known_apps') }} k on k.bundle_id = s.bundle_id
+    left join {{ ref('screen_frames') }} f on f.image_path = s.first_frame
     -- One index probe per session: a plain join was planned as a read of them all.
     {% if incremental %}left join lateral (
         select * from {{ this }} o where o.event_id = 'screen:' || s.first_frame limit 1
@@ -165,7 +173,8 @@ select * from current_sessions
 union all
 select
     t.source, t.connection, t.event_id, t.started_at, t.ended_at, t.kind, t.title,
-    t.body, t.media_kind, t.media_key, t.group_key, t.payload,
+    t.body, t.media_kind, t.media_key, t.media_status, t.thumbnail_w360,
+    t.thumbnail_w1280, t.media_withheld, t.group_key, t.payload,
     true as deleted,
     {{ timeline_previous('previous_started_at', 't.started_at', 't.started_at', consumed) }} as previous_started_at,
     t._input,

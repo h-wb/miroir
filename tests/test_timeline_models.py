@@ -26,6 +26,7 @@ from src.analyses.catalog import PACKAGES
 from src.core.analysis import analysis_plan
 from src.core.artifacts import submit_artifact
 from src.core.config import ConfigurationError, parse_miroir
+from src.core.derive import DERIVE_VERSION, _Writer
 from src.core.operations import MetadataStore
 from src.core.runner import import_artifact
 from src.pipelines.transform import build_connection_models
@@ -44,23 +45,24 @@ SAFARI, TERMINAL, NOTES, MAIL = (
 UNLISTED = "com.example.unlisted-app"
 LINKS = "timeline_links"  # a miroir of its own: other raw datasets
 MOVES = "timeline_moves"
+MEDIA = "timeline_media"
+
+
+def raw_configuration(analyses, miroir_id="timeline_tests"):
+    return {
+        "schema_version": 1,
+        "id": miroir_id,
+        "connections": [
+            {"id": "screen", "integration": "screenmemory", "settings": {}},
+            {"id": "browser", "integration": "browser_history", "settings": {}},
+            {"id": "laptop", "integration": "screenmemory", "settings": {}},
+        ],
+        "analyses": analyses,
+    }
 
 
 def configuration(analyses, miroir_id="timeline_tests"):
-    return parse_miroir(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "id": miroir_id,
-                "connections": [
-                    {"id": "screen", "integration": "screenmemory", "settings": {}},
-                    {"id": "browser", "integration": "browser_history", "settings": {}},
-                    {"id": "laptop", "integration": "screenmemory", "settings": {}},
-                ],
-                "analyses": analyses,
-            }
-        )
-    )
+    return parse_miroir(json.dumps(raw_configuration(analyses, miroir_id)))
 
 
 def timeline(analysis_id, inputs, reader_role=None):
@@ -209,7 +211,9 @@ class TimelinePackageTests(unittest.TestCase):
         self.assertFalse([p for p in result.result if "timeline" in p])
 
 
-class TimelineModelTests(unittest.TestCase):
+class TimelineBuildFixture(unittest.TestCase):
+    """A disposable warehouse, loads through the real runner, builds by dbt."""
+
     @classmethod
     def setUpClass(cls):
         cls.root, cls.port = start_postgres(cls, "miroir-timeline-")
@@ -323,11 +327,13 @@ class TimelineModelTests(unittest.TestCase):
         return {
             "screen_frames": self.query(
                 "select image_path, captured_at, bundle_id, text, withheld, masked, "
-                f"connection from {schema}.screen_frames order by image_path"
+                "connection, media_status, thumbnail_w360, thumbnail_w1280, "
+                f"media_withheld from {schema}.screen_frames order by image_path"
             ),
             "events": self.query(
                 "select source, connection, event_id, started_at, ended_at, kind, "
-                "title, body, media_kind, media_key, group_key, payload, "
+                "title, body, media_kind, media_key, media_status, thumbnail_w360, "
+                "thumbnail_w1280, media_withheld, group_key, payload, "
                 f"search::text from {schema}.events order by event_id"
             ),
             "days": self.query(
@@ -337,6 +343,52 @@ class TimelineModelTests(unittest.TestCase):
             "apps": self.query(f"select * from {schema}.apps order by bundle_id"),
         }
 
+    def media_record(
+        self, miroir, offset, status="made", connection_id="screen", key=None
+    ):
+        """One media_objects row, written as the derive worker writes it."""
+        connection = next(c for c in miroir.connections if c.config.id == "screen")
+        made = status == "made"
+        writer = _Writer(
+            connection,
+            self.execution["destination"],
+            self.execution["pipelines_dir"],
+            self.store,
+            5,
+        )
+        now = datetime.now(timezone.utc)
+        writer.write(
+            [
+                {
+                    "connection_id": connection_id,
+                    "kind": "screenshots",
+                    "key": key or path(offset),
+                    "size": 1000 + offset,
+                    "content_type": "image/jpeg",
+                    "stored_at": now,
+                    "thumbnail_w360": made,
+                    "thumbnail_w1280": made,
+                    "thumbnail_status": status,
+                    "derived_at": now,
+                    "derive_version": DERIVE_VERSION,
+                }
+            ]
+        )
+
+    def media(self, schema):
+        return (
+            self.query(
+                "select image_path, media_status, thumbnail_w360, thumbnail_w1280 "
+                f"from {schema}.screen_frames order by image_path"
+            ),
+            self.query(
+                "select event_id, media_key, media_status, thumbnail_w360, "
+                f"thumbnail_w1280 from {schema}.events order by event_id"
+            ),
+        )
+
+
+class TimelineModelTests(TimelineBuildFixture):
     def test_incremental_builds_handle_late_rows_and_match_a_full_build(self):
         miroir = configuration(
             [timeline("timeline", {"screen": "screen", "browser": "browser"}, READER)]
@@ -841,4 +893,149 @@ class TimelineModelTests(unittest.TestCase):
                 ("screen", "2026-11-19", 1, 1),
                 ("screen", "2026-11-20", 1, 3),
             ],
+        )
+
+    def test_stored_media_reaches_frames_and_sessions_whenever_it_is_recorded(self):
+        both = {"screen": "screen", "browser": "browser"}
+        miroir = configuration(
+            [timeline("timeline", both, READER), timeline("fresh", both)], MEDIA
+        )
+        schema = self.schema(miroir, "timeline")
+        plan = analysis_plan(miroir.analyses[0])
+        loading = configuration([timeline("timeline", both, READER)], MEDIA)
+        # No media_objects table yet: every frame is unknown.
+        self.send(
+            loading,
+            "screen",
+            screen_batch(*screen(0, SAFARI), *screen(10, SAFARI), *screen(1000, NOTES)),
+        )
+        self.send(
+            loading,
+            "browser",
+            browser_batch(
+                place(1, "https://example.org/a", "Page A"), visit(1, 1, 100, 1)
+            ),
+            "firefox_places_batch",
+        )
+        self.assertEqual(
+            self.media(schema)[0],
+            [(path(0), None, None, None), (path(10), None, None, None)]
+            + [(path(1000), None, None, None)],
+        )
+        # Recorded after their frames were built: the next build reads them.
+        self.media_record(miroir, 0)
+        self.media_record(miroir, 1000, "failed")
+        # Another connection's record in the same dataset is not this one's.
+        self.media_record(miroir, 10, connection_id="laptop")
+        self.build(plan)
+        frames, events = self.media(schema)
+        self.assertEqual(
+            frames,
+            [
+                (path(0), "made", True, True),
+                (path(10), None, None, None),
+                (path(1000), "failed", False, False),
+            ],
+        )
+        self.assertEqual(
+            events,
+            [
+                ("browser:1", None, None, None, None),
+                (f"screen:{path(0)}", path(0), "made", True, True),
+                (f"screen:{path(1000)}", path(1000), "failed", False, False),
+            ],
+        )
+        # Recorded before its frame arrives: the frame's own build finds it.
+        self.media_record(miroir, 2000)
+        self.build(plan)
+        self.send(loading, "screen", screen_batch(*screen(2000, TERMINAL)))
+        frames, events = self.media(schema)
+        self.assertIn((path(2000), "made", True, True), frames)
+        self.assertIn((f"screen:{path(2000)}", path(2000), "made", True, True), events)
+        # A record replaced by a later derive run (the merge, failed to made)
+        # replaces the frame's, and its session's in both screen models.
+        self.media_record(miroir, 1000)
+        self.build(plan)
+        frames, events = self.media(schema)
+        self.assertIn((path(1000), "made", True, True), frames)
+        self.assertIn((f"screen:{path(1000)}", path(1000), "made", True, True), events)
+        self.assertEqual(
+            self.query(
+                "select media_status, thumbnail_w360, thumbnail_w1280 from "
+                f"{schema}.timeline_screen where event_id = 'screen:{path(1000)}'"
+            ),
+            [("made", True, True)],
+        )
+
+        # A frame withheld after its screenshot was stored and derived (a newer
+        # rule; the file stays): withheld wins in the frame and its session.
+        def withheld():
+            return (
+                self.query(
+                    f"select image_path, media_withheld from {schema}.screen_frames"
+                    " order by 1"
+                ),
+                self.query(
+                    f"select event_id, media_withheld from {schema}.events order by 1"
+                ),
+            )
+
+        self.assertEqual(
+            withheld()[1],
+            [("browser:1", None)]
+            + [(f"screen:{path(o)}", False) for o in (0, 1000, 2000)],
+        )
+        self.send(
+            loading,
+            "screen",
+            screen_batch(frame(0, withheld="excluded_app"), usage(0, SAFARI)),
+        )
+        frames, events = withheld()
+        self.assertEqual(
+            frames,
+            [(path(0), True), (path(10), False), (path(1000), False)]
+            + [(path(2000), False)],
+        )
+        self.assertIn((f"screen:{path(0)}", True), events)
+        self.assertIn(
+            (f"screen:{path(0)}", path(0), "made", True, True), self.media(schema)[1]
+        )
+
+        # The reader reads the timeline's tables, never the raw media records.
+        dataset = miroir.connections[0].binding.dataset_name
+        self.assertTrue(self.query(f"select 1 from {schema}.screen_frames", READER))
+        for relation in (f"{dataset}.media_objects", f"{dataset}.frames"):
+            with (
+                self.subTest(relation=relation),
+                self.assertRaises(psycopg2.errors.InsufficientPrivilege),
+            ):
+                self.query(f"select 1 from {relation}", READER)
+
+        # A first build over the same rows gives the same tables.
+        self.build(analysis_plan(miroir.analyses[1]))
+        fresh = self.schema(miroir, "fresh")
+        self.assertEqual(self.media(fresh), self.media(schema))
+        self.assertEqual(self.snapshot(fresh), self.snapshot(schema))
+
+        # Tables built before the media columns gain them, and read every frame
+        # and session once.
+        expected = self.media(schema)
+        for table in ("screen_frames", "timeline_screen", "events", "timeline_browser"):
+            self.query(
+                f"alter table {schema}.{table} drop column media_status, "
+                "drop column thumbnail_w360, drop column thumbnail_w1280, "
+                "drop column media_withheld"
+            )
+        self.build(plan)
+        self.assertEqual(self.media(schema), expected)
+        self.assertEqual(self.snapshot(schema), self.snapshot(fresh))
+        # A table that has some of the media columns gains the rest.
+        self.query(f"alter table {schema}.events drop column media_withheld")
+        self.build(plan)
+        self.assertEqual(self.snapshot(schema), self.snapshot(fresh))
+        self.assertIn(
+            ("miroir_media_objects_key",),
+            self.query(
+                f"select indexname from pg_indexes where schemaname = '{dataset}'"
+            ),
         )

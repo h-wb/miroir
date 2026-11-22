@@ -236,9 +236,16 @@
     {%- else -%}false{%- endfor -%}
 {%- endmacro %}
 
-{# A time's local date in the analysis's timezone. #}
+{# The local day a time belongs to in the analysis's timezone: the day whose
+   bounds hold it, a day running from (day::timestamp at time zone tz) to the
+   next. Where clocks go back at midnight Postgres reads the repeated midnight as
+   the later one, so the hour before it belongs to the previous day; elsewhere
+   this is the local date. The server uses the same rule (src/core/timeline.py). #}
 {% macro timeline_local_day(column) -%}
-    ({{ column }} at time zone '{{ var('timezone') | replace("'", "''") }}')::date
+    {%- set tz = var('timezone') | replace("'", "''") -%}
+    (case when {{ column }} < (({{ column }} at time zone '{{ tz }}')::date::timestamp at time zone '{{ tz }}')
+        then ({{ column }} at time zone '{{ tz }}')::date - 1
+        else ({{ column }} at time zone '{{ tz }}')::date end)
 {%- endmacro %}
 
 {# Readable name and colour for an app's bundle identifier, for bundles the
@@ -269,4 +276,33 @@
     where {% for key in keys %}t.{{ adapter.quote(key) }} = s.{{ adapter.quote(key) }}{% if not loop.last %} and {% endif %}{% endfor %};
     insert into {{ target }} ({{ columns }})
     select {{ columns }} from {{ source }}{% if removes %} where not _deleted{% endif %}
+{%- endmacro %}
+
+{# What the worker recorded of a row's stored file (media_objects, decision 040):
+   its thumbnail status and which sizes exist. Null where it has no record, which
+   means unknown, not absent: the file may still be queued, or not derived yet.
+   media_withheld: the frame the file belongs to is withheld, which wins over any
+   record (the file may have been stored before a newer rule withheld it). #}
+{% macro timeline_media_columns() -%}
+    {{- return({'media_status': 'text', 'thumbnail_w360': 'boolean', 'thumbnail_w1280': 'boolean', 'media_withheld': 'boolean'}) -}}
+{%- endmacro %}
+
+{# Whether an incremental table already has the media columns. A table built by
+   code before them lacks them: its rows predate the join and are rebuilt once. #}
+{% macro timeline_has_media_columns() -%}
+    {%- if not (execute and is_incremental()) -%}{{ return(true) }}{%- endif -%}
+    {%- set names = adapter.get_columns_in_relation(this) | map(attribute='name') | list -%}
+    {{- return(timeline_media_columns().keys() | reject('in', names) | list | length == 0) -}}
+{%- endmacro %}
+
+{# Pre-hook: add the media columns to a table built before them. Nullable with no
+   default, so the change touches no row. dbt's on_schema_change is not used: it
+   would also add the `_deleted` column of the new rows to the table. #}
+{% macro timeline_add_media_columns() -%}
+    {%- if is_incremental() -%}
+    alter table {{ this }}
+    {%- for name, type in timeline_media_columns().items() %}
+        add column if not exists {{ adapter.quote(name) }} {{ type }}{% if not loop.last %},{% endif %}
+    {%- endfor %}
+    {%- endif -%}
 {%- endmacro %}

@@ -2637,3 +2637,69 @@ command's `--retry` forms and refusal; `OSError` from starting the child and fro
 `prctl`. The server suite is green: 359 tests, none skipped, including the
 Postgres and Prefect ones, with ruff, format, mypy and the collector's strict
 mypy clean.
+
+## 2026-11-22 — Timeline phase 1c, part 1: queries, the API, images through the server
+
+What: the server side the timeline's pages will stand on (decision 040, amendment
+"Queries, the API and images through the server").
+
+- **Models.** `screen_frames` joins the screen connection's `media_objects` (an
+  optional input) and gains `media_status`, `thumbnail_w360`, `thumbnail_w1280`;
+  screen sessions in `events` carry their first frame's. Records written after a
+  frame was built reach it at the next build through the shared `_dlt_loads`
+  cursor; tables built before the columns gain them in a pre-hook and are read
+  once in full. An index on the raw `media_objects.key`.
+- **Queries** in `src/core/timeline.py` (`timeline_source`, `TimelineReader`):
+  days, a day's screen index as columns, one frame, events by keyset, screen
+  search grouped into five-minute moments per app, browser search. Bounded,
+  bound parameters, time limit → `TimelineTimeout` (504), missing tables →
+  "not built yet" (503).
+- **Routes** in `src/web/timeline.py`: `/api/timeline/{days,screen/{day},frames/{key},events,search}`,
+  strict parameters, `private, no-store` except the screen index (`no-cache` +
+  weak ETag, 304), gzip for answers over 1 KB.
+- **Images.** `/media/...?size=360|1280|original` copies thumbnails and image
+  originals from the bucket with an immutable private cache, the bucket's ETag
+  and 304; without `size` the redirect is unchanged. `Clear-Site-Data: "cache"` on
+  logout. The timeline module may import `src.core.analysis` (boundary test and
+  `docs/architecture.md` updated).
+
+Why: the next slice builds pages on these answers; the shapes are in the README.
+
+Validation: `tests/test_timeline_api.py` builds synthetic screen and browser
+batches with the real models and reads them as the reader role (shapes, bounds,
+a frame ten seconds before local midnight, keyset paging over five visits of one
+microsecond at page sizes 1, 2, 3 and 5, moment grouping, app and date filters,
+phrase search, snippets, forged cursors, no analysis, several analyses, tables
+not built, the time limit hit by a lock); the API's login on every route,
+parameter validation, cache headers, ETag and 304, gzip, 404, 503 and 504. A
+model test covers `media_objects` before and after frames, another connection's
+records, the upgrade of old tables, and equality with a first build.
+`tests/test_web_media.py` covers thumbnails, originals, redirects, refusals and
+logout. Measured with `tests/test_timeline_benchmark.py` (see the amendment): a
+day's index of 3,001 frames in 14 ms through the route, 15 KB gzipped; a search
+over 303,000 frames 2 to 216 ms at the median.
+The server suite is green: 400 tests, one skipped (the benchmark, on request only), including the Postgres and Prefect ones, with ruff, format, mypy and the collector's strict mypy clean.
+
+## 2026-11-22 — Review of pull request #49
+
+An independent review found one high and two low defects and two missing tests
+(decision 040 amendment, *Review*). Each reproduction became a test.
+
+- **A withheld frame's screenshot** was reported available in `events` and served
+  by `/media` at every size. `media_withheld` now travels with the media columns
+  from `screen_frames` through `timeline_screen` to `events`, and `events()`
+  reports `withheld`. The media route asks every timeline analysis reading that
+  connection's screenshots and answers 404 for a withheld frame's key, fails
+  closed (503/504) when the timeline cannot answer, and is unchanged where no
+  timeline analysis reads the connection.
+- **Day bounds** where clocks go back at midnight: `days`, a frame's day and `t`,
+  and a moment's day all follow the index's bounds (America/Havana tested, and
+  Toronto's 23- and 25-hour days).
+- **Negated-only searches** are refused with 400, detected with `querytree`.
+- **Tests added**: a record changing `failed` to `made` reaches `timeline_screen`
+  and `events`; the reader cannot read raw `media_objects`; a table lacking only
+  some media columns, which showed that `events` did not read its rows again
+  (fixed: it reads every source once).
+
+Validation: 405 tests, one skipped (the benchmark, on request), with ruff, format,
+mypy and the collector's strict mypy clean.

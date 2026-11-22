@@ -1,6 +1,7 @@
 """Static files, the content security policy, and the timeline routes (decision 040)."""
 
 import hashlib
+import json
 import re
 from pathlib import Path
 
@@ -143,10 +144,25 @@ class TimelineRouteTests(WebFixture):
     def test_a_configured_timeline_reports_its_database(self):
         from src.core.operations import OperationError
 
+        # Without a timeline analysis the database alone is not a timeline.
         ready = FakeTimeline({"read_only": True, "statement_timeout": "5s"})
         client = TestClient(create_app(self.service, TOKEN, timeline=ready))
         health = client.get("/api/timeline/health", headers=BEARER)
-        self.assertEqual(health.status_code, 200)
+        self.assertEqual(health.status_code, 503)
+        self.assertIn("no analysis of the timeline package", health.json()["message"])
+        config = json.loads(self.config_path.read_text())
+        config["connections"][1].pop("dashboards")  # the fixture's, not valid here
+        config["connections"].append(
+            {"id": "screen", "integration": "screenmemory", "settings": {}}
+        )
+        config.setdefault("analyses", []).append(
+            {"id": "timeline", "package": "timeline", "inputs": {"screen": "screen"}}
+        )
+        self.config_path.write_text(json.dumps(config))
+        ready = FakeTimeline({"read_only": True, "statement_timeout": "5s"})
+        client = TestClient(create_app(self.service, TOKEN, timeline=ready))
+        health = client.get("/api/timeline/health", headers=BEARER)
+        self.assertEqual(health.status_code, 200, health.text)
         self.assertEqual(health.json()["ready"], True)
         self.assertEqual(health.json()["statement_timeout"], "5s")
         writable = FakeTimeline({"read_only": False, "statement_timeout": "5s"})
