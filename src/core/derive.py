@@ -27,8 +27,10 @@ from pathlib import Path, PurePosixPath
 from typing import IO, TYPE_CHECKING, Any, TypeVar, cast
 
 from src.core.config import MediaConfig, ResolvedConnection, ResolvedMiroir
+from src.core.decoder_checks import check_image
 from src.core.media import (
     CONTENT_TYPES,
+    IMAGE_DECODERS,
     THUMBNAIL_WIDTHS,
     ObjectStore,
     ObjectTooLarge,
@@ -129,10 +131,13 @@ class Decoder:
         timeout: float = DECODE_TIMEOUT,
         memory: int = DECODE_MEMORY,
         cpu_seconds: int = DECODE_CPU_SECONDS,
+        decoders: tuple[str, ...] = tuple(sorted(set(IMAGE_DECODERS.values()))),
     ):
         self.timeout = timeout
         self.memory = memory
         self.cpu_seconds = cpu_seconds
+        # The decoders a fresh child must show it has, one tiny image each.
+        self.decoders = decoders
         self._child: subprocess.Popen[bytes] | None = None
         # The child's peak resident memory after the last file, in kilobytes.
         self.peak_kb = 0
@@ -154,27 +159,31 @@ class Decoder:
         if self._child is not None and self._child.poll() is None:
             return self._child
         self.close()
-        _undumpable()
-        child = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "src.core.thumbnails",
-                str(self.memory),
-                str(self.cpu_seconds),
-            ],
-            cwd=REPO,
-            # Nothing of the worker's environment: no bucket key, no passwords.
-            env={"PATH": os.environ.get("PATH", "")},
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-        )
-        assert child.stdin is not None
-        os.set_blocking(child.stdin.fileno(), False)
+        try:
+            _undumpable()
+            child = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "src.core.thumbnails",
+                    str(self.memory),
+                    str(self.cpu_seconds),
+                ],
+                cwd=REPO,
+                # Nothing of the worker's environment: no bucket key, no passwords.
+                env={"PATH": os.environ.get("PATH", "")},
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+            assert child.stdin is not None
+            os.set_blocking(child.stdin.fileno(), False)
+        except OSError:
+            # No child at all (no process slot, no interpreter, prctl refused).
+            raise DecoderUnavailable() from None
         self._child = child
         try:
-            for body, formats in _probes():
+            for body, formats in _checks(self.decoders):
                 if self._exchange(body, formats, PROBE_TIMEOUT)[0] != "made":
                     raise _Lost()
         except _Lost:
@@ -247,10 +256,18 @@ def _undumpable() -> None:
 
 
 @functools.cache
-def _probes() -> tuple[tuple[bytes, tuple[str, ...]], ...]:
-    """A 1-pixel PNG and the costliest image the bounds accept: 40 million grey
-    and alpha pixels (measured 480 MB to decode), all zero, so they are small."""
-    return (_png(1, 1), ("PNG",)), (_png(6324, 6324), ("PNG",))
+def _checks(decoders: tuple[str, ...]) -> tuple[tuple[bytes, tuple[str, ...]], ...]:
+    """A tiny image for each of `decoders`, read by that decoder alone, then the
+    costliest image the bounds accept: 40 million grey and alpha pixels (measured
+    480 MB to decode), all zero, so it is small. A decoder without its image
+    fails the check: one cannot be added and forgotten."""
+    tiny = []
+    for decoder in decoders:
+        image = check_image(decoder)
+        if image is None:
+            raise _Lost()
+        tiny.append((image, (decoder,)))
+    return (*tiny, (_png(6324, 6324), ("PNG",)))
 
 
 def _png(width: int, height: int) -> bytes:
@@ -311,7 +328,7 @@ class DeriveSummary:
     remaining: int = 0
     walked: int = 0
     walk_finished: bool | None = None
-    # Files recorded as failed and queued again by a backfill that asked.
+    # Files queued again by a backfill's --retry, whatever their rows say.
     retried: int = 0
 
     @property
@@ -334,7 +351,7 @@ class DeriveSummary:
             state = "walk finished" if self.walk_finished else "walk continues"
             text += f"; backfill walked {self.walked}, {state}"
         if self.retried:
-            text += f"; {self.retried} failed queued again"
+            text += f"; {self.retried} queued again"
         return text
 
 
@@ -356,17 +373,15 @@ def derive_media(
     summary = DeriveSummary()
     writer = _Writer(connection, destination, pipelines_dir, store, lock_wait)
     kinds = [kind for kind in connection.integration.media if kind.thumbnails]
-    with closing(Decoder()) as decoder:
+    used = {d for kind in kinds for d in image_decoders(kind.thumbnails)}
+    with closing(Decoder(decoders=tuple(sorted(used)))) as decoder:
         for kind in kinds:
             if backfill is not None and backfill["kind"] == kind.name:
-                if backfill.get("retry_failed"):
-                    failed = writer.failed(kind.name)
-                    store.add_pending_media(
-                        miroir.id, connection.config.id, kind.name, failed
-                    )
-                    # Without their rows they are not "known": any run derives them.
-                    writer.forget_failed(kind.name)
-                    summary.retried = len(failed)
+                if backfill.get("retry"):
+                    # One write carrying the intent: rows stay until replaced.
+                    again = writer.with_status(kind.name, backfill["retry"])
+                    store.queue_retry(miroir.id, connection.config.id, kind.name, again)
+                    summary.retried = len(again)
                 summary.walked, summary.walk_finished = _walk(
                     store, object_store, config, connection, kind, backfill["limit"]
                 )
@@ -447,7 +462,7 @@ class _Batch:
         done: list[PendingMedia] = []
         try:
             for entry in batch:
-                if known.get(entry.key) == entry.size:
+                if known.get(entry.key) == entry.size and not entry.retry:
                     summary.counts["known"] += 1
                     done.append(entry)
                 else:
@@ -604,26 +619,19 @@ class _Writer:
             return {}  # nothing was derived into this dataset yet
         return {row[0]: int(row[1]) for row in rows or []}
 
-    def failed(self, kind: str) -> list[tuple[str, int, datetime]]:
-        """(key, size, stored at) of the files of `kind` recorded as failed."""
+    def with_status(
+        self, kind: str, statuses: list[str]
+    ) -> list[tuple[str, int, datetime]]:
+        """(key, size, stored at) of the files of `kind` recorded with a status."""
+        marks = ", ".join(["%s"] * len(statuses))
         rows = self._query(
             "SELECT {key}, {size}, stored_at FROM {table}"
-            " WHERE connection_id = %s AND kind = %s AND thumbnail_status = 'failed'",
+            f" WHERE connection_id = %s AND kind = %s AND thumbnail_status IN ({marks})",
             self.connection.config.id,
             kind,
+            *statuses,
         )
         return [(row[0], int(row[1]), _utc(row[2])) for row in rows]
-
-    def forget_failed(self, kind: str) -> None:
-        with self.store.connection_lock(
-            self.connection.binding.pipeline_name, self.lock_wait
-        ):
-            self._query(
-                "DELETE FROM {table}"
-                " WHERE connection_id = %s AND kind = %s AND thumbnail_status = 'failed'",
-                self.connection.config.id,
-                kind,
-            )
 
     def _query(self, sql: str, *args: Any) -> list[Any]:
         from dlt.destinations.exceptions import DatabaseUndefinedRelation

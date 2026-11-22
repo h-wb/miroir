@@ -673,9 +673,22 @@ class DeriveRunTests(DeriveFixture):
         files = {f"{i:03d}.jpeg": jpeg(400, 300) for i in range(20)}
         self.queue(files)
         operation_id = self.request()
-        small = (30, 8 * 1024 * 1024, 25)
+        small = (30, 8 * 1024 * 1024, 25, Decoder.__init__.__defaults__[3])
         with (
             patch.object(Decoder.__init__, "__defaults__", small),
+            self.assertRaises(IngestionFailed),
+        ):
+            self.derive(operation_id, defer=self.schedule)
+        self.assert_untouched(operation_id, files)
+        self.assertEqual(self.scheduled, [])
+
+    def test_a_decoder_without_jpeg_stops_the_run(self):
+        # The reviewer's case: screenshots are JPEG, the decoder lost libjpeg.
+        files = {f"{i:03d}.jpeg": jpeg(1600, 1000) for i in range(20)}
+        self.queue(files)
+        operation_id = self.request()
+        with (
+            patch("src.core.derive.subprocess.Popen", side_effect=without_jpeg),
             self.assertRaises(IngestionFailed),
         ):
             self.derive(operation_id, defer=self.schedule)
@@ -772,6 +785,35 @@ class DecoderTests(unittest.TestCase):
             self.assertRaises(DecoderUnavailable),
         ):
             decoder.thumbnails(jpeg(), ("JPEG",))
+
+    def test_a_child_without_a_decoder_its_kinds_use_is_unavailable(self):
+        # The reviewer's case: a Pillow without its JPEG decoder passes PNG checks.
+        decoder = Decoder(decoders=("JPEG", "PNG"))
+        self.addCleanup(decoder.close)
+        with (
+            patch("src.core.derive.subprocess.Popen", side_effect=without_jpeg),
+            self.assertRaises(DecoderUnavailable),
+        ):
+            decoder.thumbnails(jpeg(), ("JPEG",))
+        # Without JPEG among what it must have, the same child would pass.
+        png_only = Decoder(decoders=("PNG",))
+        self.addCleanup(png_only.close)
+        with patch("src.core.derive.subprocess.Popen", side_effect=without_jpeg):
+            self.assertEqual(png_only.thumbnails(png_body(), ("PNG",))[0], "made")
+
+    def test_a_child_that_cannot_be_started_is_unavailable(self):
+        for target in (
+            "src.core.derive.subprocess.Popen",
+            "src.core.derive._undumpable",
+        ):
+            decoder = Decoder()
+            self.addCleanup(decoder.close)
+            with (
+                self.subTest(target),
+                patch(target, side_effect=OSError("no")),
+                self.assertRaises(DecoderUnavailable),
+            ):
+                decoder.thumbnails(jpeg(), ("JPEG",))
 
     def test_a_child_that_does_not_read_cannot_hold_the_worker(self):
         decoder = Decoder()
@@ -935,32 +977,78 @@ class BackfillTests(DeriveFixture):
         plain = self.request({"kind": "screenshots", "limit": 100})
         self.derive(plain)
         self.assertEqual(self.rows()["2025/0.png"]["thumbnail_status"], "failed")
-        retry = self.request({"kind": "screenshots", "limit": 1, "retry_failed": True})
+        retry = self.request({"kind": "screenshots", "limit": 1, "retry": ["failed"]})
         self.derive(retry)
-        self.assertIn("1 failed queued again", self.detail(retry))
+        self.assertIn("1 queued again", self.detail(retry))
         self.assertEqual(self.rows()["2025/0.png"]["thumbnail_status"], "made")
 
-    def test_the_command_passes_retry_failed(self):
-        out = io.StringIO()
-        arguments = [
-            "--config",
-            str(self.config_path),
-            "media-backfill",
-            "screen",
-            "screenshots",
-            "--retry-failed",
-            "--duckdb",
-            str(self.warehouse),
-            "--metadata",
-            str(self.store.url),
-        ]
+    def test_unreadable_files_are_retried_only_when_asked(self):
+        self.queue({"2025/0.png": png_body()})
+        with patch.object(Decoder, "thumbnails", return_value=("unreadable", {})):
+            self.derive(self.request())
+        self.assertEqual(self.rows()["2025/0.png"]["thumbnail_status"], "unreadable")
+        failed_only = self.request(
+            {"kind": "screenshots", "limit": 1, "retry": ["failed"]}
+        )
+        self.derive(failed_only)
+        self.assertEqual(self.rows()["2025/0.png"]["thumbnail_status"], "unreadable")
+        both = {"kind": "screenshots", "limit": 1, "retry": ["failed", "unreadable"]}
+        self.derive(self.request(both))
+        self.assertEqual(self.rows()["2025/0.png"]["thumbnail_status"], "made")
+
+    def test_a_run_dying_after_the_retry_was_queued_leaves_it_to_the_next(self):
+        self.queue({"2025/0.png": png_body()})
+        with patch.object(Decoder, "thumbnails", return_value=("unreadable", {})):
+            self.derive(self.request())
+        retry = self.request(
+            {"kind": "screenshots", "limit": 1, "retry": ["unreadable"]}
+        )
+        with (
+            patch.object(Decoder, "thumbnails", side_effect=Killed),
+            self.assertRaises(Killed),
+        ):
+            self.derive(retry)
+        [queued] = self.store.pending_media("test", "screen", "screenshots", 10)
+        self.assertEqual((queued.key, queued.retry), ("2025/0.png", True))
+        # Any later run, not only a backfill, derives it despite its row.
+        self.derive(self.request())
+        self.assertEqual(self.rows()["2025/0.png"]["thumbnail_status"], "made")
+
+    def test_the_command_passes_the_statuses_to_retry(self):
+        for given, wanted in (
+            (["--retry"], ["failed"]),
+            (["--retry", "failed,unreadable"], ["failed", "unreadable"]),
+        ):
+            out = io.StringIO()
+            arguments = [
+                "--config",
+                str(self.config_path),
+                "media-backfill",
+                "screen",
+                "screenshots",
+                *given,
+                "--duckdb",
+                str(self.warehouse),
+                "--metadata",
+                str(self.store.url),
+            ]
+            with (
+                patch("src.cli.main._worker_object_store", return_value=self.objects),
+                contextlib.redirect_stdout(out),
+            ):
+                self.assertEqual(main(arguments), 0)
+            operation_id = json.loads(out.getvalue())["operation_id"]
+            options = json.loads(self.store.get_operation(operation_id).options)
+            self.assertEqual(options["backfill"]["retry"], wanted)
+        err = io.StringIO()
         with (
             patch("src.cli.main._worker_object_store", return_value=self.objects),
-            contextlib.redirect_stdout(out),
+            contextlib.redirect_stderr(err),
+            contextlib.redirect_stdout(io.StringIO()),
         ):
-            self.assertEqual(main(arguments), 0)
-        operation = self.store.get_operation(json.loads(out.getvalue())["operation_id"])
-        self.assertTrue(json.loads(operation.options)["backfill"]["retry_failed"])
+            code = main([*arguments[:5], "--retry", "made", *arguments[-4:]])
+        self.assertEqual(code, 1)
+        self.assertIn("Only these statuses can be retried", err.getvalue())
 
     def test_the_command_runs_a_backfill_here(self):
         out = io.StringIO()
@@ -1057,6 +1145,17 @@ RealPopen = subprocess.Popen
 def dies_at_start(args, **options):
     """A child that cannot start: a broken image, a refused limit, a missing module."""
     return RealPopen([sys.executable, "-c", "raise SystemExit(1)"], **options)
+
+
+# A child whose Pillow has no JPEG decoder (a build without libjpeg).
+WITHOUT_JPEG = (
+    "import runpy, PIL._imaging as core; del core.jpeg_decoder;"
+    " runpy.run_module('src.core.thumbnails', run_name='__main__')"
+)
+
+
+def without_jpeg(args, **options):
+    return RealPopen([args[0], "-c", WITHOUT_JPEG, *args[-2:]], **options)
 
 
 def never_reads(args, **options):
