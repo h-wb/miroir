@@ -7,7 +7,10 @@
 --   location, kept audio), 'other' (any other associated type, such as 4000,
 --   a poll vote).
 -- The source's handle is the other person in a direct chat for my own messages
--- too, so a sender is only ever set for messages from someone else.
+-- too, so a sender is only ever set for messages from someone else. The sender
+-- is the person (messages_address); sender_written keeps the handle as written.
+-- A time before 2001-01-02 is no time: Apple's clock starts at 2001-01-01, and
+-- a date of 0 or close to it is a missing date, not a message from 2001.
 with raw as (
     {{ optional_input('apple_messages', 'messages', {
         'guid': 'text', 'text': 'text', 'text_source': 'text', 'service': 'text',
@@ -22,6 +25,7 @@ typed as (
     select
         *,
         coalesce(is_from_me, false) as from_me,
+        case when sent_at >= timestamptz '2001-01-02 00:00:00+00' then sent_at end as dated_at,
         case
             when coalesce(item_type, 0) <> 0 then 'event'
             when associated_message_type = 1000
@@ -38,9 +42,10 @@ typed as (
 select
     guid,
     kind,
-    sent_at,
+    dated_at as sent_at,
     from_me as is_from_me,
-    case when not from_me then nullif(handle, '') end as sender_handle,
+    case when not from_me and handle <> '' then {{ messages_address('handle') }} end as sender_handle,
+    case when not from_me then nullif(handle, '') end as sender_written,
     service,
     -- Unknown, not zero, when the collector could not read the text archive.
     visible_text <> '' as has_text,

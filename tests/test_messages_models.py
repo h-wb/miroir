@@ -37,6 +37,8 @@ ALEX, SAM, ROBIN, KAI, LEE = (
     "+15555550104",
 )
 NOBODY = "+15555550199"
+JORDAN, TAYLOR = "+15555550105", "+15555550113"
+QUINN, QUINN_LOWER = "Quinn@Example.com", "quinn@example.com"
 # January: Toronto is five hours behind UTC.
 T0 = datetime(2026, 1, 10, 4, 30, tzinfo=UTC)
 APPLE_EPOCH = datetime(2001, 1, 1, tzinfo=UTC)
@@ -111,6 +113,19 @@ def attachment(guid, message_guid, **fields):
 
 def contact(handle, **names):
     return row("contact", handle=handle, **names)
+
+
+def undated(records, date):
+    records[0]["date"] = date
+    return records
+
+
+def key(handle):
+    """A direct conversation's key: the collector's matching rule."""
+    if "@" in handle:
+        return handle.lower()
+    digits = "".join(c for c in handle if c.isdigit())
+    return digits[1:] if len(digits) == 11 and digits.startswith("1") else digits
 
 
 def write_batch(path, records):
@@ -217,6 +232,46 @@ FIXTURE = [
     *attachment("att5", "v1", mime_type="video/quicktime", media_key=None),
     *attachment("att6", "v1", transfer_name="thing.xyz", media_key="att6.xyz"),
     *attachment("att7", "r11", mime_type="image/png", media_key="att7.png"),
+    # One person written two ways: an address in two cases, a number with and
+    # without its country code.
+    *chat("iMessage;-;" + QUINN, QUINN, QUINN),
+    *chat("iMessage;-;" + QUINN_LOWER, QUINN_LOWER, QUINN_LOWER),
+    contact(QUINN, first_name="Quinn", last_name="Sample"),
+    *message("q1", 800, "iMessage;-;" + QUINN, handle=QUINN),
+    *message("q2", 805, "iMessage;-;" + QUINN_LOWER, me=True, handle=QUINN_LOWER),
+    *chat("SMS;-;5555550113", "5555550113", "5555550113"),
+    *chat("iMessage;-;" + TAYLOR, TAYLOR, TAYLOR),
+    *message("t1", 900, "SMS;-;5555550113", handle="5555550113", service="SMS"),
+    *message("t2", 903, "iMessage;-;" + TAYLOR, me=True, handle=TAYLOR),
+    # Jordan sends three in a row (the first unsent); I answer, twice.
+    *chat("iMessage;-;" + JORDAN, JORDAN, JORDAN),
+    *message(
+        "j1",
+        1000,
+        "iMessage;-;" + JORDAN,
+        handle=JORDAN,
+        text="",
+        date_retracted=apple(at(1001)),
+    ),
+    *message("j2", 1010, "iMessage;-;" + JORDAN, handle=JORDAN),
+    *message("j3", 1020, "iMessage;-;" + JORDAN, handle=JORDAN),
+    *message("j4", 1030, "iMessage;-;" + JORDAN, me=True, handle=JORDAN),
+    *message("j5", 1031, "iMessage;-;" + JORDAN, me=True, handle=JORDAN),
+    *message("j6", 1040, "iMessage;-;" + JORDAN, handle=JORDAN),
+    # Undated: no date, and a date at Apple's epoch.
+    *undated(message("z1", 0, "iMessage;-;" + SAM, handle=SAM), None),
+    *undated(message("z2", 0, "iMessage;-;" + SAM, me=True, handle=SAM), 1),
+    # Stickers are each their own reaction; a sticker removal cancels none.
+    *reaction("k1", 420, BOOK, 1000, "p:0/g1", handle=ROBIN),
+    *reaction("k2", 421, BOOK, 2007, "p:0/g1", handle=ROBIN),
+    *reaction("k3", 422, BOOK, 3007, "p:0/g1", handle=ROBIN),
+    # A tapback changed from love to like with no removal row: only like stands.
+    *reaction("k4", 430, BOOK, 2000, "p:0/g3", handle=KAI),
+    *reaction("k5", 431, BOOK, 2001, "p:0/g3", handle=KAI),
+    # An untitled group with nobody listed, and a chat with no identifier.
+    *chat("iMessage;+;chat444", "chat444", style=43),
+    *message("w1", 1100, "iMessage;+;chat444", me=True),
+    *chat("iMessage;-;", ""),
 ]
 
 
@@ -348,7 +403,7 @@ class MessagesModelsTests(unittest.TestCase):
         )
         self.assertEqual(upgraded.analyses[0].package.id, "messages")
 
-    def test_conversations_are_keyed_by_identifier_and_named(self):
+    def test_conversations_are_keyed_by_person_and_named(self):
         rows = self.query(
             "select conversation_key, display_name, is_group, participants, "
             "messages_sent, messages_received, attachments, services "
@@ -357,8 +412,11 @@ class MessagesModelsTests(unittest.TestCase):
         self.assertEqual(
             rows,
             [
-                (ALEX, "Alex Example", False, 1, 3, 2, 1, "SMS, iMessage"),
-                (NOBODY, NOBODY, False, 0, 1, 0, 0, "SMS"),
+                (key(ALEX), "Alex Example", False, 1, 3, 2, 1, "SMS, iMessage"),
+                (key(JORDAN), JORDAN, False, 1, 2, 4, 0, "iMessage"),
+                # As written in the chat with the latest message.
+                (key(TAYLOR), TAYLOR, False, 1, 1, 1, 0, "SMS, iMessage"),
+                (key(NOBODY), NOBODY, False, 0, 1, 0, 0, "SMS"),
                 ("chat111", "Book Club", True, 3, 1, 3, 2, "iMessage"),
                 ("chat222", f"{LEE}, Kai, Robin Sample", True, 3, 0, 1, 0, "iMessage"),
                 (
@@ -371,15 +429,21 @@ class MessagesModelsTests(unittest.TestCase):
                     2,
                     "iMessage",
                 ),
-                (SAM, SAM, False, 1, 1, 2, 0, "iMessage"),
+                ("chat444", "Group", True, 0, 1, 0, 0, "iMessage"),
+                # No identifier and nothing after the guid's prefix: the guid.
+                ("iMessage;-;", "iMessage;-;", False, 0, 0, 0, 0, "iMessage"),
+                (QUINN_LOWER, "Quinn Sample", False, 1, 1, 1, 0, "iMessage"),
+                # Undated messages count here, but not in the first and last times.
+                (SAM, SAM, False, 1, 2, 3, 0, "iMessage"),
             ],
         )
         self.assertEqual(
             self.query(
-                "select first_message_at, last_message_at "
-                f"from {self.relation('conversations')} where conversation_key = '{ALEX}'"
+                "select conversation_key, first_message_at, last_message_at "
+                f"from {self.relation('conversations')} "
+                f"where conversation_key in ('{key(ALEX)}', '{SAM}') order by 1"
             ),
-            [(at(0), at(102 + 48 * 60))],
+            [(key(ALEX), at(0), at(102 + 48 * 60)), (SAM, at(200), at(215))],
         )
 
     def test_messages_exclude_reactions_and_events_and_carry_no_text(self):
@@ -388,7 +452,8 @@ class MessagesModelsTests(unittest.TestCase):
         self.assertEqual(
             guids,
             ["a1", "a2", "a3", "a4", "a5", "g1", "g2", "g3", "g4"]
-            + ["n1", "o1", "s1", "s2", "s3", "u1", "v1"],
+            + ["j1", "j2", "j3", "j4", "j5", "j6", "n1", "o1", "q1", "q2"]
+            + ["s1", "s2", "s3", "t1", "t2", "u1", "v1", "w1", "z1", "z2"],
         )
         columns = {
             c
@@ -407,23 +472,24 @@ class MessagesModelsTests(unittest.TestCase):
                 "order by guid"
             ),
             [
-                ("a1", ALEX, False, ALEX, "Alex Example", True, 11, 0)
+                ("a1", key(ALEX), False, key(ALEX), "Alex Example", True, 11, 0)
                 + (False, False, False, False),
-                ("a2", ALEX, True, None, None, False, 0, 1)
+                ("a2", key(ALEX), True, None, None, False, 0, 1)
                 + (False, False, False, False),
-                ("g1", "chat111", False, ROBIN, "Robin Sample", True, 9, 1)
+                ("g1", "chat111", False, key(ROBIN), "Robin Sample", True, 9, 1)
                 + (False, False, False, True),
                 ("g2", "chat111", True, None, None, True, 4, 1)
                 + (True, False, False, False),
-                ("g3", "chat111", False, KAI, "Kai", True, 6, 0)
+                ("g3", "chat111", False, key(KAI), "Kai", True, 6, 0)
                 + (False, True, False, False),
-                ("g4", "chat111", False, KAI, "Kai", False, 0, 0)
+                ("g4", "chat111", False, key(KAI), "Kai", False, 0, 0)
                 + (False, False, True, False),
                 ("o1", None, False, SAM, SAM, True, 6, 0)
                 + (False, False, False, False),
                 ("s3", SAM, False, SAM, SAM, False, 0, 0)
                 + (False, False, False, False),
-                ("u1", "chat222", False, LEE, LEE, None, None, 0)
+                # No contact: the handle as written.
+                ("u1", "chat222", False, key(LEE), LEE, None, None, 0)
                 + (False, False, False, False),
             ],
         )
@@ -438,11 +504,26 @@ class MessagesModelsTests(unittest.TestCase):
             [("a1", "2026-01-09", 23, 5), ("a2", "2026-01-10", 0, 6)],
         )
 
-    def test_reply_minutes_both_ways_in_direct_conversations_with_a_cap(self):
+    def test_a_missing_or_epoch_date_is_no_time(self):
+        self.assertEqual(
+            self.query(
+                "select guid, conversation_key, sent_at, day, hour, reply_minutes "
+                f"from {self.relation('messages')} where guid in ('z1', 'z2') "
+                "order by guid"
+            ),
+            [("z1", SAM, None, None, None, None), ("z2", SAM, None, None, None, None)],
+        )
+        self.assertEqual(
+            self.query(f"select min(day)::text from {self.relation('daily')}"),
+            [("2026-01-09",)],
+        )
+
+    def test_reply_minutes_count_from_the_first_message_of_the_other_run(self):
         rows = self.query(
             "select guid, reply_minutes from "
             f"{self.relation('messages')} where guid in "
-            "('a1', 'a2', 'a3', 'a4', 'a5', 's1', 's2', 's3', 'g1', 'g2', 'o1') "
+            "('a1', 'a2', 'a3', 'a4', 'a5', 's1', 's2', 's3', 'g1', 'g2', 'o1', "
+            "'j1', 'j2', 'j3', 'j4', 'j5', 'j6', 'q1', 'q2', 't1', 't2') "
             "order by guid"
         )
         self.assertEqual(
@@ -451,18 +532,28 @@ class MessagesModelsTests(unittest.TestCase):
                 ("a1", None),  # nothing before it
                 ("a2", 40.0),  # mine, answering Alex
                 ("a3", None),  # mine again
-                ("a4", 60.0),  # Alex, answering me
+                ("a4", 62.0),  # Alex, answering my run that began with a2
                 ("a5", None),  # two days later: beyond the cap
                 ("g1", None),  # groups have no reply time
                 ("g2", None),
+                ("j1", None),
+                ("j2", None),
+                ("j3", None),
+                ("j4", 30.0),  # since j1, the first of Jordan's three (unsent)
+                ("j5", None),
+                ("j6", 10.0),
                 ("o1", None),
+                ("q1", None),
+                ("q2", 5.0),  # across two ways of writing one address
                 ("s1", None),
                 ("s2", 10.0),
                 ("s3", None),
+                ("t1", None),
+                ("t2", 3.0),  # across a number with and without its country code
             ],
         )
 
-    def test_reactions_added_removed_and_added_again(self):
+    def test_reactions_added_removed_changed_and_stickers(self):
         self.assertEqual(
             self.query(
                 "select guid, conversation_key, kind, is_from_me, sender_handle, "
@@ -470,29 +561,62 @@ class MessagesModelsTests(unittest.TestCase):
                 f"from {self.relation('reactions')} order by guid"
             ),
             [
-                ("r1", ALEX, "love", False, ALEX, "Alex Example", "a2", 0),
-                ("r10", "chat111", "question", False, KAI, "Kai", "g2", 0),
+                (
+                    "k1",
+                    "chat111",
+                    "sticker",
+                    False,
+                    key(ROBIN),
+                    "Robin Sample",
+                    "g1",
+                    0,
+                ),
+                (
+                    "k2",
+                    "chat111",
+                    "sticker",
+                    False,
+                    key(ROBIN),
+                    "Robin Sample",
+                    "g1",
+                    0,
+                ),
+                ("k5", "chat111", "like", False, key(KAI), "Kai", "g3", 0),
+                ("r1", key(ALEX), "love", False, key(ALEX), "Alex Example", "a2", 0),
+                ("r10", "chat111", "question", False, key(KAI), "Kai", "g2", 0),
                 ("r11", "chat111", "sticker", True, None, None, "g1", 0),
-                ("r4", ALEX, "laugh", True, None, None, "a1", 0),
+                ("r4", key(ALEX), "laugh", True, None, None, "a1", 0),
                 # In no chat: the conversation of the message it targets.
-                ("r5", ALEX, "emoji", False, ALEX, "Alex Example", "a4", 1),
-                ("r9", "chat111", "emphasis", False, ROBIN, "Robin Sample", "g2", 0),
+                ("r5", key(ALEX), "emoji", False, key(ALEX), "Alex Example", "a4", 1),
+                (
+                    "r9",
+                    "chat111",
+                    "emphasis",
+                    False,
+                    key(ROBIN),
+                    "Robin Sample",
+                    "g2",
+                    0,
+                ),
             ],
         )
 
-    def test_participants_merge_services_and_include_senders(self):
+    def test_participants_are_people_whatever_the_service_or_spelling(self):
         self.assertEqual(
             self.query(
                 "select conversation_key, handle, display_name, has_contact_name, "
                 f"messages_sent from {self.relation('participants')} "
-                f"where conversation_key in ('{ALEX}', 'chat111', '{NOBODY}') "
+                f"where conversation_key in ('{key(ALEX)}', 'chat111', "
+                f"'{key(NOBODY)}', '{key(TAYLOR)}', '{QUINN_LOWER}') "
                 "order by 1, 2"
             ),
             [
-                (ALEX, ALEX, "Alex Example", True, 2),
-                ("chat111", ALEX, "Alex Example", True, 0),
-                ("chat111", ROBIN, "Robin Sample", True, 1),
-                ("chat111", KAI, "Kai", True, 2),
+                (key(ALEX), key(ALEX), "Alex Example", True, 2),
+                (key(TAYLOR), key(TAYLOR), TAYLOR, False, 1),
+                ("chat111", key(ALEX), "Alex Example", True, 0),
+                ("chat111", key(ROBIN), "Robin Sample", True, 1),
+                ("chat111", key(KAI), "Kai", True, 2),
+                (QUINN_LOWER, QUINN_LOWER, "Quinn Sample", True, 1),
             ],
         )
 
@@ -504,7 +628,7 @@ class MessagesModelsTests(unittest.TestCase):
                 "order by 1"
             ),
             [
-                ("att1", "a2", ALEX, True, "image", 1000, True),
+                ("att1", "a2", key(ALEX), True, "image", 1000, True),
                 ("att3", "g2", "chat111", True, "document", None, True),
                 ("att4", "g1", "chat111", False, "audio", None, True),
                 ("att5", "v1", "chat333", True, "video", None, False),
@@ -521,10 +645,15 @@ class MessagesModelsTests(unittest.TestCase):
             ),
             [
                 ("2026-01-09", 0, 1, 1, 0, 0),
-                ("2026-01-10", 6, 8, 6, 5, 6),
+                ("2026-01-10", 11, 14, 10, 5, 9),
                 ("2026-01-11", 0, 0, 0, 0, 0),
                 ("2026-01-12", 1, 0, 1, 0, 0),
             ],
+        )
+
+    def test_the_package_builds_at_most_every_ten_minutes(self):
+        self.assertEqual(
+            self.miroir.analyses[0].package.min_build_interval, timedelta(minutes=10)
         )
 
     def test_builds_without_contacts_handles_or_chats(self):
@@ -544,7 +673,7 @@ class MessagesModelsTests(unittest.TestCase):
             ),
             [],
         )
-        expected = [(ALEX, ALEX, False, 1, 1, 1)]
+        expected = [(key(ALEX), ALEX, False, 1, 1, 1)]
         conversations = (
             "select conversation_key, display_name, is_group, participants, "
             f"messages_sent, messages_received from {self.relation('conversations', plan)}"

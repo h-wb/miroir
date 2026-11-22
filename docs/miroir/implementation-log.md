@@ -2409,3 +2409,36 @@ Postgres and Prefect ones), with ruff, format, mypy and the collector's strict
 mypy clean. Without an analysis's variables, `dbt ls` lists none of the new
 models. Merged with `main` after decision 042 removed `run_dbt`; the models
 used none of the macro branches it removed.
+
+## 2026-11-22 — The messages package after review (PR #46)
+
+An independent review at `f43de35` judged the package safe to merge after two
+fixes and listed four smaller ones. All six were done; decision 041 records them.
+
+- **One person written two ways.** `Quinn@Example.com` and `quinn@example.com`,
+  or SMS `5555550113` and iMessage `+15555550113`, were two conversations. The
+  dbt macro `messages_address` now holds the collector's contact-matching rule
+  (lower-case addresses; a number's digits, a leading 1 dropped from eleven; under
+  seven digits as written). Direct chats take it as their key; senders,
+  participants and contacts join on it; names fall back to the identifier as
+  written, from the chat with the latest message. Whether a chat is a group is now
+  decided per chat (style, then room name, then more than one listed handle),
+  because a group id holds digits that the rule would turn into a number.
+- **Build interval.** `min_build_interval` is 10 minutes.
+- **Dates.** A time before 2001-01-02 is no time (null `sent_at`, so null `day`).
+  Such a message stays in `messages` and in its conversation's totals, and is
+  absent from `daily`, first and last times and reply times.
+- **Reply times** count from the first message of the other side's preceding run,
+  not its last: three messages at 0, 10 and 20 minutes answered at 30 give 30.
+- **Reactions.** Stickers (1000, 2007) are each their own row and a 3007 removal
+  cancels none. Tapbacks still cancel by kind; then only a sender's latest
+  standing tapback per part is kept.
+- **Names.** An unnamed group with nobody listed is `Group`; a chat with an empty
+  identifier and guid tail takes the whole guid as its key and name.
+
+Validation: the model tests gained cases for each (one address in two cases, a
+number with and without its country code, both with a reply across them; a burst
+answered, with an unsent first message; a null date and a date at the epoch; two
+stickers and a sticker removal; a love changed to like; an unnamed group with
+nobody listed; a chat with no identifier), 12 tests now. A build on 200,000
+synthetic messages still takes 3.7 to 4.3 seconds warm, 5.0 cold.

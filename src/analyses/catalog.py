@@ -236,6 +236,8 @@ PACKAGES: Mapping[str, Package] = {
                 "daily",
             ),
             _single("messages", "Apple Messages", "apple_messages"),
+            # The collector delivers about every minute; each build is a full one.
+            min_build_interval=timedelta(minutes=10),
         ),
         Package(
             "crossovers",

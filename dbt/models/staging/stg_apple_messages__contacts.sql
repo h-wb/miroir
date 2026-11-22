@@ -1,6 +1,8 @@
 {{ config(enabled=var('miroir_namespace', none) is not none) }}
--- Address book names matched to handles by the collector, when it sends them.
--- A name is the first and last name, else the nickname, else the organization.
+-- Address book names matched to handles by the collector, when it sends them,
+-- by person (messages_address). A name is the first and last name, else the
+-- nickname, else the organization; handles of one person that were given
+-- different names take the first in order.
 with raw as (
     {{ optional_input('apple_messages', 'contacts', {
         'handle': 'text', 'first_name': 'text', 'last_name': 'text',
@@ -9,7 +11,7 @@ with raw as (
 ),
 named as (
     select
-        handle,
+        {{ messages_address('handle') }} as address,
         coalesce(
             nullif(btrim(concat_ws(' ', btrim(first_name), btrim(last_name))), ''),
             nullif(btrim(nickname), ''),
@@ -17,4 +19,7 @@ named as (
         ) as display_name
     from raw
 )
-select * from named where display_name is not null
+select address, min(display_name) as display_name
+from named
+where display_name is not null
+group by 1
