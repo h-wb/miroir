@@ -155,9 +155,13 @@ def main(argv: list[str] | None = None) -> int:
         help="SQLAlchemy URL of the metadata store; required with --duckdb",
     )
     backfill.add_argument(
-        "--retry-failed",
-        action="store_true",
-        help="Derive again the files recorded as failed (after an incident)",
+        "--retry",
+        nargs="?",
+        const="failed",
+        default="",
+        metavar="STATUS[,STATUS]",
+        help="Derive again the files recorded with these statuses, after a"
+        " decoder incident: failed (the default) and/or unreadable",
     )
     commands_with_store = (
         status,
@@ -365,7 +369,7 @@ def _orchestrate(
             )
         if args.command == "media-backfill":
             operation_id = service.request_media_backfill(
-                args.connection, args.kind, args.limit, args.retry_failed
+                args.connection, args.kind, args.limit, _statuses(args.retry)
             )
             return _print({"operation_id": operation_id})
         if args.action == "plan":
@@ -546,13 +550,19 @@ def _backfill_here(
         store=store,
         origin="local",
         submit=lambda operation: None,
-        backfill=backfill_options(connection, args.kind, args.limit, args.retry_failed),
+        backfill=backfill_options(
+            connection, args.kind, args.limit, _statuses(args.retry)
+        ),
         join=False,
     )
     assert operation_id is not None  # a backfill never joins
     return execute_operation(
         miroir, operation_id, lock_wait=EXECUTE_LOCK_WAIT, **common
     )
+
+
+def _statuses(text: str) -> tuple[str, ...]:
+    return tuple(part.strip() for part in text.split(",") if part.strip())
 
 
 def _local_sqlite(url: str | None) -> bool:

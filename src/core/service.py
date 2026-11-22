@@ -219,14 +219,14 @@ class MiroirService:
         )
 
     def request_media_backfill(
-        self, connection_id: str, kind: str, limit: int, retry_failed: bool = False
+        self, connection_id: str, kind: str, limit: int, retry: tuple[str, ...] = ()
     ) -> str:
         """Ask the worker to walk the bucket for files stored before thumbnails."""
         miroir = self.miroir()
         if miroir.media is None:
             raise OperationError("Media is not configured")
         connection = self._connection(miroir, connection_id)
-        options = media.backfill_options(connection, kind, limit, retry_failed)
+        options = media.backfill_options(connection, kind, limit, retry)
         operation_id = self._request_derive(miroir, connection_id, "request", options)
         assert operation_id is not None  # a backfill never joins
         return operation_id

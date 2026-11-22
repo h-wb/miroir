@@ -223,6 +223,8 @@ media_pending = sa.Table(
     sa.Column("stored_at", sa.DateTime(timezone=True), nullable=False),
     # Decodes begun: a file whose decoding ended the process is not tried forever.
     sa.Column("attempts", sa.Integer, nullable=False),
+    # Derive it again even if its row says it was derived (a backfill's --retry).
+    sa.Column("retry", sa.Boolean, nullable=False),
     sa.Index(
         "ix_media_pending_stored",
         "miroir_id",
@@ -252,6 +254,7 @@ class PendingMedia:
     size: int
     stored_at: datetime
     attempts: int
+    retry: bool = False
 
 
 class OperationError(RuntimeError):
@@ -1485,6 +1488,7 @@ class MetadataStore:
                 "size": size,
                 "stored_at": stored_at,
                 "attempts": 0,
+                "retry": False,
             }
             for key, size, stored_at in objects
         }
@@ -1501,6 +1505,50 @@ class MetadataStore:
         with self.engine.begin() as db:
             db.execute(statement)
 
+    def queue_retry(
+        self,
+        miroir_id: str,
+        connection_id: str,
+        kind: str,
+        objects: list[tuple[str, int, datetime]],
+    ) -> None:
+        """Queue (key, size, stored at) to be derived again whatever their rows
+        say. One write, so a run that dies after it leaves them queued."""
+        if not objects:
+            return
+        from sqlalchemy.dialects import postgresql, sqlite
+
+        insert = (
+            postgresql.insert
+            if self.engine.dialect.name == "postgresql"
+            else sqlite.insert
+        )
+        rows = {
+            key: {
+                "miroir_id": miroir_id,
+                "connection_id": connection_id,
+                "kind": kind,
+                "key": key,
+                "size": size,
+                "stored_at": stored_at,
+                "attempts": 0,
+                "retry": True,
+            }
+            for key, size, stored_at in objects
+        }
+        statement = insert(media_pending).values(list(rows.values()))
+        statement = statement.on_conflict_do_update(
+            index_elements=["miroir_id", "connection_id", "kind", "key"],
+            set_={
+                "size": statement.excluded.size,
+                "stored_at": statement.excluded.stored_at,
+                "attempts": 0,
+                "retry": True,
+            },
+        )
+        with self.engine.begin() as db:
+            db.execute(statement)
+
     def pending_media(
         self, miroir_id: str, connection_id: str, kind: str, limit: int
     ) -> list[PendingMedia]:
@@ -1512,6 +1560,7 @@ class MetadataStore:
                     media_pending.c.size,
                     media_pending.c.stored_at,
                     media_pending.c.attempts,
+                    media_pending.c.retry,
                 )
                 .where(
                     media_pending.c.miroir_id == miroir_id,
@@ -1522,7 +1571,9 @@ class MetadataStore:
                 .limit(limit)
             ).all()
         return [
-            PendingMedia(row.key, row.size, _utc(row.stored_at), row.attempts)
+            PendingMedia(
+                row.key, row.size, _utc(row.stored_at), row.attempts, bool(row.retry)
+            )
             for row in rows
         ]
 
