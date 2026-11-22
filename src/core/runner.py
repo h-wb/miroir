@@ -191,13 +191,16 @@ def request_derive(
 ) -> str | None:
     """Record a derive run of a connection's media and `submit` it, or join one.
 
-    Confirmations within `derive_delay_seconds` share one run (decision 040): a
-    request joins a run that has not started and was due no longer than one delay
-    ago, since it starts after this request's files were queued; otherwise it
-    records one due a delay from now. Without `join` (a backfill, or the next
-    batch of a run that stopped at its limit) the run is due now. Returns the new
-    operation's ID, or None when joined. ConnectionBusy when another request is
-    deciding, which then covers this one.
+    Confirmations share one run (decision 040): a request joins a derive run
+    that has not started and is bound to its own backend run, however long ago it
+    was due (a long load may hold the deployment), since it starts after this
+    request's files were queued. Otherwise it records one due
+    `derive_delay_seconds` from now. A bound run that is lost is closed by
+    `refresh` when the orchestrator reports it ended; a backfill requests a run
+    regardless. Without `join` (a backfill, or the next batch of a run that
+    stopped at its limit) the run is due now. Returns the new operation's ID, or
+    None when joined. ConnectionBusy when another request is deciding, which then
+    covers this one.
     """
     if miroir.media is None:
         raise OperationError("Media is not configured")
@@ -207,11 +210,11 @@ def request_derive(
         f"derive-request-{miroir.id}-{connection_id}", DERIVE_DECISION_WAIT
     ):
         now = datetime.now(timezone.utc)
-        if join:
-            for waiting in store.unstarted_derives(miroir.id, connection_id):
-                due = json.loads(waiting.options or "{}").get("not_before")
-                if due is not None and datetime.fromisoformat(due) > now - delay:
-                    return None
+        if join and any(
+            waiting.backend_run_id is not None
+            for waiting in store.unstarted_derives(miroir.id, connection_id)
+        ):
+            return None
         options: dict[str, Any] = {
             "not_before": (now + delay if join else now).isoformat()
         }
@@ -1066,7 +1069,8 @@ def _derive(
         transformation="succeeded",
         transformation_detail=summary.detail()[:200],
     )
-    if summary.remaining and run.defer is not None:
+    # Only after progress: a run that changed nothing would schedule itself forever.
+    if summary.remaining and summary.progressed and run.defer is not None:
         _continue_derive(run, miroir, operation)
     return RunOutcome(operation.id, number, "not_run", "succeeded", (), recorded)
 

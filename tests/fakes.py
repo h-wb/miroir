@@ -3,7 +3,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 from urllib.parse import quote, unquote, urlsplit
 
-from src.core.media import ListedObject, ObjectTooLarge, StoredObject
+from src.core.media import ListedObject, Listing, ObjectTooLarge, StoredObject
 
 
 class FakeObjectStore:
@@ -12,6 +12,8 @@ class FakeObjectStore:
         self.bodies: dict[str, tuple[bytes, str]] = {}
         self.modified: dict[str, datetime] = {}
         self.gets: list[str] = []
+        # Some S3-compatible stores return short pages while more remain.
+        self.page_size = 1000
 
     def add(
         self,
@@ -25,16 +27,20 @@ class FakeObjectStore:
         self.objects[name] = len(body)
         self.modified[name] = modified or datetime.now(timezone.utc)
 
-    def list_objects(self, prefix: str, after: str, limit: int) -> list[ListedObject]:
+    def list_objects(self, prefix: str, after: str, limit: int) -> Listing:
         names = sorted(n for n in self.objects if n.startswith(prefix) and n > after)
-        return [
-            ListedObject(
-                n,
-                self.objects[n],
-                self.modified.get(n, datetime(2026, 1, 1, tzinfo=timezone.utc)),
-            )
-            for n in names[: min(limit, 1000)]
-        ]
+        page = min(limit, 1000, self.page_size)
+        return Listing(
+            [
+                ListedObject(
+                    n,
+                    self.objects[n],
+                    self.modified.get(n, datetime(2026, 1, 1, tzinfo=timezone.utc)),
+                )
+                for n in names[:page]
+            ],
+            len(names) > page,
+        )
 
     def head(self, name: str) -> int | None:
         return self.objects.get(name)

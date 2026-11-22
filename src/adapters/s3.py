@@ -8,7 +8,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from src.core.config import MediaConfig
-from src.core.media import ListedObject, ObjectTooLarge, StoredObject
+from src.core.media import ListedObject, Listing, ObjectTooLarge, StoredObject
 
 MISSING = {"404", "NoSuchKey", "NotFound"}
 ACCESS_KEY_VARIABLE = "MIROIR_MEDIA_ACCESS_KEY_ID"
@@ -91,15 +91,18 @@ class S3ObjectStore:
             Bucket=self.bucket, Key=name, Body=body, ContentType=content_type
         )
 
-    def list_objects(self, prefix: str, after: str, limit: int) -> list[ListedObject]:
+    def list_objects(self, prefix: str, after: str, limit: int) -> Listing:
         options: dict[str, Any] = {"StartAfter": after} if after else {}
         response = self.client.list_objects_v2(
             Bucket=self.bucket, Prefix=prefix, MaxKeys=min(limit, 1000), **options
         )
-        return [
-            ListedObject(item["Key"], int(item["Size"]), item["LastModified"])
-            for item in response.get("Contents", [])
-        ]
+        return Listing(
+            [
+                ListedObject(item["Key"], int(item["Size"]), item["LastModified"])
+                for item in response.get("Contents", [])
+            ],
+            bool(response.get("IsTruncated", False)),
+        )
 
     def presign_put(self, name: str, content_type: str, expires: int) -> str:
         url = self.link_client.generate_presigned_url(

@@ -1831,10 +1831,11 @@ Consequences:
 
 ### 040 amendment — Thumbnails and stored media (phase 1b)
 
-Status: proposed with the phase 1b pull request, 2026-11-22. What building
-thumbnails and `media_objects` had to decide that the plan above left open.
-Where a choice touched security, cost or the shared scheduling, the more
-conservative one was taken; those are marked *(conservative)*.
+Status: proposed with the phase 1b pull request, 2026-11-22, revised after its
+review the same day. What building thumbnails and `media_objects` had to decide
+that the plan above left open. Where a choice touched security, cost or the
+shared scheduling, the more conservative one was taken; those are marked
+*(conservative)*.
 
 **How the worker knows what to derive: a queue in the metadata store.** The
 server cannot write to the warehouse, so when it answers `stored` to a
@@ -1842,8 +1843,8 @@ confirmation it first records the file (connection, kind, key, size, time) in
 `media_pending`, metadata schema 8. The derive run drains it. A failure to record
 fails the confirmation. A file answered `present` to an upload request is queued
 too: that is what a device is told on its next pass after a confirmation failed
-or was lost, and it does not confirm such a file again. A file queued again with the
-same size keeps its entry; with another size it replaces it, and a run that
+or was lost, and it does not confirm such a file again. A file queued again with
+the same size keeps its entry; with another size it replaces it, and a run that
 handled the old size leaves the new one queued. Two other ways were weighed:
 
 - *Listing the bucket on each run.* The listing is in name order, not time order,
@@ -1859,23 +1860,34 @@ handled the old size leaves the new one queued. Two other ways were weighed:
 submission, idempotency and reconciliation. Its outcome is recorded as the
 attempt's transformation (ingestion `not_run`), with counts in the detail. It is
 not a load: connection status, the last sync, "requested, not started" and the
-analyses ignore it. A settings edit since the request does not block it, because
-its work is the queue and the media settings, not the connection's settings.
+analyses ignore it, and so does the connection page's history, which shows one
+line instead (files waiting, the last derive run and its outcome). A settings edit
+since the request does not block it, because its work is the queue and the media
+settings, not the connection's settings.
 
 **Debounced like a deferred build.** A request joins a derive run of the
-connection that has not started and was due no longer than one delay ago;
-otherwise it records one due `media.derive_delay_seconds` from now (default 300)
-and submits it with that start, under an advisory lock per connection. Prefect
-schedules it with the operation ID as idempotency key; without Prefect it starts
-at once. Requesting never fails a confirmation: if Prefect refuses, the operation
-is closed as blocked and the files wait in the queue for the next request.
+connection that has not started and is bound to its own backend run, however
+long ago it was due: while a long load holds the deployment, confirmations keep
+joining the one waiting run instead of piling up empty ones. Otherwise it records
+a run due `media.derive_delay_seconds` from now (default 300) and submits it with
+that start, under an advisory lock per connection; Prefect schedules it with the
+operation ID as idempotency key. A run without a bound backend run (a local
+executor, which starts it at once) is never joined. Requesting never fails a
+confirmation: if Prefect refuses, or the deployment cannot be prepared, the
+operation is closed as blocked and the files wait in the queue for the next
+request. If Prefect loses a bound run, `refresh` closes it when Prefect reports
+it ended (crashed, cancelled, deleted), and the next confirmation requests a new
+one; a run Prefect keeps scheduled but never starts holds the queue until then,
+and a backfill requests a run regardless. Files are never lost by any of this:
+they stay queued.
 
 **Bounded runs** *(conservative)*. A run handles at most `media.derive_batch`
-files per kind (default 500, about one to three minutes) and, when more wait,
-schedules the next run due now, which nothing joins. The deployment's limit of one
-run at a time means a backlog drains in steps that the connection's loads take
-turns with, instead of one run holding the deployment for hours. Without Prefect a
-run continues itself until the queue is empty.
+files per kind (default 500, two to three minutes) and, when more of a derived kind
+wait and it made progress, schedules the next run due now, which nothing joins. A
+run that changed nothing schedules nothing (an entry of a kind that is no longer
+derived is not counted as waiting). The deployment's limit of one run at a time
+means a backlog drains in steps that the connection's loads take turns with.
+Without Prefect a run continues itself while it makes progress.
 
 **`media_objects`.** One table per connection's dataset (its binding), so the
 timeline's models find it beside the rows they join, as every input follows its
@@ -1887,31 +1899,69 @@ write holds the connection's lock because both write the same dataset. Merged on
 for a backfilled file, the bucket's modification time), `thumbnail_w360`,
 `thumbnail_w1280`, `thumbnail_status`, `derived_at`, `derive_version`. The status
 is `made`, or why there is none: `unsupported`, `too_large`, `unreadable`,
-`failed`. A file gone from the bucket when the run reaches it gets no row. A
-queued file whose row has the same size and version is not read again.
+`failed`. A queued file whose row has the same size and version is not read again,
+whatever its status.
+
+What a row means, for the slice that shows "not available" tiles:
+
+- A row says the file was in the bucket when the run reached it. It is not
+  removed when the object is later deleted (a lifecycle rule, a hand): a row can
+  outlive its file.
+- No row does not mean not stored. The file may still be queued; its kind may
+  have no thumbnails, so it is not recorded at all (attachments today); it may
+  have been confirmed by a server older than schema 8 and not yet backfilled; or
+  it was gone from the bucket when the run reached it.
+- A file replaced by another with the same key and the same size is not derived
+  again; its thumbnails and row stay those of the first. Keys are unique per
+  frame or attachment, so this is a known limit, not a case met in practice.
 
 **The thumbnails.** WebP at quality 70 (360) and 80 (1280), libwebp method 2,
 which measured 40% faster than its default for 1% more bytes. A decodable image
 always gets both sizes, an image narrower than one keeping its width, so a reader
 never has to fall back to the original for one size only. A very tall image is
-fitted under WebP's height limit. EXIF orientation is applied and no metadata is
-written into the copy *(conservative: a photo's place does not travel into the
+fitted under WebP's height limit. EXIF orientation is applied, and a JPEG is
+drafted for the width it is shown at, after its rotation. No metadata is written
+into the copy *(conservative: a photo's place does not travel into the
 thumbnail)*.
 
-**Decoding untrusted bytes** *(conservative throughout)*:
+**Decoding untrusted bytes, in a child process** *(conservative throughout)*. The
+worker never decodes in its own process. `src/core/thumbnails.py` runs as a child
+(`python -m src.core.thumbnails`), started once per run and given one file at a
+time over a pipe:
 
+- No credentials: its environment holds `PATH` only, not the bucket key or the
+  database passwords. (It runs as the same user, so this keeps secrets out of
+  reach of an ordinary decoder bug, not out of reach of an exploit.)
+- An address-space limit of 1 GiB, a CPU limit per file, and a 30-second
+  timeout per file enforced by the worker, which then kills the child. Running out
+  of memory inside the child is `too_large`, not a crash.
 - The original is read with the kind's size limit (20 MB for screenshots).
-- The header is read and the pixel count checked, at most 40 million, before
-  anything is decoded. Pillow's decompression-bomb warning is an error.
+- The header is read and the shape checked before anything is decoded: at most
+  40 million pixels, at most 16,384 on either side, and at most 16 times longer
+  than wide either way, so an EXIF rotation changes nothing. Pillow keeps a
+  pointer and an allocation per row, which made a 1 × 40,000,000 PNG of 350 KB
+  cost 790 MB; the side and ratio bounds refuse it. Pillow's decompression-bomb
+  warning is an error.
 - Only the decoders of the kind's thumbnail extensions are tried (JPEG and PNG
-  for screenshots), whatever the bytes claim; only the first frame is used. A JPEG
-  is decoded at a reduced scale no smaller than 1280 wide.
+  for screenshots), whatever the bytes claim; only the first frame is used.
 - Any decoder error makes the file `unreadable`; it never fails the run.
-- The count of decodes begun is kept per queued file. One whose decoding ended the
-  process three times (a crash or a kill for memory) is recorded as `failed`
-  without being read again, so one file cannot stop the queue.
+- A file's count of decodes begun is raised only while it decodes, and reset when
+  the decode reaches an outcome. A file whose decode did not finish three times
+  (the child crashed, was killed or took too long, or the run itself died while
+  it decoded) is `failed`, and not read again. Nothing that happens to the run
+  after a file was decoded counts against that file.
+- Rows are written, and their files leave the queue, every 100 files. A run that
+  dies loses at most that much finished work, which the next run redoes.
 - A storage error ends the run after recording what it finished; the rest stays
   queued.
+
+Measured peaks inside the child, above its own 32 MB, for the worst images the
+bounds accept (40 million pixels unless said): grey with alpha 480 MB (it becomes
+RGBA), palette with transparency 365 MB, RGBA 328 MB, 16-bit grey 252 MB, grey or
+1-bit 213 MB, RGB 176 MB, 16,384 × 2,441 RGBA 303 MB (304 MB rotated by EXIF),
+16,384 × 1,024 RGBA 119 MB; a 40-megapixel JPEG 26 MB. The worker's own process
+stayed near 300 MB in a 200-file run. A flow-run Job therefore needs about 1 GiB
+for a derive run at worst; 1.5 GiB leaves room.
 
 **HEIC.** The screenshots kind accepts `.heic`, but the collector's Screen Memory
 source stores JPEG. `pillow-heif` is not added *(conservative: another native
@@ -1924,30 +1974,48 @@ conversations phase, with HEIC then; until then it is not derived at all
 what is stored, including an archive copied in by other means, and nothing that
 never was. Keys from the source's rows were rejected for the reasons above. The
 walk lists `prefix / connection / kind /` from where the last walk of that
-connection and kind stopped (`media_backfills`), queues what it finds, and then
-derives like any run. `--limit` bounds the files walked per run. Repeating it is
-safe: files already derived are recognised from `media_objects` without being
-read, and a finished walk starts again from the beginning. It runs on the worker
-by default, or in the CLI's own process into DuckDB for development.
+connection and kind stopped (`media_backfills`, the last name listed, valid key
+or not, so a name too long to be a key can neither overflow the column nor stall
+the walk), queues what it finds, and then derives like any run. Whether more
+follow is the store's own answer (`IsTruncated`), not a short page. `--limit`
+bounds the files walked per run. Repeating it is safe: files already derived are
+recognised from `media_objects` without being read, and a finished walk starts
+again from the beginning. It runs on the worker. Its `--duckdb` form, for
+development, refuses unless `--metadata` names a local SQLite file, so it can
+never drain the installation's queue or move its walk into a local file.
 
 **The worker holds the bucket key.** 033 gave the storage credentials to the server
 alone. Reading originals and writing thumbnails needs them on the worker's
-flow-run Jobs too; without them derive runs are blocked and nothing else changes.
-The key needs read and write on the bucket and nothing more.
+flow-run Jobs too. Added to the shared flow-run Job template, as on this
+installation, every connector's runs get them and any of them can read and write
+the whole bucket. Without them derive runs are blocked and nothing else changes. The key needs read and
+write on the bucket and nothing more.
 
-**Boundaries.** Only `src/core/thumbnails.py` imports Pillow; only
-`src/core/derive.py` imports it; only the runner imports the derive module, inside
-a derive run. A test imports the server's modules in a fresh interpreter and
-checks no image library was loaded. `src/pipelines` may now import
-`src.adapters.s3`, to build the worker's bucket client.
+**Boundaries.** Only `src/core/thumbnails.py` imports Pillow, and nothing in `src`
+imports it: it runs as its own process. Only the runner imports the derive module,
+inside a derive run. A test imports the server's modules and the derive module in
+a fresh interpreter and checks no image library was loaded. `src/pipelines` may
+now import `src.adapters.s3`, to build the worker's bucket client.
+
+**Review.** An independent review of the first version found six defects and
+seven lesser points. Fixed: a file whose decoding ended the process marked every
+file before it in the batch as failed (attempts raised for the whole batch, rows
+written at its end); the pixel cap did not bound memory for thin images; the
+`--duckdb` backfill could drain the installation's queue; a run that changed
+nothing scheduled the next one forever; the walk took a short page for the end and
+could store a cursor longer than its column; a rotated JPEG was drafted to a
+quarter of its resolution. Of the lesser points, a slow decode is now bounded by
+the child's timeout, waiting runs absorb confirmations whatever their age, and
+derive runs left the connection's history. Documented instead of built: what a
+missing row means, that a row outlives its file, the same-key same-size limit,
+that a run never started is joined until it is closed, and that every flow-run Job
+holds the bucket key.
 
 Consequences:
 
 - Metadata schema 8: server, worker and flow-run image are released together.
 - Thumbnails lag uploads by the delay plus queueing behind the connection's loads.
 - Measured on generated screens on a development machine (one core): about
-  0.15 s per JPEG screenshot and 0.2 to 0.3 s per PNG for a whole run, and at
-  worst about 200 MB of memory above the flow's own (a 40-megapixel PNG; a JPEG
-  of that size, about 20 MB). Not yet measured on the cluster.
-- A file that keeps a decoder busy without crashing it holds the run; the Job's
-  own time limit is the bound for that case.
+  0.16 to 0.19 s per JPEG screenshot and 0.28 to 0.37 s per large PNG for a whole
+  run, network to the bucket not included. Not yet measured on the cluster.
+- A flow-run Job needs about 1 GiB of memory for a derive run at worst (above).

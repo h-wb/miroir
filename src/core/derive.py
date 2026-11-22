@@ -5,28 +5,39 @@ makes thumbnails where the kind has them and writes one `media_objects` row to
 the connection's dataset, also for a file that gets none, so it is not tried
 again. A backfill first walks the bucket from where its last walk stopped and
 queues what it finds. Only the runner imports this module, inside the run.
+
+Images are decoded in a child process (`Decoder`), never here.
 """
 
+import json
+import os
+import select
+import struct
+import subprocess
+import sys
+import time
 from collections import Counter
 from collections.abc import Callable
+from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import PurePosixPath
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from pathlib import Path, PurePosixPath
+from typing import IO, TYPE_CHECKING, Any, TypeVar, cast
 
 from src.core.config import MediaConfig, ResolvedConnection, ResolvedMiroir
 from src.core.media import (
     CONTENT_TYPES,
+    THUMBNAIL_WIDTHS,
     ObjectStore,
     ObjectTooLarge,
     StoredObject,
+    image_decoders,
     kind_prefix,
     object_name,
     thumbnail_name,
     valid_key,
 )
 from src.core.operations import MetadataStore, OperationError, PendingMedia
-from src.core.thumbnails import WIDTHS, Refused, decoders, make_thumbnails
 from src.integrations.contracts import MediaKind
 
 if TYPE_CHECKING:
@@ -36,10 +47,24 @@ TABLE = "media_objects"
 # Raised when the way thumbnails are made changes: rows of an older version are
 # derived again when their file is queued again (a backfill walks it again).
 DERIVE_VERSION = 1
-# A file whose decoding began this often without an outcome (the process ended
-# while decoding it) is recorded as failed instead of tried again.
+# A file whose decoding began this often without an outcome (the decoder or the
+# run ended while it was decoding, or it took too long) is recorded as failed.
 MAX_ATTEMPTS = 3
 LIST_PAGE = 1000
+# Rows are written, and their files leave the queue, this many at a time: a run
+# that dies loses at most this much finished work, which the next run redoes.
+WRITE_EVERY = 100
+# One file's decode, measured at about 1.2 s for the slowest accepted image.
+DECODE_TIMEOUT = 30
+DECODE_CPU_SECONDS = 25
+# The decoder's address space. The worst accepted image measured 480 MB above
+# the child's own 32 MB (a 40-megapixel PNG with grey and alpha).
+DECODE_MEMORY = 1024 * 1024 * 1024
+# A thumbnail larger than this is not a thumbnail the decoder could have made.
+MAX_THUMBNAIL_BYTES = 16 * 1024 * 1024
+WIDTHS = THUMBNAIL_WIDTHS
+STATUSES = ("made", "unsupported", "too_large", "unreadable")
+REPO = Path(__file__).resolve().parents[2]
 
 COLUMNS: dict[str, dict[str, Any]] = {
     "connection_id": {"data_type": "text", "nullable": False},
@@ -60,10 +85,125 @@ COLUMNS: dict[str, dict[str, Any]] = {
 _T = TypeVar("_T")
 
 
+class DecoderLost(Exception):
+    """The decoder ended or took too long on a file; it is tried again later."""
+
+
+class _TooSlow(Exception):
+    pass
+
+
+class Decoder:
+    """Thumbnails made by `python -m src.core.thumbnails` in a child process.
+
+    One child serves a run, one file at a time. It has an address-space limit, a
+    CPU limit per file, a wall-clock timeout per file enforced here, and no
+    credentials in its environment. When it crashes, is killed or is too slow,
+    the file in flight is DecoderLost and the next file starts a new child.
+    """
+
+    def __init__(
+        self,
+        timeout: float = DECODE_TIMEOUT,
+        memory: int = DECODE_MEMORY,
+        cpu_seconds: int = DECODE_CPU_SECONDS,
+    ):
+        self.timeout = timeout
+        self.memory = memory
+        self.cpu_seconds = cpu_seconds
+        self._child: subprocess.Popen[bytes] | None = None
+        # The child's peak resident memory after the last file, in kilobytes.
+        self.peak_kb = 0
+
+    def close(self) -> None:
+        child, self._child = self._child, None
+        if child is None:
+            return
+        for stream in (child.stdin, child.stdout):
+            if stream is not None:
+                stream.close()
+        try:
+            child.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait()
+
+    def _start(self) -> subprocess.Popen[bytes]:
+        if self._child is None or self._child.poll() is not None:
+            self.close()
+            self._child = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "src.core.thumbnails",
+                    str(self.memory),
+                    str(self.cpu_seconds),
+                ],
+                cwd=REPO,
+                # Nothing of the worker's environment: no bucket key, no passwords.
+                env={"PATH": os.environ.get("PATH", "")},
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+        return self._child
+
+    def thumbnails(
+        self, body: bytes, formats: tuple[str, ...]
+    ) -> tuple[str, dict[int, bytes]]:
+        """(status, thumbnails by width), or DecoderLost."""
+        child = self._start()
+        assert child.stdin is not None and child.stdout is not None
+        request = json.dumps(
+            {"formats": formats, "widths": WIDTHS, "size": len(body)}
+        ).encode()
+        deadline = time.monotonic() + self.timeout
+        try:
+            child.stdin.write(struct.pack(">I", len(request)) + request + body)
+            child.stdin.flush()
+            (length,) = struct.unpack(">I", _read(child.stdout, 4, deadline))
+            if length > 4096:
+                raise ValueError("answer header too long")
+            answer = json.loads(_read(child.stdout, length, deadline))
+            status = answer["status"]
+            sizes = [(int(width), int(size)) for width, size in answer["sizes"]]
+            if status not in STATUSES or (status == "made") != bool(sizes):
+                raise ValueError("unexpected answer")
+            if not {width for width, _ in sizes} <= set(WIDTHS) or any(
+                not 0 < size <= MAX_THUMBNAIL_BYTES for _, size in sizes
+            ):
+                raise ValueError("unexpected thumbnails")
+            made = {width: _read(child.stdout, size, deadline) for width, size in sizes}
+            self.peak_kb = int(answer.get("peak_kb", 0))
+        except (OSError, ValueError, KeyError, TypeError, struct.error, _TooSlow):
+            child.kill()
+            self.close()
+            raise DecoderLost() from None
+        return status, made
+
+
+def _read(stream: IO[bytes], size: int, deadline: float) -> bytes:
+    """Exactly `size` bytes, or _TooSlow at the deadline, or ValueError at EOF."""
+    chunks, wanted = [], size
+    fd = stream.fileno()
+    while wanted:
+        left = deadline - time.monotonic()
+        if left <= 0 or not select.select([fd], [], [], left)[0]:
+            raise _TooSlow()
+        chunk = os.read(fd, min(wanted, 1 << 20))
+        if not chunk:
+            raise ValueError("the decoder ended")
+        chunks.append(chunk)
+        wanted -= len(chunk)
+    return b"".join(chunks)
+
+
 @dataclass
 class DeriveSummary:
     # made, unsupported, too_large, unreadable, failed; gone (no longer in the
-    # bucket, so no row) and known (already derived at this size and version).
+    # bucket, so no row), known (already derived at this size and version) and
+    # interrupted (the decoder was lost on it; it stays queued, one try nearer
+    # to failed).
     counts: Counter[str] = field(default_factory=Counter)
     remaining: int = 0
     walked: int = 0
@@ -107,21 +247,23 @@ def derive_media(
     assert config is not None
     summary = DeriveSummary()
     writer = _Writer(connection, destination, pipelines_dir, store, lock_wait)
-    for kind in connection.integration.media:
-        if not kind.thumbnails:
-            continue
-        if backfill is not None and backfill["kind"] == kind.name:
-            summary.walked, summary.walk_finished = _walk(
-                store, object_store, config, connection, kind, backfill["limit"]
+    kinds = [kind for kind in connection.integration.media if kind.thumbnails]
+    with closing(Decoder()) as decoder:
+        for kind in kinds:
+            if backfill is not None and backfill["kind"] == kind.name:
+                summary.walked, summary.walk_finished = _walk(
+                    store, object_store, config, connection, kind, backfill["limit"]
+                )
+            batch = store.pending_media(
+                miroir.id, connection.config.id, kind.name, config.derive_batch
             )
-        batch = store.pending_media(
-            miroir.id, connection.config.id, kind.name, config.derive_batch
-        )
-        if batch:
-            _derive_batch(
-                store, object_store, config, connection, kind, batch, writer, summary
-            )
-    summary.remaining = store.count_pending_media(miroir.id, connection.config.id)
+            if batch:
+                _Batch(
+                    store, object_store, config, connection, kind, writer, decoder
+                ).run(batch, summary)
+    summary.remaining = store.count_pending_media(
+        miroir.id, connection.config.id, [kind.name for kind in kinds]
+    )
     return summary
 
 
@@ -145,114 +287,130 @@ def _walk(
     walked = 0
     while walked < limit:
         asked = min(LIST_PAGE, limit - walked)
-        page = _storage(
+        listing = _storage(
             object_store.list_objects, prefix, prefix + after if after else "", asked
         )
         found = []
-        for listed in page:
+        for listed in listing.objects:
             key = listed.name.removeprefix(prefix)
             if listed.name.startswith(prefix) and valid_key(key):
                 found.append((key, listed.size, _utc(listed.modified)))
         store.add_pending_media(miroir_id, connection_id, kind.name, found)
-        walked += len(page)
-        if len(page) < asked:
+        walked += len(listing.objects)
+        # The store says whether more follow; a short page does not mean the end.
+        if not listing.truncated or not listing.objects:
             store.set_backfill_after(miroir_id, connection_id, kind.name, "")
             return walked, True
-        after = page[-1].name.removeprefix(prefix)
+        # The last name listed, valid or not, so an invalid key cannot stall it.
+        after = listing.objects[-1].name.removeprefix(prefix)
         store.set_backfill_after(miroir_id, connection_id, kind.name, after)
     return walked, False
 
 
-def _derive_batch(
-    store: MetadataStore,
-    object_store: ObjectStore,
-    config: MediaConfig,
-    connection: ResolvedConnection,
-    kind: MediaKind,
-    batch: list[PendingMedia],
-    writer: "_Writer",
-    summary: DeriveSummary,
-) -> None:
-    known = writer.known(kind.name, [entry.key for entry in batch])
-    rows: list[dict[str, Any]] = []
-    done: list[PendingMedia] = []
-    failure: OperationError | None = None
-    for entry in batch:
-        if known.get(entry.key) == entry.size:
-            summary.counts["known"] += 1
-            done.append(entry)
-            continue
-        try:
-            row = _derive_one(store, object_store, config, connection, kind, entry)
-        except OperationError as error:
-            failure = error
-            break
-        if row is None:
-            summary.counts["gone"] += 1
-        else:
-            summary.counts[row["thumbnail_status"]] += 1
-            rows.append(row)
-        done.append(entry)
-    writer.write(rows)
-    store.remove_pending_media(
-        connection.miroir_id, connection.config.id, kind.name, done
-    )
-    if failure is not None:
-        raise failure
+_INTERRUPTED = object()
 
 
-def _derive_one(
-    store: MetadataStore,
-    object_store: ObjectStore,
-    config: MediaConfig,
-    connection: ResolvedConnection,
-    kind: MediaKind,
-    entry: PendingMedia,
-) -> dict[str, Any] | None:
-    """The file's row, or None when it is no longer stored."""
-    extension = PurePosixPath(entry.key).suffix.lower()
-    formats = decoders(kind.thumbnails)
-    size = entry.size
-    thumbnails: dict[int, bytes] = {}
-    if extension not in kind.thumbnails or not decoders([extension]):
-        status = "unsupported"
-    elif entry.attempts >= MAX_ATTEMPTS:
-        status = "failed"
-    else:
-        name = object_name(config.prefix, connection.config.id, kind.name, entry.key)
+@dataclass
+class _Batch:
+    store: MetadataStore
+    object_store: ObjectStore
+    config: MediaConfig
+    connection: ResolvedConnection
+    kind: MediaKind
+    writer: "_Writer"
+    decoder: Decoder
+
+    def run(self, batch: list[PendingMedia], summary: DeriveSummary) -> None:
+        """Derive each file; write rows and drop their queue entries in chunks.
+
+        A file's attempt count is raised only while it is decoding, so whatever
+        ends the run later never counts against a file already handled.
+        """
+        known = self.writer.known(self.kind.name, [entry.key for entry in batch])
+        rows: list[dict[str, Any]] = []
+        done: list[PendingMedia] = []
         try:
-            stored = _get(object_store, name, kind.max_bytes)
-        except ObjectTooLarge:
-            status = "too_large"
+            for entry in batch:
+                if known.get(entry.key) == entry.size:
+                    summary.counts["known"] += 1
+                    done.append(entry)
+                else:
+                    row = self.derive(entry)
+                    if row is _INTERRUPTED:
+                        summary.counts["interrupted"] += 1
+                        continue
+                    if row is None:
+                        summary.counts["gone"] += 1
+                    else:
+                        assert isinstance(row, dict)
+                        summary.counts[row["thumbnail_status"]] += 1
+                        rows.append(row)
+                    done.append(entry)
+                if len(done) >= WRITE_EVERY:
+                    self.flush(rows, done)
+        except Exception:
+            # A storage failure ends the run after recording what was finished.
+            self.flush(rows, done)
+            raise
+        self.flush(rows, done)
+
+    def flush(self, rows: list[dict[str, Any]], done: list[PendingMedia]) -> None:
+        self.writer.write(rows)
+        self.store.remove_pending_media(
+            self.connection.miroir_id, self.connection.config.id, self.kind.name, done
+        )
+        rows.clear()
+        done.clear()
+
+    def derive(self, entry: PendingMedia) -> dict[str, Any] | None | object:
+        """The file's row; None when it is no longer stored; _INTERRUPTED when
+        the decoder was lost on it."""
+        config, connection, kind = self.config, self.connection, self.kind
+        scope = (connection.miroir_id, connection.config.id, kind.name, entry.key)
+        extension = PurePosixPath(entry.key).suffix.lower()
+        size = entry.size
+        thumbnails: dict[int, bytes] = {}
+        if extension not in kind.thumbnails or not image_decoders([extension]):
+            status = "unsupported"
+        elif entry.attempts >= MAX_ATTEMPTS:
+            status = "failed"
         else:
-            if stored is None:
-                return None
-            size = len(stored.body)
-            store.begin_media_attempt(
-                connection.miroir_id, connection.config.id, kind.name, entry.key
+            name = object_name(
+                config.prefix, connection.config.id, kind.name, entry.key
             )
             try:
-                thumbnails = make_thumbnails(stored.body, formats)
-                status = "made"
-            except Refused as refused:
-                status = refused.status
-        for width, body in thumbnails.items():
-            target = thumbnail_name(
-                config.prefix, connection.config.id, kind.name, entry.key, width
-            )
-            _storage(object_store.put, target, body, "image/webp")
-    return {
-        "connection_id": connection.config.id,
-        "kind": kind.name,
-        "key": entry.key,
-        "size": size,
-        "content_type": CONTENT_TYPES.get(extension, "application/octet-stream"),
-        "stored_at": entry.stored_at,
-        **{f"thumbnail_w{width}": width in thumbnails for width in WIDTHS},
-        "thumbnail_status": status,
-        "derived_at": datetime.now(timezone.utc),
-        "derive_version": DERIVE_VERSION,
-    }
+                stored = _get(self.object_store, name, kind.max_bytes)
+            except ObjectTooLarge:
+                status = "too_large"
+            else:
+                if stored is None:
+                    return None
+                size = len(stored.body)
+                self.store.begin_media_attempt(*scope)
+                try:
+                    status, thumbnails = self.decoder.thumbnails(
+                        stored.body, image_decoders(kind.thumbnails)
+                    )
+                except DecoderLost:
+                    return _INTERRUPTED
+                self.store.end_media_attempt(*scope)
+            for width, body in thumbnails.items():
+                target = thumbnail_name(
+                    config.prefix, connection.config.id, kind.name, entry.key, width
+                )
+                _storage(self.object_store.put, target, body, "image/webp")
+        return {
+            "connection_id": connection.config.id,
+            "kind": kind.name,
+            "key": entry.key,
+            "size": size,
+            "content_type": CONTENT_TYPES.get(extension, "application/octet-stream"),
+            "stored_at": entry.stored_at,
+            **{f"thumbnail_w{width}": width in thumbnails for width in WIDTHS},
+            "thumbnail_status": status,
+            "derived_at": datetime.now(timezone.utc),
+            "derive_version": DERIVE_VERSION,
+        }
 
 
 def _get(object_store: ObjectStore, name: str, max_bytes: int) -> StoredObject | None:

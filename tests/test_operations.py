@@ -465,7 +465,9 @@ class OperationTests(unittest.TestCase):
         self.assertEqual(self.store.get_operation(operation.id).connection_id, "music")
         now = datetime.now(timezone.utc)
         self.store.add_pending_media("personal", "screen", "shots", [("a", 1, now)])
-        self.assertEqual(self.store.count_pending_media("personal", "screen"), 1)
+        self.assertEqual(
+            self.store.count_pending_media("personal", "screen", ["shots"]), 1
+        )
         self.store.set_backfill_after("personal", "screen", "shots", "a")
         self.assertEqual(self.store.backfill_after("personal", "screen", "shots"), "a")
         with self.store.engine.connect() as db:

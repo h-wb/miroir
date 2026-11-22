@@ -142,7 +142,12 @@ def main(argv: list[str] | None = None) -> int:
     backfill.add_argument(
         "--duckdb",
         type=Path,
-        help="Run here into a local DuckDB file instead of on the Prefect worker",
+        help="Development: run here into a local DuckDB file, with --metadata"
+        " naming a local SQLite store",
+    )
+    backfill.add_argument(
+        "--metadata",
+        help="SQLAlchemy URL of the metadata store; required with --duckdb",
     )
     commands_with_store = (
         status,
@@ -153,7 +158,6 @@ def main(argv: list[str] | None = None) -> int:
         execute,
         serve,
         analyses,
-        backfill,
     )
     for command in (
         *commands_with_store,
@@ -170,6 +174,16 @@ def main(argv: list[str] | None = None) -> int:
             help="SQLAlchemy URL of the metadata store",
         )
     args = parser.parse_args(argv)
+    if args.command == "media-backfill":
+        if args.duckdb is not None and not _local_sqlite(args.metadata):
+            # A local run would drain the shared queue and move the shared walk.
+            print(
+                "media-backfill --duckdb needs --metadata naming a local SQLite"
+                " file, never the installation's store",
+                file=sys.stderr,
+            )
+            return 2
+        args.metadata = args.metadata or metadata_url() or DEFAULT_METADATA
 
     result: Any
     if args.command == "generate-key":
@@ -517,6 +531,23 @@ def _backfill_here(
     assert operation_id is not None  # a backfill never joins
     return execute_operation(
         miroir, operation_id, lock_wait=EXECUTE_LOCK_WAIT, **common
+    )
+
+
+def _local_sqlite(url: str | None) -> bool:
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.exc import ArgumentError
+
+    if not url:
+        return False
+    try:
+        parsed = make_url(url)
+    except ArgumentError:
+        return False
+    return parsed.get_backend_name() == "sqlite" and parsed.database not in (
+        None,
+        "",
+        ":memory:",
     )
 
 

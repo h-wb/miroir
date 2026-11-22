@@ -11,7 +11,7 @@ from botocore.stub import Stubber
 
 from src.adapters.s3 import S3ObjectStore, from_environment
 from src.core.config import MediaConfig
-from src.core.media import ListedObject, ObjectTooLarge, StoredObject
+from src.core.media import ListedObject, Listing, ObjectTooLarge, StoredObject
 from tests.fakes import FakeObjectStore
 
 
@@ -108,13 +108,14 @@ class S3AdapterTests(unittest.TestCase):
                 {
                     "Contents": [
                         {"Key": f"{prefix}a.jpg", "Size": 3, "LastModified": modified}
-                    ]
+                    ],
+                    "IsTruncated": True,
                 },
                 {"Bucket": "media", "Prefix": prefix, "MaxKeys": 1000},
             )
             self.assertEqual(
                 self.store.list_objects(prefix, "", 5000),
-                [ListedObject(f"{prefix}a.jpg", 3, modified)],
+                Listing([ListedObject(f"{prefix}a.jpg", 3, modified)], True),
             )
             stub.add_response(
                 "list_objects_v2",
@@ -126,7 +127,10 @@ class S3AdapterTests(unittest.TestCase):
                     "StartAfter": f"{prefix}a.jpg",
                 },
             )
-            self.assertEqual(self.store.list_objects(prefix, f"{prefix}a.jpg", 10), [])
+            self.assertEqual(
+                self.store.list_objects(prefix, f"{prefix}a.jpg", 10),
+                Listing([], False),
+            )
             stub.assert_no_pending_responses()
 
     def test_the_key_comes_from_the_environment(self):

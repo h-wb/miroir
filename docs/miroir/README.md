@@ -639,7 +639,9 @@ browser that is logged in to Miroir.
 For a kind with thumbnails (so far only `screenshots`; Messages `attachments` have
 none yet), the worker makes two WebP copies of each stored image, 360 and 1280
 pixels wide, and records every stored file in the warehouse (decision 040). The
-web server never decodes an image.
+web server never decodes an image, and neither does the worker's own process: a
+child process does, one file at a time, with no credentials, a 1 GiB memory limit
+and a 30-second timeout per file.
 
 - **Names.** Beside the original, under a derived kind:
   `prefix / connection / screenshots.w360 / <key>.webp` and
@@ -649,11 +651,14 @@ web server never decodes an image.
   an upload request), it puts the file in a queue in the metadata store
   (`media_pending`) before answering, and asks for a `derive` operation on the
   connection's own deployment, due `derive_delay_seconds` later. Confirmations
-  before it starts join it, so a collector confirming thousands of files in a
-  pass causes one run. A run handles at most `derive_batch` files of each kind
-  and, if more wait, schedules the next run at once; loads of the connection
+  before it starts join it, however late it is (a long load may hold the
+  deployment), so a collector confirming thousands of files in a pass causes one
+  run. A run handles at most `derive_batch` files of each kind and, if more wait
+  and it made progress, schedules the next run at once; loads of the connection
   take turns with it on the deployment. Without Prefect the run starts at once
-  and empties the queue itself.
+  and empties the queue itself. If Prefect loses a waiting run, `refresh` closes
+  it once Prefect reports it ended, and the next confirmation asks for a new one;
+  a backfill always asks for its own. The files stay queued meanwhile.
 - **What is recorded.** One row per stored file in `media_objects`, in the
   connection's own dataset (its binding's `dataset_name`), written by a dlt
   pipeline of its own (`<pipeline_name>_media`), merged on
@@ -666,27 +671,41 @@ web server never decodes an image.
   | `content_type` | From the key's extension, as when it was uploaded |
   | `stored_at` | When the server confirmed it; for a backfilled file, the bucket's modification time |
   | `thumbnail_w360`, `thumbnail_w1280` | Whether that size exists |
-  | `thumbnail_status` | `made`; or why there is none: `unsupported` (a type without thumbnails: video, HEIC, PDF), `too_large` (over the kind's size or 40 million pixels), `unreadable` (truncated, corrupt or not the format its name says), `failed` (its decoding ended the process three times) |
+  | `thumbnail_status` | `made`; or why there is none: `unsupported` (a type without thumbnails: video, HEIC, PDF), `too_large` (over the kind's size, 40 million pixels, 16,384 on a side, a side 16 times the other, or the decoder's memory), `unreadable` (truncated, corrupt or not the format its name says), `failed` (its decode did not finish three times: the decoder crashed, was killed or took over 30 seconds, or the run died meanwhile) |
   | `derived_at`, `derive_version` | When the row was written, and by which version of the thumbnail code |
 
   A file that has a row is not read again unless it is queued again with another
-  size. A file that is no longer in the bucket when the run reaches it gets no row.
-- **Operations.** A derive is shown in the connection's history with its counts
-  in the detail (`Media: made 480, unsupported 3; 0 waiting`). It is not a load:
-  the connection's status, last sync and analyses ignore it, and an edit of the
-  connection's settings does not block it.
+  size, whatever its status. Rows are written every 100 files; a run that dies
+  loses at most that much finished work, which the next run redoes.
+- **Reading the table.** A row says the file was in the bucket when the run
+  reached it, and it stays if the object is deleted later. No row does not mean
+  not stored: the file may still be queued, its kind may have no thumbnails
+  (attachments today), it may predate schema 8 and not be backfilled yet, or it
+  was gone when the run reached it. A file replaced by another with the same key
+  and size is not derived again (a known limit; keys are unique per frame).
+- **Operations.** A derive is not a load: the connection's status, last sync,
+  history and analyses ignore it, and an edit of the connection's settings does
+  not block it. The connection page shows one line instead: files waiting, and
+  the last derive run with its counts (`Media: made 480, unsupported 3; 0
+  waiting`).
 
 Settings, in the `media` section:
 
 | Setting | Default | Meaning |
 |---|---|---|
 | `derive_delay_seconds` | 300 (30–3600) | How long a derive run waits for more confirmations |
-| `derive_batch` | 500 (1–5000) | Files of one kind per run; about 1–3 minutes of the connection's deployment |
+| `derive_batch` | 500 (1–5000) | Files of one kind per run; about 2–3 minutes of the connection's deployment |
 
 The worker needs the bucket key too: `MIROIR_MEDIA_ACCESS_KEY_ID` and
 `MIROIR_MEDIA_SECRET_ACCESS_KEY` in the flow-run Job's environment. Without them a
 derive run is closed as blocked ("Media storage is not configured where this
-runs") and everything else runs as before. The files stay queued.
+runs") and everything else runs as before. The files stay queued. Put in the
+shared Job template, the key reaches every connector's runs, which can then read
+and write the whole bucket.
+
+A flow-run Job needs about 1 GiB of memory for a derive run at worst: the worker's
+own process (about 300 MB) and the decoder (at most 1 GiB of address space; the
+worst image the bounds accept measured 513 MB resident). Give the Job 1.5 GiB.
 
 Files stored before this existed are found by a backfill, which walks the bucket
 under `prefix / connection / kind /`, queues what it finds and derives it:
@@ -694,16 +713,19 @@ under `prefix / connection / kind /`, queues what it finds and derives it:
 ```bash
 # On the Prefect worker (needs the deployment section); prints the operation ID.
 uv run --locked pipelines-miroir media-backfill screen screenshots --limit 10000
-# Or here, into a local DuckDB file, with the bucket key in the environment.
-uv run --locked pipelines-miroir media-backfill screen screenshots --limit 100 --duckdb /tmp/w.duckdb
 ```
+
+For development only, `--duckdb FILE --metadata sqlite:///FILE` runs it in the
+CLI's own process. It refuses without `--metadata` naming a local SQLite file, so
+it can never drain the installation's queue or move its walk.
 
 `--limit` (default 10,000, at most 1,000,000) is how many stored files this run
 walks; the next run continues after the last one, and the run's detail says
 `walk continues` or `walk finished`. Running it again is safe: files already
 derived are recognised from `media_objects` without being read, and a walk that
-finished starts again from the beginning. Measured on a development machine, a
-run takes about 0.15 s per JPEG screenshot and up to 0.3 s per large PNG (see the
+finished starts again from the beginning. Whether more remain is the store's own
+answer, not a short page. Measured on a development machine, a run takes about
+0.16 to 0.19 s per JPEG screenshot and up to 0.37 s per large PNG (see the
 implementation log), so several hundred thousand take most of a day of worker
 time, in batches between loads.
 

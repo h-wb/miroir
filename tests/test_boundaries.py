@@ -21,9 +21,9 @@ _ALLOWED = {
 _TIMELINE = "src.core.timeline"
 _TIMELINE_IMPORTS = ("src.core.config", "src.core.operations")
 _TIMELINE_IMPORTERS = ("src.web", "src.cli")
-# Media is never decoded in the web process: thumbnails are the worker's. One
-# module decodes; only the derive run imports it, and only the runner imports
-# that, inside the run, so nothing the server loads reaches an image library.
+# Media is never decoded in the web process, nor in the worker's own: one module
+# decodes, and it runs as a child process that nothing imports. Only the runner
+# imports the derive run that starts it, inside the run.
 _IMAGE_LIBRARIES = ("PIL", "pillow_heif")
 _DECODER = "src.core.thumbnails"
 _DERIVE = "src.core.derive"
@@ -99,8 +99,8 @@ class BoundaryTests(unittest.TestCase):
                         _within(name, library) for library in _IMAGE_LIBRARIES
                     ):
                         errors.append(f"{location}: only {_DECODER} imports {name}")
-                    if _within(name, _DECODER) and module not in (_DECODER, _DERIVE):
-                        errors.append(f"{location}: only {_DERIVE} imports {name}")
+                    if _within(name, _DECODER) and module != _DECODER:
+                        errors.append(f"{location}: {name} runs as its own process")
                     if _within(name, _DERIVE) and module not in (
                         _DERIVE,
                         _DERIVE_IMPORTER,
@@ -128,8 +128,9 @@ class BoundaryTests(unittest.TestCase):
 
         self.assertFalse(errors, "\n".join(errors))
 
-    def test_the_server_loads_no_image_library(self) -> None:
-        # What `serve` imports, and what its routes import while answering.
+    def test_the_server_and_the_worker_load_no_image_library(self) -> None:
+        # What `serve` imports, what its routes import while answering, and the
+        # worker's derive run, whose decoding happens in a child process.
         modules = (
             "src.web.app",
             "src.web.connections",
@@ -144,8 +145,12 @@ class BoundaryTests(unittest.TestCase):
         probe = (
             "import importlib, sys\n"
             f"for name in {modules!r}: importlib.import_module(name)\n"
-            "print(sorted(m for m in sys.modules if m.split('.')[0] in"
-            f" {_IMAGE_LIBRARIES!r} or m in ({_DECODER!r}, {_DERIVE!r})))"
+            "server = sorted(m for m in sys.modules if m.split('.')[0] in"
+            f" {_IMAGE_LIBRARIES!r} or m in ({_DECODER!r}, {_DERIVE!r}))\n"
+            f"importlib.import_module({_DERIVE!r})\n"
+            "worker = sorted(m for m in sys.modules if m.split('.')[0] in"
+            f" {_IMAGE_LIBRARIES!r} or m == {_DECODER!r})\n"
+            "print(server + worker)"
         )
         root = Path(__file__).resolve().parents[1]
         result = subprocess.run(

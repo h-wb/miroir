@@ -4,18 +4,26 @@ import struct
 import unittest
 import zlib
 from io import BytesIO
+from unittest.mock import patch
 
 from PIL import Image, features
 
+from src.core.media import THUMBNAIL_WIDTHS
+from src.core.media import image_decoders as decoders
 from src.core.thumbnails import (
+    MAX_ASPECT,
     MAX_HEIGHT,
     MAX_PIXELS,
+    MAX_SIDE,
     Refused,
-    decoders,
     make_thumbnails,
 )
 
 JPEG = ("JPEG",)
+
+
+def make(body: bytes, formats: tuple[str, ...]) -> dict[int, bytes]:
+    return make_thumbnails(body, formats, THUMBNAIL_WIDTHS)
 
 
 def encoded(image: Image.Image, fmt: str, **options) -> bytes:
@@ -46,7 +54,7 @@ def forged_png(width: int, height: int) -> bytes:
 class ThumbnailTests(unittest.TestCase):
     def refusal(self, body: bytes, formats=JPEG) -> str:
         with self.assertRaises(Refused) as caught:
-            make_thumbnails(body, formats)
+            make(body, formats)
         return caught.exception.status
 
     def test_every_kind_with_thumbnails_can_decode_them(self):
@@ -63,23 +71,23 @@ class ThumbnailTests(unittest.TestCase):
         self.assertTrue(features.check("webp"))
 
     def test_two_webp_sizes_of_a_screen(self):
-        made = make_thumbnails(screen(), JPEG)
+        made = make(screen(), JPEG)
         self.assertEqual(sorted(made), [360, 1280])
         large, small = opened(made[1280]), opened(made[360])
         self.assertEqual((large.format, large.size), ("WEBP", (1280, 800)))
         self.assertEqual((small.format, small.size), ("WEBP", (360, 225)))
 
     def test_a_narrow_image_is_not_enlarged(self):
-        made = make_thumbnails(encoded(Image.new("RGB", (300, 120)), "PNG"), ("PNG",))
+        made = make(encoded(Image.new("RGB", (300, 120)), "PNG"), ("PNG",))
         self.assertEqual(opened(made[360]).size, (300, 120))
         self.assertEqual(opened(made[1280]).size, (300, 120))
-        between = make_thumbnails(screen(800, 400), JPEG)
+        between = make(screen(800, 400), JPEG)
         self.assertEqual(opened(between[1280]).size, (800, 400))
         self.assertEqual(opened(between[360]).size, (360, 180))
 
     def test_modes_become_rgb_or_keep_their_alpha(self):
         rgba = encoded(Image.new("RGBA", (500, 500), (1, 2, 3, 100)), "PNG")
-        self.assertEqual(opened(make_thumbnails(rgba, ("PNG",))[360]).mode, "RGBA")
+        self.assertEqual(opened(make(rgba, ("PNG",))[360]).mode, "RGBA")
         cases = {
             "L": encoded(Image.new("L", (500, 500)), "PNG"),
             "P": encoded(Image.new("P", (500, 500)), "PNG"),
@@ -88,7 +96,7 @@ class ThumbnailTests(unittest.TestCase):
         }
         for mode, body in cases.items():
             with self.subTest(mode=mode):
-                made = make_thumbnails(body, ("JPEG", "PNG"))
+                made = make(body, ("JPEG", "PNG"))
                 self.assertEqual(opened(made[360]).mode, "RGB")
 
     def test_metadata_is_dropped_and_orientation_applied(self):
@@ -96,7 +104,7 @@ class ThumbnailTests(unittest.TestCase):
         exif[0x0112] = 6  # rotated: shown 200 wide and 400 tall
         exif[0x010F] = "A camera maker"
         body = encoded(Image.new("RGB", (400, 200)), "JPEG", exif=exif.tobytes())
-        made = opened(make_thumbnails(body, JPEG)[360])
+        made = opened(make(body, JPEG)[360])
         self.assertEqual(made.size, (200, 400))
         self.assertEqual(dict(made.getexif()), {})
         self.assertNotIn("exif", made.info)
@@ -104,7 +112,7 @@ class ThumbnailTests(unittest.TestCase):
     def test_only_the_decoders_of_the_kind_are_used(self):
         png = encoded(Image.new("RGB", (50, 50)), "PNG")
         self.assertEqual(self.refusal(png, JPEG), "unreadable")
-        self.assertEqual(sorted(make_thumbnails(png, ("JPEG", "PNG"))), [360, 1280])
+        self.assertEqual(sorted(make(png, ("JPEG", "PNG"))), [360, 1280])
         self.assertEqual(self.refusal(png, ()), "unsupported")
         self.assertEqual(decoders((".jpeg", ".jpg", ".png", ".heic")), ("JPEG", "PNG"))
 
@@ -134,15 +142,43 @@ class ThumbnailTests(unittest.TestCase):
         self.assertEqual(self.refusal(body, ("PNG",)), "too_large")
 
     def test_a_very_tall_image_fits_webp(self):
-        tall = encoded(Image.new("RGB", (400, 40000)), "PNG")
-        made = opened(make_thumbnails(tall, ("PNG",))[1280])
-        self.assertEqual(made.height, MAX_HEIGHT)
-        self.assertLessEqual(made.width, 400)
+        tall = encoded(Image.new("L", (1024, MAX_SIDE)), "PNG")
+        made = opened(make(tall, ("PNG",))[1280])
+        self.assertEqual(made.size, (round(1024 * MAX_HEIGHT / MAX_SIDE), MAX_HEIGHT))
+
+    def test_extreme_shapes_are_refused_before_decoding(self):
+        # Pillow keeps a pointer and an allocation per row: thin is expensive.
+        cases = {
+            "a side too long": (MAX_SIDE + 1, 1200),
+            "too thin": (MAX_SIDE, MAX_SIDE // MAX_ASPECT - 1),
+            "the reviewer's 1 x 40M": (1, 40_000_000),
+        }
+        for name, (width, height) in cases.items():
+            for size in ((width, height), (height, width)):
+                with self.subTest(name, size=size):
+                    self.assertEqual(
+                        self.refusal(forged_png(*size), ("PNG",)), "too_large"
+                    )
+        thinnest = Image.new("L", (MAX_SIDE, MAX_SIDE // MAX_ASPECT))
+        made = make(encoded(thinnest, "PNG"), ("PNG",))
+        self.assertEqual(opened(made[1280]).size, (1280, 80))
+
+    def test_a_rotated_jpeg_is_drafted_for_its_shown_width(self):
+        exif = Image.Exif()
+        exif[0x0112] = 6
+        body = encoded(Image.new("RGB", (8000, 1000)), "JPEG", exif=exif.tobytes())
+        made = make(body, JPEG)
+        self.assertEqual(opened(made[1280]).size, (1000, 8000))
+        self.assertEqual(opened(made[360]).size, (360, 2880))
+
+    def test_running_out_of_memory_is_too_large(self):
+        with patch("src.core.thumbnails._prepared", side_effect=MemoryError):
+            self.assertEqual(self.refusal(screen(), JPEG), "too_large")
 
     def test_only_the_first_frame_of_an_animation(self):
         frames = [Image.new("RGB", (64, 64), (i, 0, 0)) for i in range(0, 250, 50)]
         body = encoded(frames[0], "GIF", save_all=True, append_images=frames[1:])
-        made = opened(make_thumbnails(body, ("GIF",))[360])
+        made = opened(make(body, ("GIF",))[360])
         self.assertEqual((made.size, getattr(made, "n_frames", 1)), ((64, 64), 1))
 
 

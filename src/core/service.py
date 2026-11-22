@@ -469,7 +469,10 @@ class MiroirService:
     def connection(self, connection_id: str) -> dict[str, Any]:
         miroir = self.miroir()
         connection = self._connection(miroir, connection_id)
-        operations = self.store.recent_operations(miroir.id, connection_id)
+        # Derive runs would push the loads off the list; they have one line.
+        operations = self.store.recent_operations(
+            miroir.id, connection_id, without_kind="derive"
+        )
         artifacts = self.artifacts(connection_id, miroir)
         names = {artifact["id"]: artifact["original_name"] for artifact in artifacts}
         for operation in operations:
@@ -479,6 +482,27 @@ class MiroirService:
             **self._summary(miroir, connection),
             "operations": operations,
             "artifacts": artifacts,
+            "media": self._media_state(miroir, connection),
+        }
+
+    def _media_state(
+        self, miroir: ResolvedMiroir, connection: ResolvedConnection
+    ) -> dict[str, Any] | None:
+        """Files waiting for thumbnails and the latest derive run, if any kind has
+        thumbnails."""
+        kinds = [k.name for k in connection.integration.media if k.thumbnails]
+        if not kinds or miroir.media is None:
+            return None
+        recent = self.store.recent_operations(
+            miroir.id, connection.config.id, limit=10, kind="derive"
+        )
+        ran = next((o for o in recent if o["attempts"]), None)
+        return {
+            "waiting": self.store.count_pending_media(
+                miroir.id, connection.config.id, kinds
+            ),
+            "last_requested": recent[0]["created_at"] if recent else None,
+            "last_attempt": ran["attempts"][-1] if ran else None,
         }
 
     def artifacts(

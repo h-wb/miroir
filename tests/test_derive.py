@@ -8,6 +8,10 @@ import contextlib
 import getpass
 import io
 import json
+import os
+import signal
+import subprocess
+import threading
 import unittest
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
@@ -26,6 +30,7 @@ from PIL import Image
 
 from src.cli.main import main
 from src.core.config import load_miroir
+from src.core.derive import Decoder, DecoderLost
 from src.core.media import ObjectTooLarge
 from src.core.operations import (
     ConnectionBusy,
@@ -36,7 +41,6 @@ from src.core.operations import (
 )
 from src.core.runner import IngestionFailed, execute_operation, request_derive
 from src.core.service import MiroirService
-from src.core.thumbnails import make_thumbnails
 from src.web.app import create_app
 from tests.fakes import FakeObjectStore
 from tests.postgres import start_postgres
@@ -54,16 +58,24 @@ def jpeg(width: int = 1600, height: int = 1000) -> bytes:
 
 
 class Recorder:
-    """An executor that only records what it was handed."""
+    """An executor that records what it was handed and binds a backend run to
+    it, as the Prefect adapter does."""
 
     def __init__(self):
         self.submitted: list[str] = []
         self.refuse = False
+        self.store: MetadataStore | None = None
 
     def submit(self, operation_id: str) -> None:
         if self.refuse:
             raise OperationError("Prefect is down")
         self.submitted.append(operation_id)
+        if self.store is not None:
+            self.store.bind_backend_run(operation_id, f"run-{operation_id}")
+
+
+class Killed(BaseException):
+    """Stands in for the run's own process dying (a kill, out of memory)."""
 
 
 class DeriveFixture(unittest.TestCase):
@@ -101,6 +113,7 @@ class DeriveFixture(unittest.TestCase):
         self.store.migrate()
         self.objects = FakeObjectStore()
         self.executor = Recorder()
+        self.executor.store = self.store
         self.service = MiroirService(
             self.config_path,
             self.store,
@@ -191,6 +204,10 @@ class DeriveFixture(unittest.TestCase):
         with self.store.engine.connect() as db:
             return sorted(db.execute(sa.select(media_pending.c.key)).scalars())
 
+    def attempts(self) -> dict[str, int]:
+        queued = self.store.pending_media("test", "screen", "screenshots", 100)
+        return {entry.key: entry.attempts for entry in queued}
+
     def detail(self, operation_id: str) -> str:
         return self.store.attempts(operation_id)[-1]["transformation_detail"]
 
@@ -230,26 +247,46 @@ class DeriveRequestTests(DeriveFixture):
 
     def test_a_lost_derive_is_closed_as_a_transformation(self):
         self.upload({"a.jpeg": jpeg()})
-        died = self.executor.submitted[0]
-        self.store.bind_backend_run(died, "flow-run-that-died")
+        died = self.executor.submitted[0]  # bound to its run, which ended
         self.store.close_unverified(died, None, "lost", "ended without a word")
         attempt = self.store.attempts(died)[-1]
         self.assertEqual(
             (attempt["ingestion"], attempt["transformation"]), ("not_run", "lost")
         )
 
-    def test_a_run_due_long_ago_is_not_joined(self):
+    def test_a_waiting_run_is_joined_however_late_it_is(self):
+        # A long load holds the deployment: the derive run is long overdue.
         self.upload({"a.jpeg": jpeg()})
         first = self.executor.submitted[0]
         with self.store.engine.begin() as db:
-            stale = datetime.now(timezone.utc) - timedelta(seconds=301)
+            stale = datetime.now(timezone.utc) - timedelta(hours=6)
             db.execute(
                 operations.update()
                 .where(operations.c.id == first)
                 .values(options=json.dumps({"not_before": stale.isoformat()}))
             )
         self.upload({"b.jpeg": jpeg()})
+        self.assertEqual(len(self.executor.submitted), 1)
+
+    def test_a_waiting_run_without_its_own_backend_run_is_not_joined(self):
+        self.executor.store = None  # e.g. a local executor: nothing bound
+        self.upload({"a.jpeg": jpeg()})
+        self.upload({"b.jpeg": jpeg()})
         self.assertEqual(len(self.executor.submitted), 2)
+
+    def test_the_connection_page_shows_loads_and_one_media_line(self):
+        self.upload({"a.jpeg": jpeg()})
+        self.derive(self.executor.submitted[0])
+        self.upload({"b.jpeg": jpeg()})
+        view = self.service.connection("screen")
+        self.assertEqual(view["operations"], [])
+        self.assertEqual(view["media"]["waiting"], 1)
+        self.assertEqual(view["media"]["last_attempt"]["transformation"], "succeeded")
+        self.client.post("/login", data={"token": ADMIN})
+        page = self.client.get("/connections/screen").text
+        self.assertIn("Thumbnails: 1 file waiting", page)
+        self.assertIn("Media: made 1; 0 waiting", page)
+        self.assertNotIn("derive", page.split("<h2>History</h2>")[1])
 
     def test_files_found_present_are_queued_too(self):
         body = jpeg()
@@ -423,11 +460,11 @@ class DeriveRunTests(DeriveFixture):
         self.queue({"a.jpeg": jpeg()})
         newer = jpeg(800, 500)
 
-        def replaced_meanwhile(body, formats):
+        def replaced_meanwhile(decoder, body, formats):
             self.queue({"a.jpeg": newer})
-            return make_thumbnails(body, formats)
+            return decode(decoder, body, formats)
 
-        with patch("src.core.derive.make_thumbnails", side_effect=replaced_meanwhile):
+        with patch.object(Decoder, "thumbnails", replaced_meanwhile):
             self.derive(self.request(), defer=self.schedule)
         self.assertEqual(self.pending(), ["a.jpeg"])
         [(following, _)] = self.scheduled
@@ -468,25 +505,56 @@ class DeriveRunTests(DeriveFixture):
         self.derive(self.request())
         self.assertEqual((len(self.rows()), self.pending()), (4, []))
 
-    def test_a_file_that_ends_the_process_is_given_up_after_three_tries(self):
-        self.queue({"poison.jpeg": jpeg(), "fine.heic": b"x"})
+    def test_a_file_that_ends_the_run_costs_only_itself(self):
+        # The reviewer's case: good files before a poison file, the run's own
+        # process dying on the poison file each time, then a clean run.
+        files = {f"{i:02d}.jpeg": jpeg(400, 300) for i in range(5)}
+        files["99.jpeg"] = poison = jpeg(401, 300)
+        self.queue(files)
+
+        def dies_on_poison(decoder, body, formats):
+            if body == poison:
+                raise Killed()
+            return decode(decoder, body, formats)
+
         for _ in range(3):
             with (
-                patch("src.core.derive.make_thumbnails", side_effect=KeyboardInterrupt),
-                self.assertRaises(KeyboardInterrupt),
+                patch.object(Decoder, "thumbnails", dies_on_poison),
+                self.assertRaises(Killed),
             ):
                 self.derive(self.request())
-        with self.store.engine.connect() as db:
-            attempts = db.execute(
-                sa.select(media_pending.c.attempts).where(
-                    media_pending.c.key == "poison.jpeg"
-                )
-            ).scalar()
-        self.assertEqual(attempts, 3)
+        self.assertEqual(self.attempts(), {**dict.fromkeys(files, 0), "99.jpeg": 3})
         self.objects.gets.clear()
         self.derive(self.request())
-        self.assertEqual(self.rows()["poison.jpeg"]["thumbnail_status"], "failed")
-        self.assertNotIn("site/screen/screenshots/poison.jpeg", self.objects.gets)
+        self.assertEqual(
+            {key: row["thumbnail_status"] for key, row in self.rows().items()},
+            {**dict.fromkeys(files, "made"), "99.jpeg": "failed"},
+        )
+        self.assertNotIn("site/screen/screenshots/99.jpeg", self.objects.gets)
+
+    def test_a_lost_decoder_costs_its_file_one_try_and_the_run_goes_on(self):
+        lost = jpeg(801, 500)
+        self.queue({"a.jpeg": jpeg(), "b.jpeg": lost, "c.jpeg": jpeg()})
+
+        def lost_on_b(decoder, body, formats):
+            if body == lost:
+                raise DecoderLost()
+            return decode(decoder, body, formats)
+
+        for tries in range(1, 4):
+            operation_id = self.request()
+            with patch.object(Decoder, "thumbnails", lost_on_b):
+                self.derive(operation_id, defer=self.schedule)
+            self.assertIn("interrupted 1", self.detail(operation_id))
+            self.assertEqual(self.attempts(), {"b.jpeg": tries})
+            # It made progress, so the next run is scheduled to try again.
+            self.assertEqual(len(self.scheduled), tries)
+        self.derive(self.request(), defer=self.schedule)
+        self.assertEqual(
+            {key: row["thumbnail_status"] for key, row in self.rows().items()},
+            {"a.jpeg": "made", "b.jpeg": "failed", "c.jpeg": "made"},
+        )
+        self.assertEqual(self.pending(), [])
 
     def test_without_storage_the_run_is_blocked(self):
         self.queue({"a.jpeg": jpeg()})
@@ -510,6 +578,55 @@ class DeriveRunTests(DeriveFixture):
             )
         self.assertEqual(self.derive(operation_id).transformation, "succeeded")
         self.assertEqual(self.rows()["a.jpeg"]["thumbnail_status"], "made")
+
+
+class DecoderTests(unittest.TestCase):
+    """The child process that decodes, with real generated images."""
+
+    @classmethod
+    def setUpClass(cls):
+        out = BytesIO()
+        Image.new("LA", (6000, 6000)).save(out, "PNG")
+        cls.large = out.getvalue()  # about 36 MP: some 450 MB to decode
+
+    def test_a_decode_that_takes_too_long_is_lost_and_the_next_file_works(self):
+        decoder = Decoder(timeout=0.05)
+        self.addCleanup(decoder.close)
+        with self.assertRaises(DecoderLost):
+            decoder.thumbnails(self.large, ("PNG",))
+        decoder.timeout = 30
+        self.assertEqual(decoder.thumbnails(jpeg(), ("JPEG",))[0], "made")
+
+    def test_a_child_killed_while_decoding_is_lost(self):
+        decoder = Decoder()
+        self.addCleanup(decoder.close)
+        self.assertEqual(decoder.thumbnails(jpeg(), ("JPEG",))[0], "made")
+        pid = decoder._child.pid
+        timer = threading.Timer(0.05, os.kill, (pid, signal.SIGKILL))
+        timer.start()
+        self.addCleanup(timer.cancel)
+        with self.assertRaises(DecoderLost):
+            decoder.thumbnails(self.large, ("PNG",))
+        self.assertEqual(
+            decoder.thumbnails(b"not an image", ("JPEG",))[0], "unreadable"
+        )
+
+    def test_the_memory_limit_makes_too_large_not_a_crash(self):
+        decoder = Decoder(memory=200 * 1024 * 1024)
+        self.addCleanup(decoder.close)
+        self.assertEqual(decoder.thumbnails(self.large, ("PNG",)), ("too_large", {}))
+        self.assertEqual(decoder.thumbnails(jpeg(), ("JPEG",))[0], "made")
+
+    def test_the_child_has_no_credentials(self):
+        decoder = Decoder()
+        self.addCleanup(decoder.close)
+        secrets = {"MIROIR_MEDIA_SECRET_ACCESS_KEY": "secret", "PGPASSWORD": "x"}
+        with (
+            patch.dict("os.environ", secrets),
+            patch("src.core.derive.subprocess.Popen", wraps=subprocess.Popen) as popen,
+        ):
+            decoder.thumbnails(jpeg(), ("JPEG",))
+        self.assertEqual(set(popen.call_args.kwargs["env"]), {"PATH"})
 
 
 class DeriveBatchTests(DeriveFixture):
@@ -545,6 +662,18 @@ class DeriveBatchTests(DeriveFixture):
         ][:1]
         self.assertEqual(waiting["attempts"][0]["error_type"], "NotScheduled")
         self.assertEqual(self.store.unstarted_derives("test", "screen"), [])
+
+    def test_a_run_that_changes_nothing_schedules_nothing(self):
+        # The reviewer's case: an entry of a kind that is not derived (renamed,
+        # or its thumbnails removed) must not keep scheduling runs.
+        old = datetime.now(timezone.utc)
+        self.store.add_pending_media(
+            "test", "screen", "screenshots_old", [("x.jpeg", 5, old)]
+        )
+        operation_id = self.request()
+        self.derive(operation_id, defer=self.schedule)
+        self.assertEqual(self.detail(operation_id), "Media: nothing queued; 0 waiting")
+        self.assertEqual(self.scheduled, [])
 
     def test_without_a_scheduler_one_run_drains_the_queue(self):
         self.queue({f"{i}.png": b"x" for i in range(5)})
@@ -584,12 +713,9 @@ class BackfillTests(DeriveFixture):
         )
         second = self.request({"kind": "screenshots", "limit": 3})
         self.derive(second)
-        self.assertIn("walked 3, walk continues", self.detail(second))
+        # The store said nothing follows: finished without an empty page.
+        self.assertIn("walked 3, walk finished", self.detail(second))
         self.assertEqual(len(self.rows()), 5)  # the invalid key is skipped
-        # A full page cannot tell it was the last; the next walk finds the end.
-        third = self.request({"kind": "screenshots", "limit": 3})
-        self.derive(third)
-        self.assertIn("walked 0, walk finished", self.detail(third))
         self.assertEqual(self.store.backfill_after("test", "screen", "screenshots"), "")
         self.objects.gets.clear()
         again = self.request({"kind": "screenshots", "limit": 100})
@@ -597,6 +723,23 @@ class BackfillTests(DeriveFixture):
         self.assertEqual(self.objects.gets, [])
         self.assertIn("known 5", self.detail(again))
         self.assertIn("walked 6, walk finished", self.detail(again))
+
+    def test_short_pages_and_a_long_invalid_name_do_not_end_the_walk(self):
+        self.objects.page_size = 2  # fewer than asked, while more remain
+        long_name = "2025/1z" + "x" * 600 + ".png"  # longer than a key may be
+        self.objects.add(f"site/screen/screenshots/{long_name}", b"x")
+        walk = self.request({"kind": "screenshots", "limit": 100})
+        self.derive(walk)
+        self.assertIn("walked 7, walk finished", self.detail(walk))
+        self.assertEqual(len(self.rows()), 5)
+        # It can end a page and become the cursor without harm.
+        self.store.set_backfill_after("test", "screen", "screenshots", long_name)
+        self.assertEqual(
+            self.store.backfill_after("test", "screen", "screenshots"), long_name
+        )
+        resumed = self.request({"kind": "screenshots", "limit": 100})
+        self.derive(resumed)
+        self.assertIn("walked 4, walk finished", self.detail(resumed))
 
     def test_the_command_runs_a_backfill_here(self):
         out = io.StringIO()
@@ -648,6 +791,26 @@ class BackfillTests(DeriveFixture):
         self.assertIn("no thumbnails", err.getvalue())
         self.assertIn("limit must be between", err.getvalue())
 
+    def test_a_local_run_never_uses_the_installation_store(self):
+        for metadata in (None, "postgresql+psycopg2://miroir@db.test/miroir"):
+            err = io.StringIO()
+            arguments = [
+                "--config",
+                str(self.config_path),
+                "media-backfill",
+                "screen",
+                "screenshots",
+                "--duckdb",
+                str(self.warehouse),
+            ] + (["--metadata", metadata] if metadata else [])
+            with (
+                patch.dict("os.environ", {"MIROIR_METADATA_URL": str(self.store.url)}),
+                contextlib.redirect_stderr(err),
+            ):
+                self.assertEqual(main(arguments), 2)
+            self.assertIn("local SQLite", err.getvalue())
+        self.assertEqual(self.pending(), [])
+
     def test_without_prefect_the_command_says_so(self):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
@@ -664,6 +827,9 @@ class BackfillTests(DeriveFixture):
             )
         self.assertEqual(code, 2)
         self.assertIn("No Prefect deployment", err.getvalue())
+
+
+decode = Decoder.thumbnails
 
 
 class DerivePostgresTests(DeriveFixture):
@@ -705,10 +871,6 @@ class DerivePostgresTests(DeriveFixture):
             cursor.execute(f"SELECT * FROM {dataset}.media_objects")
             names = [c[0] for c in cursor.description]
             return {row[2]: dict(zip(names, row)) for row in cursor.fetchall()}
-
-    def attempts(self) -> dict[str, int]:
-        queued = self.store.pending_media("test", "screen", "screenshots", 10)
-        return {entry.key: entry.attempts for entry in queued}
 
     def test_queue_run_and_walk(self):
         body = jpeg()

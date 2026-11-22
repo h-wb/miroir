@@ -4,7 +4,7 @@ The bucket is the record of what is stored (decision 033). Confirmed files of a
 kind with thumbnails are also queued for the worker (decision 040).
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import PurePosixPath
@@ -16,6 +16,20 @@ from src.core.operations import OperationError
 from src.integrations.contracts import MediaKind
 
 MAX_OBJECTS = 500
+# Thumbnail sizes, by width (decision 040).
+THUMBNAIL_WIDTHS = (360, 1280)
+# Pillow decoders by extension; an image is read only by the decoders of the
+# extensions its kind makes thumbnails of, whatever its bytes claim to be.
+IMAGE_DECODERS = {
+    ".jpeg": "JPEG",
+    ".jpg": "JPEG",
+    ".png": "PNG",
+    ".gif": "GIF",
+    ".webp": "WEBP",
+    ".bmp": "BMP",
+    ".tiff": "TIFF",
+    ".tif": "TIFF",
+}
 # Files one backfill run may walk (decision 040).
 MAX_BACKFILL = 1_000_000
 CONTENT_TYPES = {
@@ -72,6 +86,13 @@ class ListedObject:
     modified: datetime
 
 
+@dataclass(frozen=True)
+class Listing:
+    objects: list[ListedObject]
+    # The store's own word that more objects follow, not a short page.
+    truncated: bool
+
+
 class ObjectTooLarge(OperationError):
     """The object is larger than the caller is prepared to hold in memory."""
 
@@ -89,7 +110,7 @@ class ObjectStore(Protocol):
 
     def put(self, name: str, body: bytes, content_type: str) -> None: ...
 
-    def list_objects(self, prefix: str, after: str, limit: int) -> list[ListedObject]:
+    def list_objects(self, prefix: str, after: str, limit: int) -> Listing:
         """Up to `limit` objects under `prefix` named after `after`, in name order."""
         ...
 
@@ -129,6 +150,10 @@ def thumbnail_name(
 ) -> str:
     """A thumbnail beside its original, under a derived kind (decision 040)."""
     return object_name(prefix, connection_id, f"{kind}.w{width}", f"{key}.webp")
+
+
+def image_decoders(extensions: Iterable[str]) -> tuple[str, ...]:
+    return tuple(sorted({IMAGE_DECODERS[e] for e in extensions if e in IMAGE_DECODERS}))
 
 
 def derived_kind(connection: ResolvedConnection, name: str) -> MediaKind | None:

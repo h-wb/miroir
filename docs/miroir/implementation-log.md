@@ -2225,3 +2225,53 @@ Not done: serving thumbnails, the pages, any model reading `media_objects`,
 attachment and video thumbnails. Not run against a real bucket, a real worker
 or real screenshots. The installation must add the bucket key to the flow-run
 Job and release server, worker and image together (schema 8).
+
+## 2026-11-22 — Thumbnails: the review of pull request #44, and what changed
+
+An independent review of phase 1b found six defects and seven lesser points, with
+scripts that reproduced the first two. Each was decided by the lead and handled
+here, on the same pull request.
+
+| Finding | Decided | Done |
+|---|---|---|
+| 1. A file whose decoding ended the process marked every file before it in the batch as failed | Fix | A file's attempt count is raised only while it decodes and reset when the decode has an outcome; rows are written and queue entries removed every 100 files. The reviewer's case (five good files, a death on the sixth, three runs, a clean run) is in the suite: five `made`, one `failed` |
+| 2. The pixel cap did not bound memory (a 1 × 40M PNG cost 790 MB) | Fix | At most 16,384 on a side and a ratio of 16 either way, checked from the header; decoding in a child with a 1 GiB address-space limit, where running out of memory is `too_large`. Peaks measured in a fresh process per case (table below); the documented figure corrected |
+| 3. `media-backfill --duckdb` could drain the installation's queue | Fix | Refused unless `--metadata` names a local SQLite file; the README no longer offers it as an alternative |
+| 4. A run that changed nothing scheduled the next one forever | Fix | Scheduled only after progress; waiting files counted over derived kinds only. The reviewer's case is in the suite |
+| 5. A short page ended the walk; a long invalid name could overflow the cursor | Fix | `list_objects` returns the store's `IsTruncated`; the cursor is text and holds the last name listed, valid or not. Tests with short pages and a 600-character name |
+| 6. A rotated JPEG was drafted to a quarter of its resolution | Fix | The draft target is computed from the width after rotation (8000 × 1000 at orientation 6 now gives 1000 × 8000 and 360 × 2880) |
+| a. A slow decode was bounded only by the Job's time limit | Fix if safe | Built: the child process, a 30-second timeout per file enforced by the worker (it kills the child), a CPU limit per file, no credentials in the child's environment. A crash or a kill of the child costs that file one try; three and it is `failed` |
+| b. Empty derive runs piled up behind a long load | Fix | A waiting run with its own bound backend run absorbs confirmations whatever its age |
+| c. A run never started can be joined until it is closed | Document | In the amendment and the README, with what brings the queue back |
+| d. Same key, same size is not derived again | Document | Known limit, in both |
+| e. What a missing row means; a row outlives its object | Document | In both |
+| f. Every flow-run Job can read and write the whole bucket | Document | In both |
+| g. Derive runs crowded the connection's history | Fix | Left out of the history; one line shows files waiting and the last derive run |
+
+Peaks inside the decoder, each in a fresh process, above its own 32 MB (40
+million pixels unless said): grey with alpha (becomes RGBA) 480 MB, palette with
+transparency 365 MB, RGBA 328 MB, 16-bit grey 252 MB, grey and 1-bit 213 MB, RGB
+and 16-bit RGB 176 MB, 16,384 × 2,441 RGBA 303 MB and rotated by EXIF 304 MB,
+16,384 × 1,024 RGBA 119 MB and grey 70 MB; a 40-megapixel JPEG,
+RGB or CMYK, 26 MB. The shapes over the bounds (1 × 40,000,000, 20,000 wide,
+a ratio of 16.4) are refused with nothing decoded. Through the child under its
+real limit the worst case peaked at 513 MB resident. A flow-run Job needs about
+1 GiB for a derive run at worst; 1.5 GiB is suggested.
+
+Cost after the change, the same 200-file runs as before: 163 ms per JPEG at
+2880 × 1800, 187 ms at 3456 × 2234, 279 ms per PNG at 3456 × 2234 and 369 ms at
+5120 × 2880; the worker's process near 300 MB. The pipe to the child adds little;
+writing rows every 25 files cost 20 ms per file more than every 100, which is why
+it is 100.
+
+Validation: new tests for each finding (the reviewer's poison and endless-run
+cases, short pages, a 600-character name as cursor, a rotated JPEG, every shape
+over the bounds both ways round, a memory error), for the child decoder with real
+generated images (a decode over its timeout, a child killed while decoding, the
+memory limit giving `too_large`, no credentials in its environment), for joining
+a long-overdue bound run and not an unbound one, for the connection page's media
+line, and for the local backfill refusing any store but a local SQLite file. The
+boundary test now also checks that importing the derive module loads no image
+library. The server suite is green: 331 tests, none skipped, including the
+Postgres and Prefect ones, with ruff, format, mypy and the collector's strict
+mypy clean.

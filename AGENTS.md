@@ -26,7 +26,7 @@ Miroir (decision 014); history keeps its own words.
   `artifacts.py` (content-addressed receipt), `timeline.py` (the server's only,
   read-only, time-limited access to the warehouse), `derive.py` and
   `thumbnails.py` (the worker's thumbnails and `media_objects`; the only image
-  decoding, never imported by the server).
+  decoding, run as a child process and imported by nothing).
 - `src/web/` — FastAPI app + templates + `static/`. Token auth (`MIROIR_API_TOKEN`).
   A strict content security policy: no inline styles or scripts in templates.
   `connections.py` owns guided setup and connection settings; activity/ingestion

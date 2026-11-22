@@ -11,7 +11,7 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -239,7 +239,9 @@ media_backfills = sa.Table(
     sa.Column("miroir_id", sa.String(24), primary_key=True),
     sa.Column("connection_id", sa.String(24), primary_key=True),
     sa.Column("kind", sa.String(40), primary_key=True),
-    sa.Column("after", sa.String(512), nullable=False),
+    # The last name listed, valid key or not: an object copied in by other means
+    # can be named longer than a key may be.
+    sa.Column("after", sa.Text, nullable=False),
     sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
 )
 
@@ -776,11 +778,13 @@ class MetadataStore:
         analysis_id: str | None = None,
         requests_only: bool = False,
         origin: str | None = None,
+        kind: str | None = None,
+        without_kind: str | None = None,
     ) -> list[dict[str, Any]]:
         """Newest operations first, each with its attempts (oldest first).
 
-        `requests_only` leaves out child imports and analysis builds, which
-        report under the sync or import that started them.
+        `requests_only` leaves out child imports, analysis builds and derive
+        runs, which report under the sync or import that started them or apart.
         """
         with self.engine.connect() as db:
             rows = db.execute(
@@ -800,6 +804,10 @@ class MetadataStore:
                     if requests_only
                     else sa.true(),
                     operations.c.origin == origin if origin is not None else sa.true(),
+                    operations.c.kind == kind if kind is not None else sa.true(),
+                    operations.c.kind != without_kind
+                    if without_kind is not None
+                    else sa.true(),
                 )
                 .order_by(operations.c.created_at.desc())
                 .limit(limit)
@@ -1519,21 +1527,38 @@ class MetadataStore:
         ]
 
     def count_pending_media(
-        self, miroir_id: str, connection_id: str, kind: str | None = None
+        self, miroir_id: str, connection_id: str, kinds: Sequence[str]
     ) -> int:
+        """Files waiting, of the given kinds only: an entry of a kind that is no
+        longer derived waits for nothing."""
         with self.engine.connect() as db:
             return int(
                 db.execute(
                     sa.select(sa.func.count()).where(
                         media_pending.c.miroir_id == miroir_id,
                         media_pending.c.connection_id == connection_id,
-                        media_pending.c.kind == kind if kind is not None else sa.true(),
+                        media_pending.c.kind.in_(list(kinds)),
                     )
                 ).scalar_one()
             )
 
     def begin_media_attempt(
         self, miroir_id: str, connection_id: str, kind: str, key: str
+    ) -> None:
+        """Count a decode about to begin: raised only while it is in flight."""
+        self._media_attempts(
+            miroir_id, connection_id, kind, key, media_pending.c.attempts + 1
+        )
+
+    def end_media_attempt(
+        self, miroir_id: str, connection_id: str, kind: str, key: str
+    ) -> None:
+        """The decode reached an outcome, so nothing that happens later to the
+        run counts against this file."""
+        self._media_attempts(miroir_id, connection_id, kind, key, 0)
+
+    def _media_attempts(
+        self, miroir_id: str, connection_id: str, kind: str, key: str, value: Any
     ) -> None:
         with self.engine.begin() as db:
             db.execute(
@@ -1544,7 +1569,7 @@ class MetadataStore:
                     media_pending.c.kind == kind,
                     media_pending.c.key == key,
                 )
-                .values(attempts=media_pending.c.attempts + 1)
+                .values(attempts=value)
             )
 
     def remove_pending_media(
