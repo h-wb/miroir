@@ -24,7 +24,8 @@
 {%- endmacro %}
 
 {% macro search_form(q="", kind="screen", app="", from_day="", to_day="") -%}
-<form class="timeline-search" method="get" action="/timeline/search" role="search">
+{# POST: search words are never in an address (decision 040). #}
+<form class="timeline-search" method="post" action="/timeline/search" role="search">
   <label class="grow">Search <input type="search" name="q" value="{{ q }}" maxlength="200" required placeholder="Words on screen or in page titles"></label>
   <fieldset class="kinds">
     <legend class="visually-hidden">Search in</legend>

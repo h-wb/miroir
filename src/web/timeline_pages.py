@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from starlette.concurrency import run_in_threadpool
 
 from src.core import timeline
 from src.core.config import ResolvedMiroir
@@ -31,10 +32,9 @@ from src.core.timeline import (
     TimelineReader,
     TimelineTimeout,
     TimelineUnavailable,
-    read_cursor,
     timeline_source,
 )
-from src.web.timeline import NO_STORE, _cursor_time, _day, _optional_day, _plain
+from src.web.timeline import NO_STORE, USE_POST, _day, _plain, search_fields
 
 Page = Callable[..., HTMLResponse]
 # What a tile says where there is no image to show (the index's media codes).
@@ -47,6 +47,8 @@ MEDIA_LABELS = {
 # How far back `/timeline` looks for the latest day with data.
 LATEST_WITHIN_DAYS = 399
 SEARCH_PAGE = 20
+# What the search form sends; `limit` is the page's own.
+SEARCH_FORM_FIELDS = {"q", "kind", "app", "from", "to", "before"}
 
 
 def media_url(connection: str | None, key: str, size: int | str) -> str:
@@ -151,8 +153,40 @@ def timeline_page_routes(
         return guarded(request, latest)
 
     @router.get("/timeline/search", response_class=HTMLResponse)
-    def search_page(request: Request) -> Response:
-        return guarded(request, lambda reader: _search(request, reader, page))
+    def search_form(request: Request) -> Response:
+        """The empty form. Words never come in an address (decision 040)."""
+        if "q" in request.query_params:
+            return guarded(
+                request,
+                lambda reader: _search(request, {}, reader, page, refused=USE_POST),
+            )
+        return guarded(request, lambda reader: _search(request, {}, reader, page))
+
+    @router.post("/timeline/search", response_class=HTMLResponse)
+    async def search_page(request: Request) -> Response:
+        """Results of the form, or the next page of them for htmx."""
+        if request.query_params:
+            refusal = USE_POST if "q" in request.query_params else None
+            return await run_in_threadpool(
+                guarded,
+                request,
+                lambda reader: _search(
+                    request,
+                    {},
+                    reader,
+                    page,
+                    refused=refusal or "The search takes no parameters in its address",
+                ),
+            )
+        form = await request.form()
+        fields = {
+            name: value
+            for name, value in form.items()
+            if name in SEARCH_FORM_FIELDS and isinstance(value, str)
+        }
+        return await run_in_threadpool(
+            guarded, request, lambda reader: _search(request, fields, reader, page)
+        )
 
     @router.get("/timeline/{day}", response_class=HTMLResponse)
     def day_page(request: Request, day: str) -> Response:
@@ -219,30 +253,35 @@ def _frame_view(frame: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _search(request: Request, reader: TimelineReader, page: Page) -> Response:
-    query = request.query_params
-    words = _plain(query.get("q"), "q") or ""
-    kind = query.get("kind", "screen")
+def _search(
+    request: Request,
+    fields: dict[str, str],
+    reader: TimelineReader,
+    page: Page,
+    refused: str | None = None,
+) -> Response:
+    words = fields.get("q", "")
+    kind = fields.get("kind", "screen")
     if kind not in ("screen", "browser"):
         kind = "screen"
-    app = _plain(query.get("app"), "app") or None
     context: dict[str, Any] = {
         "source": reader.source.describe(),
+        # Shown back in the form, never in an address.
         "q": words,
         "kind": kind,
-        "app": app or "",
-        "from_day": query.get("from", ""),
-        "to_day": query.get("to", ""),
+        "app": fields.get("app", ""),
+        "from_day": fields.get("from", ""),
+        "to_day": fields.get("to", ""),
         "labels": MEDIA_LABELS,
         "results": None,
-        "refused": None,
+        "refused": refused,
         "more": None,
     }
     fragment = request.headers.get("hx-request") == "true"
-    status = 200
-    if words.strip():
+    status = 400 if refused else 200
+    if words.strip() and not refused:
         try:
-            found = _found(reader, query, words, kind, app)
+            found = search_fields(lambda: reader, {**fields, "limit": str(SEARCH_PAGE)})
         except (TimelineUnavailable, TimelineTimeout):
             raise  # the page's own error, from `guarded`
         except OperationError as error:
@@ -256,33 +295,13 @@ def _search(request: Request, reader: TimelineReader, page: Page) -> Response:
             else:
                 context["results"] = [_visit(v) for v in found["visits"]]
             if found["next"]:
-                params = {k: v for k, v in query.items() if k != "before"}
-                context["more"] = "/timeline/search?" + urlencode(
-                    {**params, "before": found["next"]}
-                )
+                # The next page is asked for with these fields in a POST body.
+                context["more"] = {
+                    **{k: v for k, v in fields.items() if k != "before" and v},
+                    "before": found["next"],
+                }
     name = "_timeline_results.html" if fragment else "timeline_search.html"
     return _no_store(page(request, name, **context), status)
-
-
-def _found(
-    reader: TimelineReader, query: Any, words: str, kind: str, app: str | None
-) -> dict[str, Any]:
-    start = _optional_day(query.get("from") or None, "from")
-    end = _optional_day(query.get("to") or None, "to")
-    before = query.get("before")
-    if kind == "screen":
-        moment = None
-        if before:
-            bucket, bundle = read_cursor(before, (int, str))
-            moment = (bucket, bundle)
-        return reader.search_screen(words, app, start, end, SEARCH_PAGE, moment)
-    if app:
-        raise OperationError("An app filters screen results only")
-    visit = None
-    if before:
-        at, event_id = read_cursor(before, (str, str))
-        visit = (_cursor_time(at), event_id)
-    return reader.search_browser(words, start, end, SEARCH_PAGE, visit)
 
 
 def _moment(moment: dict[str, Any], apps: list[dict[str, str]]) -> dict[str, Any]:

@@ -855,6 +855,18 @@ The server sets both on every session it opens anyway, whatever the role or the
 URL say, so one slow search cannot hold a connection and a mistaken grant cannot
 lead to a write.
 
+**Connections.** Each server process holds up to five connections as the reader:
+four for the timeline's queries and one for the media route's image lookups.
+During a rolling update two processes run at once, so the role's connection
+limit must allow at least ten (the installation's role allows six, set in the
+home-ops repository: enough for one process, not two at full use).
+
+**No search words in addresses.** Searches are sent with POST, the words in the
+body, on the page and in the API; a search address with `q` is refused (400).
+The server's access log also drops the query string of every request it logs (the
+path stays), as a second line of defence. Proxies in front of the server log what
+they receive; with POST, that is no longer the words.
+
 | Route | What |
 |---|---|
 | `GET /timeline` | For a logged-in administrator: whether the timeline is configured and its database reachable and read-only |
@@ -883,7 +895,7 @@ twice, is refused.
 | `GET /api/timeline/screen/{day}` | none | A day's frames as columns, below |
 | `GET /api/timeline/frames/{key}` | none (`key` is the frame's media key, slashes included) | One frame, below; 404 if unknown |
 | `GET /api/timeline/events` | `from`, `to`: a day or a time with offset (`to` as a day includes it); `source`: `screen`, `browser` or both, comma-separated (default both); `limit` 1–500 (200); `after`: the `next` of the previous page | `{events: [...], next}`, events that started in `[from, to)`, oldest first |
-| `GET /api/timeline/search` | `q`: 1–200 characters, web search syntax (`"a phrase"`, `-word`, `or`), with at least one word to look for in every part (`-word` alone, or `a or -b`, is refused with 400); `kind`: `screen` (default) or `browser`; `app`: a bundle identifier (screen only); `from`, `to`: days, inclusive, optional; `limit` 1–50 (20); `before`: the `next` of the previous page | Moments or visits, newest first, below |
+| `POST /api/timeline/search` | A JSON object in the body (`Content-Type: application/json`, at most 8 KB), never parameters in the address (a `GET`, or `q` in the address, answers 400 "Search with POST"). Fields, `null` for absent: `q`: 1–200 characters, web search syntax (`"a phrase"`, `-word`, `or`), with at least one word to look for in every part (`-word` alone, or `a or -b`, is refused with 400); `kind`: `screen` (default) or `browser`; `app`: a bundle identifier (screen only); `from`, `to`: days, inclusive, optional; `limit` a number 1–50 (20); `before`: the `next` of the previous page; any other field is refused | Moments or visits, newest first, below |
 
 The screen index of a day, made small for about 3,000 frames (about 110 KB, 15 KB
 compressed):
@@ -1003,12 +1015,18 @@ lanes and scrubber from the API above, and the rest of each page works without i
   made** (stored; "Open the original" may still show it), **Withheld** (never
   uploaded; no text either), **The image could not be loaded** (a record whose
   file is gone).
-- `/timeline/search?q=…` searches screen text (moments: one app, one five-minute
-  window, newest window first, apps in name order within one) or, with
-  **Browser visits**, page titles and addresses. Filters: an app's bundle
-  identifier (screen only) and a date range. Each moment opens the Day view at its
-  first match; "Older results" loads the next page in place. A search with no
-  word to look for (`-word` alone, `a or -b`) says so (400).
+- `/timeline/search` is the search form. It is sent with POST, so the words are
+  never in the address bar, the browser's history or a log; an address with
+  `?q=` is refused (400) and shows the empty form. It searches screen text
+  (moments: one app, one five-minute window, newest window first, apps in name
+  order within one) or, with **Browser visits**, page titles and addresses.
+  Filters: an app's bundle identifier (screen only) and a date range. Each moment
+  opens the Day view at its first match (`?frame=<key>`: a file name, not text);
+  "Older results" posts the words, filters and next-page token again, in place
+  with htmx or as a page without it. A search with no word to look for (`-word`
+  alone, `a or -b`) says so (400).
+- A request made by htmx after the login expired loads the login page instead of
+  being swapped into the page (`HX-Redirect`).
 - On a phone (up to 760 pixels wide) everything is one column: the image, then
   the frame's text, then the lanes, the slider and the calendar; lanes and slider
   are taller for a finger.

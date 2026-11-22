@@ -11,7 +11,7 @@ import gzip
 import hashlib
 import json
 import re
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Mapping
 from datetime import date, datetime
 from typing import Any
 from unicodedata import category
@@ -19,6 +19,7 @@ from unicodedata import category
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.routing import APIRoute
+from starlette.concurrency import run_in_threadpool
 
 from src.core import timeline
 from src.core.config import ResolvedMiroir
@@ -238,40 +239,95 @@ def timeline_pages(
         )
 
     @api.get("/api/timeline/search")
-    def search(request: Request) -> Response:
-        query = _parameters(
-            request, {"q", "kind", "app", "from", "to", "limit", "before"}
-        )
-        words = _plain(query.get("q"), "q")
-        if words is None:
-            raise OperationError("Missing parameter: q")
-        kind = query.get("kind", "screen")
-        start = _optional_day(query.get("from"), "from")
-        end = _optional_day(query.get("to"), "to")
-        limit = _limit(query.get("limit"), 20, MAX_SEARCH)
-        if kind == "screen":
-            app = _plain(query.get("app"), "app")
-            if app is not None and not 1 <= len(app) <= 255:
-                raise OperationError("app must be a bundle identifier")
-            before_moment = None
-            if "before" in query:
-                bucket, bundle = read_cursor(query["before"], (int, str))
-                before_moment = (bucket, bundle)
-            found = reader().search_screen(words, app, start, end, limit, before_moment)
-        elif kind == "browser":
-            if "app" in query:
-                raise OperationError("app filters screen results only")
-            before_visit = None
-            if "before" in query:
-                at, event_id = read_cursor(query["before"], (str, str))
-                before_visit = (_cursor_time(at), event_id)
-            found = reader().search_browser(words, start, end, limit, before_visit)
-        else:
-            raise OperationError("kind must be screen or browser")
+    def search_by_address() -> Response:
+        # Search words must never be in an address: logs and history keep it.
+        raise OperationError(USE_POST)
+
+    @api.post("/api/timeline/search")
+    async def search(request: Request) -> Response:
+        fields = await _json_fields(request)
+        found = await run_in_threadpool(search_fields, reader, fields)
         return _answer(request, found)
 
     router.include_router(api)
+    router.include_router(api)
     return router
+
+
+USE_POST = (
+    "Search with POST, the words in the body: search words are never sent in an"
+    " address, where logs and the browser's history would keep them."
+)
+SEARCH_FIELDS = {"q", "kind", "app", "from", "to", "limit", "before"}
+MAX_SEARCH_BODY = 8192
+
+
+async def _json_fields(request: Request) -> dict[str, str]:
+    """A search's JSON body: an object of these fields, strings but `limit`."""
+    if request.query_params:
+        raise OperationError(
+            USE_POST
+            if "q" in request.query_params
+            else ("The search takes no parameters in its address")
+        )
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > MAX_SEARCH_BODY:
+            raise OperationError("The search body is too large")
+    try:
+        values = json.loads(body)
+    except (ValueError, RecursionError):
+        raise OperationError("The search body must be a JSON object") from None
+    if not isinstance(values, dict):
+        raise OperationError("The search body must be a JSON object")
+    unknown = sorted(set(values) - SEARCH_FIELDS)
+    if unknown:
+        raise OperationError(f"Unknown field: {unknown[0]}")
+    fields: dict[str, str] = {}
+    for name, value in values.items():
+        if value is None:
+            continue
+        if name == "limit" and type(value) is int:
+            fields[name] = str(value)
+        elif name != "limit" and isinstance(value, str):
+            fields[name] = value
+        else:
+            kind = "a whole number" if name == "limit" else "text"
+            raise OperationError(f"{name} must be {kind}")
+    return fields
+
+
+def search_fields(
+    reader: Callable[[], TimelineReader], fields: Mapping[str, str]
+) -> dict[str, Any]:
+    """A search from its fields (strings), for the JSON route and the page."""
+    words = _plain(fields.get("q"), "q")
+    if words is None:
+        raise OperationError("Missing field: q")
+    kind = fields.get("kind", "screen")
+    start = _optional_day(fields.get("from") or None, "from")
+    end = _optional_day(fields.get("to") or None, "to")
+    limit = _limit(fields.get("limit"), 20, MAX_SEARCH)
+    before = fields.get("before") or None
+    app = _plain(fields.get("app") or None, "app")
+    if kind == "screen":
+        if app is not None and not 1 <= len(app) <= 255:
+            raise OperationError("app must be a bundle identifier")
+        moment = None
+        if before:
+            bucket, bundle = read_cursor(before, (int, str))
+            moment = (bucket, bundle)
+        return reader().search_screen(words, app, start, end, limit, moment)
+    if kind == "browser":
+        if app is not None:
+            raise OperationError("app filters screen results only")
+        visit = None
+        if before:
+            at, event_id = read_cursor(before, (str, str))
+            visit = (_cursor_time(at), event_id)
+        return reader().search_browser(words, start, end, limit, visit)
+    raise OperationError("kind must be screen or browser")
 
 
 def _cursor_time(value: str) -> datetime:

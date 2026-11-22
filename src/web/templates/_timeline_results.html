@@ -19,4 +19,9 @@
 </article>
 {% endif %}
 {% endfor %}
-{% if more %}<a class="button-link more" href="{{ more }}" hx-get="{{ more }}" hx-target="this" hx-swap="outerHTML">Older results</a>{% endif %}
+{# The next page: the words, filters and cursor go in the POST body, with htmx
+   or without it; never in an address, and htmx pushes no URL for it. #}
+{% if more %}<form class="more" method="post" action="/timeline/search" hx-post="/timeline/search" hx-target="this" hx-swap="outerHTML" hx-push-url="false">
+{% for name, value in more.items() %}<input type="hidden" name="{{ name }}" value="{{ value }}">
+{% endfor %}<button class="button-link">Older results</button>
+</form>{% endif %}

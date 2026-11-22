@@ -414,6 +414,12 @@ for (const element of document.querySelectorAll(".app-chip[data-colour]")) {
 }
 const root = document.getElementById("timeline-day");
 if (root && document.getElementById("scrubber")) new DayView(root).start();
+// Search results come from a POST. Their history entry is made an ordinary
+// one, so Back returns to the empty form (no words, nothing to post again)
+// instead of the browser's "resend the form?" page.
+if (document.querySelector(".timeline-search-page")) {
+  history.replaceState(null, "", location.pathname);
+}
 // A page brought back from the back-forward cache after logging out shows
 // nothing it kept: it loads again, and the server asks for the login.
 window.addEventListener("pageshow", (event) => {

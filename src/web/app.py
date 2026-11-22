@@ -9,6 +9,7 @@ receive-only bearer tokens rather than the administrator token.
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import tempfile
@@ -108,6 +109,26 @@ class Unauthorized(Exception):
     pass
 
 
+class NoQueryInAccessLog(logging.Filter):
+    """uvicorn's access lines name the path with its query string (client,
+    method, path, version, status). The query is dropped, on every path: an
+    address may carry what was looked for (decision 040)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
+            record.args = (*args[:2], args[2].split("?", 1)[0], *args[3:])
+        return True
+
+
+def quiet_access_log() -> None:
+    """Install the filter on uvicorn's access logger, once. Logger filters
+    survive uvicorn's own logging configuration, which replaces handlers."""
+    logger = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, NoQueryInAccessLog) for f in logger.filters):
+        logger.addFilter(NoQueryInAccessLog())
+
+
 def error_status(error: Exception) -> int:
     """HTTP status of a product error. 503 asks clients to retry later."""
     from src.core.runner import AlreadyImported
@@ -160,6 +181,7 @@ def create_app(
     ):
         raise ValueError(METRICS_TOKEN_REUSED)
     session = hmac.new(token.encode(), b"miroir-session", hashlib.sha256).hexdigest()
+    quiet_access_log()
     app = FastAPI(title="Miroir", docs_url=None, redoc_url=None)
 
     def authorize(request: Request) -> None:
@@ -219,6 +241,9 @@ def create_app(
         except Unauthorized:
             if request.url.path.startswith("/api/"):
                 return JSONResponse({"error": "unauthorized"}, status_code=401)
+            if request.headers.get("hx-request") == "true":
+                # htmx would swap the login page into the page; it loads it instead.
+                return Response(status_code=401, headers={"HX-Redirect": "/login"})
             return RedirectResponse("/login", status_code=303)
         return await call_next(request)
 

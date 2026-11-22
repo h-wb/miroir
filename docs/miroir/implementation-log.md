@@ -2742,3 +2742,24 @@ storage after logging out.
 
 The server suite is green: 416 tests, one skipped (the benchmark, on request), with
 ruff, format, mypy and the collector's strict mypy clean.
+
+## 2026-11-22 — Review of pull request #50: search words leave addresses
+
+- Search is POST everywhere: the page's form and its "Older results" (hidden
+  fields, `hx-post` to the bare path), and `POST /api/timeline/search` with a
+  JSON body. `q` in an address answers 400 "Search with POST" on both; a GET of
+  the JSON route always does. This revises #49's search route (decision 040,
+  amendment, *Review of the pages*).
+- uvicorn's access lines keep the path and drop the query string, on every path.
+- An htmx request that needs the login gets `HX-Redirect: /login`.
+- The README says each process holds up to five reader connections, so the
+  role's limit must cover two processes during a rolling update.
+
+Validation: tests for the POST search (page, fragment, JSON), the refusals of
+`q` in an address without echoing it, the hidden fields and attributes of
+"Older results", `HX-Redirect`, and a real uvicorn server's access lines
+(the test fails with the filter disabled). Looked at again in Chromium on the
+synthetic day: search, older results, Back, logout.
+
+The server suite is green: 420 tests, one skipped (the benchmark, on request), with
+ruff, format, mypy and the collector's strict mypy clean.

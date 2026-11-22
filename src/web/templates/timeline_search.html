@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% import "_timeline.html" as t %}
-{% block title %}Timeline search{% if q %} · {{ q }}{% endif %}{% endblock %}
+{# No words in the title: browsers keep titles in their history. #}
+{% block title %}Timeline search{% endblock %}
 {% block head %}<script src="/static/htmx.min.js" defer></script>
 <script type="module" src="/static/timeline.js"></script>{% endblock %}
 {% block body %}

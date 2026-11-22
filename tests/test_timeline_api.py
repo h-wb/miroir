@@ -14,6 +14,7 @@ import threading
 import time
 from contextlib import closing
 from datetime import date, datetime, timezone
+from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import quote
 
@@ -43,7 +44,7 @@ from src.core.timeline import (
     status,
     timeline_source,
 )
-from src.web.app import create_app
+from src.web.app import STATIC_DIR, create_app
 from src.web.timeline_pages import MEDIA_LABELS
 from tests.fakes import FakeObjectStore
 from tests.test_timeline_models import (
@@ -75,8 +76,17 @@ ROUTES = (
     "/api/timeline/screen/2026-11-20",
     f"/api/timeline/frames/{path(0)}",
     "/api/timeline/events?from=2026-11-19&to=2026-11-21",
-    "/api/timeline/search?q=invoice",
+    # Search words go in a POST body, never in an address.
+    ("/api/timeline/search", {"q": "invoice"}),
 )
+
+
+def call(client, route, **options):
+    """A route of ROUTES: an address to GET, or (address, body) to POST as JSON."""
+    options.setdefault("follow_redirects", False)
+    if isinstance(route, tuple):
+        return client.post(route[0], json=route[1], **options)
+    return client.get(route, **options)
 
 
 def at(offset):
@@ -494,16 +504,13 @@ class TimelineQueryTests(TimelineApiFixture):
             f"/media/screen/screenshots/{path(0)}?size=360",
         ):
             # Pages outside /api send the browser to the login page.
-            refused = 401 if route.startswith("/api/") else 303
+            url = route[0] if isinstance(route, tuple) else route
+            refused = 401 if url.startswith("/api/") else 303
             with self.subTest(route=route):
+                self.assertEqual(call(client, route).status_code, refused)
                 self.assertEqual(
-                    client.get(route, follow_redirects=False).status_code, refused
-                )
-                self.assertEqual(
-                    client.get(
-                        route,
-                        headers={"Authorization": "Bearer wrong"},
-                        follow_redirects=False,
+                    call(
+                        client, route, headers={"Authorization": "Bearer wrong"}
                     ).status_code,
                     refused,
                 )
@@ -512,11 +519,13 @@ class TimelineQueryTests(TimelineApiFixture):
         client = self.client()
         for route in ROUTES:
             with self.subTest(route=route):
-                response = client.get(route, headers=BEARER)
+                response = call(client, route, headers=BEARER)
                 self.assertEqual(response.status_code, 200, response.text)
                 self.assertEqual(response.headers["content-type"], "application/json")
                 expected = (
-                    "private, no-cache" if "/screen/" in route else "private, no-store"
+                    "private, no-cache"
+                    if "/screen/" in str(route)
+                    else "private, no-store"
                 )
                 self.assertEqual(response.headers["cache-control"], expected)
         days = client.get(ROUTES[0], headers=BEARER).json()
@@ -543,8 +552,10 @@ class TimelineQueryTests(TimelineApiFixture):
             [e["event_id"] for e in page["events"] + rest["events"]],
             [f"screen:{path(120)}", "browser:1", "browser:2", "browser:3"],
         )
-        browser = client.get(
-            "/api/timeline/search?q=invoice&kind=browser&limit=1", headers=BEARER
+        browser = client.post(
+            "/api/timeline/search",
+            json={"q": "invoice", "kind": "browser", "limit": 1},
+            headers=BEARER,
         ).json()
         self.assertEqual(browser["visits"][0]["event_id"], "browser:5")
         self.assertIsNotNone(browser["next"])
@@ -602,17 +613,24 @@ class TimelineQueryTests(TimelineApiFixture):
             "/api/timeline/events?from=2026-11-20&to=2026-11-21&limit=1e3",
             "/api/timeline/events?from=2026-11-20&to=2026-11-21&after=forged",
             "/api/timeline/events?from=2026-11-21&to=2026-11-20T00:00:00Z",
-            "/api/timeline/search",
-            "/api/timeline/search?q=",
-            "/api/timeline/search?q=invoice&kind=music",
-            "/api/timeline/search?q=invoice&kind=browser&app=com.apple.Safari",
-            "/api/timeline/search?q=invoice&before=WyJhIiwiYiJd",
-            "/api/timeline/search?q=invoice&limit=51",
-            "/api/timeline/search?q=invoice&from=2026-11-21&to=2026-11-20",
+            ("/api/timeline/search", {}),
+            ("/api/timeline/search", {"q": ""}),
+            ("/api/timeline/search", {"q": "invoice", "kind": "music"}),
+            ("/api/timeline/search", {"q": "invoice", "kind": "browser", "app": "x"}),
+            ("/api/timeline/search", {"q": "invoice", "before": "WyJhIiwiYiJd"}),
+            ("/api/timeline/search", {"q": "invoice", "limit": 51}),
+            ("/api/timeline/search", {"q": "invoice", "limit": "5"}),
+            ("/api/timeline/search", {"q": 3}),
+            ("/api/timeline/search", {"q": "invoice", "extra": "1"}),
+            ("/api/timeline/search", ["invoice"]),
+            (
+                "/api/timeline/search",
+                {"q": "invoice", "from": "2026-11-21", "to": "2026-11-20"},
+            ),
         )
         for route in cases:
             with self.subTest(route=route):
-                response = client.get(route, headers=BEARER)
+                response = call(client, route, headers=BEARER)
                 self.assertEqual(response.status_code, 400, response.text)
                 self.assertIn("error", response.json())
                 self.assertEqual(response.headers["cache-control"], "private, no-store")
@@ -621,6 +639,34 @@ class TimelineQueryTests(TimelineApiFixture):
         )
         self.assertEqual(unknown.status_code, 404)
         self.assertEqual(unknown.headers["cache-control"], "private, no-store")
+
+    def test_search_words_are_never_taken_from_an_address(self):
+        client = self.client()
+        for url in (
+            "/api/timeline/search?q=invoice",
+            "/api/timeline/search",
+            "/api/timeline/search?kind=browser",
+        ):
+            with self.subTest(url=url):
+                response = client.get(url, headers=BEARER)
+                self.assertEqual(response.status_code, 400)
+                self.assertIn("Search with POST", response.json()["error"])
+                self.assertNotIn("invoice", response.text)
+        # A POST with the words in its address is refused too: nothing quietly
+        # goes back to sending them where logs keep them.
+        posted = client.post(
+            "/api/timeline/search?q=invoice", json={"q": "invoice"}, headers=BEARER
+        )
+        self.assertEqual(posted.status_code, 400)
+        self.assertIn("Search with POST", posted.json()["error"])
+        found = client.post(
+            "/api/timeline/search",
+            json={"q": "invoice", "app": TERMINAL, "limit": 5, "before": None},
+            headers=BEARER,
+        )
+        self.assertEqual(found.status_code, 200)
+        self.assertEqual(found.headers["cache-control"], "private, no-store")
+        self.assertEqual([m["key"] for m in found.json()["moments"]], [path(120)])
 
     def test_without_an_analysis_or_a_database_every_route_says_so(self):
         for client, message in (
@@ -632,7 +678,7 @@ class TimelineQueryTests(TimelineApiFixture):
         ):
             for route in (*ROUTES, "/api/timeline/health"):
                 with self.subTest(route=route, message=message):
-                    response = client.get(route, headers=BEARER)
+                    response = call(client, route, headers=BEARER)
                     self.assertEqual(response.status_code, 503)
                     body = response.json()
                     self.assertIn(message, body.get("error") or body.get("message"))
@@ -645,7 +691,9 @@ class TimelineQueryTests(TimelineApiFixture):
         with patch.object(
             TimelineReader, "search_screen", side_effect=TimelineTimeout("Too slow")
         ):
-            response = client.get("/api/timeline/search?q=invoice", headers=BEARER)
+            response = client.post(
+                "/api/timeline/search", json={"q": "invoice"}, headers=BEARER
+            )
         self.assertEqual(
             (response.status_code, response.json()), (504, {"error": "Too slow"})
         )
@@ -747,7 +795,9 @@ class TimelineQueryTests(TimelineApiFixture):
             with self.subTest(words=words):
                 moments = self.reader.search_screen(words, None, None, None, 20, None)
                 self.assertEqual(len(moments["moments"]), found)
-        response = self.client().get("/api/timeline/search?q=-zzzz", headers=BEARER)
+        response = self.client().post(
+            "/api/timeline/search", json={"q": "-zzzz"}, headers=BEARER
+        )
         self.assertEqual(response.status_code, 400)
         self.assertIn("at least one word", response.json()["error"])
 
@@ -791,21 +841,24 @@ class TimelineQueryTests(TimelineApiFixture):
         for route, code in (
             ("/media/screen/screenshots/a%00b.jpeg?size=360", 404),
             ("/media/screen/screenshots/a%00b.jpeg", 404),
-            ("/api/timeline/search?q=a%00b", 400),
-            ("/api/timeline/search?q=invoice&app=a%00b", 400),
-            ("/api/timeline/search?q=a%01b", 400),
+            (("/api/timeline/search", {"q": "a\x00b"}), 400),
+            (("/api/timeline/search", {"q": "invoice", "app": "a\x00b"}), 400),
+            (("/api/timeline/search", {"q": "a\x01b"}), 400),
             ("/api/timeline/frames/a%00b", 400),
             (
                 "/api/timeline/events?from=2026-11-20&to=2026-11-21&after=" + forged,
                 400,
             ),
             (
-                "/api/timeline/search?q=invoice&kind=browser&before=" + forged,
+                (
+                    "/api/timeline/search",
+                    {"q": "invoice", "kind": "browser", "before": forged},
+                ),
                 400,
             ),
         ):
             with self.subTest(route=route):
-                response = client.get(route, headers=BEARER, follow_redirects=False)
+                response = call(client, route, headers=BEARER)
                 self.assertEqual(response.status_code, code, response.text)
 
     def test_an_image_answers_while_searches_hold_the_pool(self):
@@ -1015,9 +1068,21 @@ class TimelinePageTests(TimelineApiFixture):
             with self.subTest(url=url):
                 self.assertEqual(self.page(client, url).status_code, 400)
 
+    def search(self, client, fields, **headers):
+        """The search form, posted: its words are never in an address."""
+        response = client.post(
+            "/timeline/search",
+            data=fields,
+            headers={**BEARER, **headers},
+            follow_redirects=False,
+        )
+        self.assertEqual(response.headers["cache-control"], "private, no-store")
+        self.assertIsNone(INLINE.search(response.text))
+        return response
+
     def test_search_shows_moments_visits_nothing_or_why_it_refused(self):
         client = self.client()
-        found = self.page(client, "/timeline/search?q=invoice")
+        found = self.search(client, {"q": "invoice", "kind": "screen"})
         self.assertEqual(found.status_code, 200)
         self.assertIn('<script src="/static/htmx.min.js" defer></script>', found.text)
         self.assertEqual(found.text.count('<article class="moment">'), 5)
@@ -1031,16 +1096,33 @@ class TimelinePageTests(TimelineApiFixture):
         )
         self.assertIn("Morning <mark>invoice</mark> review", found.text)
         self.assertIn("2 frames, until 00:01:00", found.text)
-        browser = self.page(client, "/timeline/search?q=invoice&kind=browser")
+        # The words are shown back in the form, which posts again, but are not
+        # in the title: browsers keep titles in their history.
+        self.assertIn('name="q" value="invoice"', found.text)
+        self.assertIn("<title>Timeline search</title>", found.text)
+        # The results' history entry is made an ordinary one, so Back shows the
+        # empty form rather than offering to send the words again.
+        self.assertIn(
+            '<script type="module" src="/static/timeline.js"></script>', found.text
+        )
+        script = (Path(STATIC_DIR) / "timeline.js").read_text()
+        self.assertIn('history.replaceState(null, "", location.pathname)', script)
+        self.assertIn(
+            '<form class="timeline-search" method="post" action="/timeline/search"',
+            found.text,
+        )
+        browser = self.search(client, {"q": "invoice", "kind": "browser"})
         self.assertEqual(browser.text.count('<article class="visit">'), 6)
         self.assertIn("<mark>Invoice</mark> portal", browser.text)
         self.assertIn(
             '<a href="https://billing.example.com/invoices" rel="noreferrer noopener"',
             browser.text,
         )
-        none = self.page(client, "/timeline/search?q=absent")
+        terminal = self.search(client, {"q": "invoice", "app": TERMINAL})
+        self.assertEqual(terminal.text.count('<article class="moment">'), 1)
+        none = self.search(client, {"q": "absent"})
         self.assertIn("Nothing found on screen.", none.text)
-        refused = self.page(client, "/timeline/search?q=-zzzz")
+        refused = self.search(client, {"q": "-zzzz"})
         self.assertEqual(refused.status_code, 400)
         self.assertIn(
             '<p class="error" id="search-refused">The search must look for',
@@ -1048,22 +1130,82 @@ class TimelinePageTests(TimelineApiFixture):
         )
         empty = self.page(client, "/timeline/search")
         self.assertEqual(empty.status_code, 200)
-        self.assertNotIn("results", empty.text.split("</form>")[-1])
+        self.assertIn('method="post" action="/timeline/search"', empty.text)
+        self.assertNotIn('class="results"', empty.text)
 
-    def test_older_results_page_with_the_routes_tokens_and_htmx_fragments(self):
+    def test_search_words_in_an_address_are_refused_and_not_echoed(self):
+        client = self.client()
+        for url in (
+            "/timeline/search?q=invoice",
+            "/timeline/search?q=invoice&kind=browser",
+        ):
+            with self.subTest(url=url):
+                response = self.page(client, url)
+                self.assertEqual(response.status_code, 400)
+                self.assertIn("Search with POST", response.text)
+                self.assertNotIn("invoice", response.text)
+                self.assertNotIn('class="results"', response.text)
+        posted = client.post(
+            "/timeline/search?q=invoice", data={"q": "invoice"}, headers=BEARER
+        )
+        self.assertEqual(posted.status_code, 400)
+        self.assertNotIn('class="results"', posted.text)
+
+    def test_older_results_post_their_fields_in_the_body(self):
         client = self.client()
         with patch("src.web.timeline_pages.SEARCH_PAGE", 2):
-            first = self.page(client, "/timeline/search?q=invoice")
-            more = re.search(r'class="button-link more" href="([^"]+)"', first.text)
+            first = self.search(client, {"q": "invoice", "kind": "screen"})
+            more = re.search(
+                r'<form class="more"([^>]*)>(.*?)</form>', first.text, re.DOTALL
+            )
             assert more is not None
-            url = html.unescape(more.group(1))
-            self.assertIn("before=", url)
-            fragment = self.page(client, url, **{"HX-Request": "true"})
-            plain = self.page(client, url)
+            attributes, inner = more.groups()
+            # Neither the form's address nor any hx- attribute carries the words.
+            self.assertIn('method="post" action="/timeline/search"', attributes)
+            self.assertIn('hx-post="/timeline/search"', attributes)
+            self.assertIn('hx-push-url="false"', attributes)
+            self.assertNotIn("invoice", attributes)
+            self.assertNotIn("?", attributes)
+            fields = {
+                name: html.unescape(value)
+                for name, value in re.findall(
+                    r'<input type="hidden" name="([^"]+)" value="([^"]*)">', inner
+                )
+            }
+            self.assertEqual(fields["q"], "invoice")
+            self.assertIn("before", fields)
+            fragment = self.search(client, fields, **{"HX-Request": "true"})
+            plain = self.search(client, fields)
         self.assertNotIn("<html", fragment.text)
         self.assertEqual(fragment.text.count('<article class="moment">'), 2)
         self.assertIn("<html", plain.text)
         self.assertIn(f"frame={quote(path(0), safe='')}", fragment.text)
+
+    def test_an_htmx_request_without_a_login_reloads_the_login_page(self):
+        client = self.client()
+        anonymous = {"HX-Request": "true"}
+        for response in (
+            client.post(
+                "/timeline/search",
+                data={"q": "invoice"},
+                headers=anonymous,
+                follow_redirects=False,
+            ),
+            client.get(
+                "/timeline/2026-11-20", headers=anonymous, follow_redirects=False
+            ),
+        ):
+            with self.subTest(url=str(response.url)):
+                self.assertEqual(response.status_code, 401)
+                self.assertEqual(response.headers["hx-redirect"], "/login")
+                self.assertEqual(response.content, b"")
+        # Without htmx, the browser is sent to the login page as before.
+        plain = client.post(
+            "/timeline/search", data={"q": "invoice"}, follow_redirects=False
+        )
+        self.assertEqual(
+            (plain.status_code, plain.headers["location"]), (303, "/login")
+        )
 
     def test_data_is_text_never_markup(self):
         from src.web.app import templates
@@ -1106,10 +1248,17 @@ class TimelinePageTests(TimelineApiFixture):
             for url in (
                 "/timeline",
                 "/timeline/2026-11-20",
-                "/timeline/search?q=invoice",
+                "/timeline/search",
+                "POST /timeline/search",
             ):
+                if url == "/timeline/search" and "built" in message:
+                    continue  # the empty form reads no table; its search says so
                 with self.subTest(url=url, message=message):
-                    response = self.page(client, url)
+                    response = (
+                        self.search(client, {"q": "invoice"})
+                        if url.startswith("POST")
+                        else self.page(client, url)
+                    )
                     self.assertEqual(response.status_code, 503)
                     self.assertIn(message, response.text)
                     self.assertEqual(

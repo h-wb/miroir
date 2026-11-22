@@ -2490,6 +2490,56 @@ search; zooming and panning the image (the plan's tap to zoom); a copy button fo
 a frame's text (it is selectable); merged events of other sources around the
 cursor; checking that Safari honours `Clear-Site-Data`.
 
+*Review of the pages (2026-11-22).* An independent review of pull request #50
+found one blocking point, widened on purpose, and three more:
+
+- *Search words are never in an address* *(conservative)*. This revises part 1's
+  `GET /api/timeline/search`. What the owner searched for is text from their own
+  screen; in an address it reached the server's access log, the log of the
+  gateway in front of it (outside this repository, its pod logs readable by
+  tooling that must never see private data) and the browser's history, which
+  `Clear-Site-Data` does not clear. A log filter alone would have left the
+  gateway and the history. So:
+  - the page's search form is sent with POST, and "Older results" posts the
+    words, filters and next-page token as hidden fields of a small form, with
+    htmx (`hx-post` to the bare path, `hx-push-url="false"`) or without it;
+    `GET /timeline/search` shows the empty form;
+  - the JSON route is `POST /api/timeline/search` with a JSON object (at most
+    8 KB): the API's answers are JSON and its clients send JSON; a form body
+    would have been a second shape for one route. Every field is checked as
+    before; `limit` must be a number, an unknown field is refused;
+  - `q` in an address is refused with 400 "Search with POST" on both, a `GET` of
+    the JSON route always, and a POST with parameters in its address too, so
+    nothing quietly goes back to sending words where logs keep them. The words
+    are not echoed in the refusal. The other JSON routes stay GET: their
+    parameters are days, times, keys and cursors;
+  - answers stay `private, no-store`. No anti-forgery token was added: the
+    session cookie is `SameSite=Strict`, cross-origin posts are refused by the
+    login check (`Origin`), and a search changes nothing;
+  - htmx's history is off and no search uses `hx-push-url`; the address htmx
+    notes in session storage is now the bare `/timeline/search`, and it is
+    cleared at logout anyway;
+  - the page's title no longer carries the words: browsers keep titles in their
+    history beside the addresses (found while checking in the browser);
+  - a results page replaces its history entry with an ordinary one for the same
+    bare address (`history.replaceState`), so Back from a moment shows the empty
+    form instead of the browser's "send the form again?" page; without
+    JavaScript, Back offers to send it again, which the browser asks first.
+  Checked in Chromium on the synthetic day (search, older results, a moment,
+  Back, logout): the address bar, the navigation entries, the titles, session
+  storage and the server's access log held no search word.
+- *The access log keeps no query string*, on every path: a filter on uvicorn's
+  access logger keeps the path and drops what follows `?`. Logger filters survive
+  uvicorn's logging configuration, which only replaces handlers; a test starts a
+  real uvicorn server after the app, as `serve` does, and reads its access lines.
+- *An expired login during an htmx request* loaded the login page into the
+  results. A request with `HX-Request` that needs the login now answers 401 with
+  `HX-Redirect: /login`, which htmx follows as a full page load.
+- *Connections per process*: up to five as the reader (four for queries, one for
+  image lookups). During a rolling update two processes hold them, so the role's
+  limit (six, defined in the home-ops repository) covers one process at full
+  use, not two. Recorded in the README's notes; no limit is changed here.
+
 ## 041 — A messages analysis: conversations by identifier, no text
 
 Status: accepted, 2026-11-22. Builds on 022, 038 and 040. Revised the same day

@@ -186,3 +186,43 @@ class TimelineRouteTests(WebFixture):
         page = client.get("/timeline")
         self.assertEqual(page.status_code, 503)
         self.assertIn("The timeline database is down.", page.text)
+
+
+class AccessLogTests(WebFixture):
+    def test_access_lines_keep_the_path_and_drop_the_query(self):
+        import socket
+        import threading
+        import time
+        import urllib.request
+
+        import uvicorn
+
+        app = create_app(self.service, TOKEN)
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        # Configured after the app, as `serve` does: uvicorn's own logging
+        # configuration must not drop the filter.
+        server = uvicorn.Server(
+            uvicorn.Config(app, host="127.0.0.1", port=port, log_level="info")
+        )
+        thread = threading.Thread(target=server.run, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join)
+        self.addCleanup(setattr, server, "should_exit", True)
+        for _ in range(100):
+            if server.started:
+                break
+            time.sleep(0.05)
+        base = f"http://127.0.0.1:{port}"
+        with self.assertLogs("uvicorn.access", "INFO") as logs:
+            urllib.request.urlopen(f"{base}/healthz?q=secret+words&x=1").read()
+            request = urllib.request.Request(
+                f"{base}/static/miroir.css?q=secret", method="GET"
+            )
+            urllib.request.urlopen(request).read()
+        lines = "\n".join(logs.output)
+        self.assertIn('"GET /healthz HTTP/1.1" 200', lines)
+        self.assertIn('"GET /static/miroir.css HTTP/1.1" 200', lines)
+        self.assertNotIn("secret", lines)
+        self.assertNotIn("?", lines)
