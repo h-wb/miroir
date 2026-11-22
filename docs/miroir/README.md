@@ -840,8 +840,9 @@ connection with screenshots.
 ### Timeline: reading the warehouse
 
 The timeline (decision 040) is a page of the server that reads the warehouse. So
-far it only checks that it can. It is off until the server's environment names a
-read-only connection:
+far it has a status page and a JSON API for the pages to come. It is off until
+the server's environment names a read-only connection and the configuration has
+an analysis of the `timeline` package (below):
 
 - `MIROIR_TIMELINE_DATABASE_URL`, a `postgresql://` URL; or
 - `MIROIR_TIMELINE_DATABASE__HOST`, `__USERNAME` and `__PASSWORD` (required) and
@@ -861,6 +862,98 @@ lead to a write.
 
 The server starts without the warehouse: a database that is down only shows here.
 
+#### The timeline API
+
+The server reads the tables of the first `timeline` analysis in the
+configuration, in the schema its build writes (the same name the build derives;
+no setting). Several are allowed; the others are named in a `warning` field of the
+health check and of every answer. Every answer also carries `analysis` (its ID)
+and `timezone` (the analysis's). Dates are local days in that timezone,
+`YYYY-MM-DD`; a day runs from its local midnight to the next. Times are ISO 8601
+with their offset, sent in the analysis's timezone. Each route needs the login
+(cookie or admin bearer), reads through the read-only session with its 5-second
+limit, and bounds what it returns. A parameter it does not know, or one given
+twice, is refused.
+
+| Route | Parameters | Answer |
+|---|---|---|
+| `GET /api/timeline/days` | `from`, `to`: days, inclusive, at most 400 apart | `{from, to, days: [{day, screen?: {events, frames}, browser?: {events}}]}`, only days with rows, in order |
+| `GET /api/timeline/screen/{day}` | none | A day's frames as columns, below |
+| `GET /api/timeline/frames/{key}` | none (`key` is the frame's media key, slashes included) | One frame, below; 404 if unknown |
+| `GET /api/timeline/events` | `from`, `to`: a day or a time with offset (`to` as a day includes it); `source`: `screen`, `browser` or both, comma-separated (default both); `limit` 1–500 (200); `after`: the `next` of the previous page | `{events: [...], next}`, events that started in `[from, to)`, oldest first |
+| `GET /api/timeline/search` | `q`: 1–200 characters, web search syntax (`"a phrase"`, `-word`, `or`); `kind`: `screen` (default) or `browser`; `app`: a bundle identifier (screen only); `from`, `to`: days, inclusive, optional; `limit` 1–50 (20); `before`: the `next` of the previous page | Moments or visits, newest first, below |
+
+The screen index of a day, made small for about 3,000 frames (about 110 KB, 15 KB
+compressed):
+
+```json
+{"day": "2026-11-20", "start": "2026-11-20T00:00:00-05:00",
+ "end": "2026-11-21T00:00:00-05:00", "connection": "screen",
+ "media_kind": "screenshots", "count": 2, "truncated": false,
+ "apps": [{"bundle_id": "com.apple.Safari", "name": "Safari", "colour": "#2196f3"}],
+ "frames": {"t": [0, 60], "app": [0, null], "key": ["2026/11/20/a.jpeg", "2026/11/20/b.jpeg"],
+            "media": [1, 0]}}
+```
+
+`t` is seconds from `start`; `app` an index into `apps`, or null for a frame
+without an app; `key` the media key. `media` is what is known of the screenshot:
+`0` nothing yet (no record: it may still be queued, or not derived yet; not the
+same as absent), `1` both thumbnails exist, `2` stored without thumbnails (the
+worker could not make them), `3` withheld (never uploaded). At most 20,000 frames;
+`truncated` says more exist. This answer is `Cache-Control: private, no-cache`
+with a weak ETag, so a browser revalidates it (late frames can still change a past
+day) and gets 304 when it is unchanged.
+
+A frame: `{key, captured_at, day, t, app: {bundle_id, name, colour} | null, text,
+text_truncated, withheld, masked, media: {connection, kind, key, state, status}}`.
+`text` is the masked text (at most 100,000 characters), null when withheld;
+`withheld` the reason; `masked` how many replacements the collector made; `state`
+one of `unknown`, `thumbnails`, `stored`, `withheld`; `status` the worker's
+thumbnail status (`made`, `unsupported`, `too_large`, `unreadable`, `failed`) or
+null.
+
+An event: `{source, event_id, started_at, ended_at, kind, title, body, group,
+payload, media}`. For a screen session `kind` is `app_session`, `title` the app,
+`group` its bundle identifier, `payload` `{bundle_id, frames, last_frame}`, and
+`media` its first frame's (as for a frame, without `withheld`). For a visit `kind`
+is `visit`, `body` the address, `group` the site, `media` null. Title and body are
+cut at 2,000 characters.
+
+A screen search answers `{kind: "screen", moment_seconds: 300, apps, moments,
+next}`. A moment is the matching frames of one app in one five-minute window
+(windows start on multiples of five minutes): `{key, connection, at, until, day,
+app, matches, snippet, media}`, where `key` and `at` are its first match, `until`
+its last, `app` an index into `apps`, `media` coded as in the index. A browser
+search answers `{kind: "browser", visits: [{event_id, at, title, url, site,
+snippet}], next}`; it matches titles and addresses. A `snippet` is a list of
+strings that alternate, plain text first, then a match, then plain text: show it
+as text, never as markup. `next` is null on the last page.
+
+Errors are `{"error": "..."}`: 400 for a parameter, 404 for an unknown frame, 503
+when the timeline is not configured, not built yet or unreachable, 504 when a
+query reached the time limit. Every answer but the screen index is
+`Cache-Control: private, no-store`. Answers over 1 KB are compressed (gzip) for a
+client that accepts it.
+
+#### Images through the server
+
+`GET /media/{connection}/{kind}/{key}` without parameters redirects to a short
+signed link, as before. With `size`:
+
+- `size=360` or `size=1280` copies that thumbnail (WebP) from the bucket; 404 if
+  the worker made none (show a placeholder);
+- `size=original` copies an original image (by its extension) of at most 25 MB
+  and the kind's limit, and redirects to a signed link for any other file (video,
+  documents) or a larger one, so the storage serves range requests.
+
+Copied bytes carry `Cache-Control: private, max-age=31536000, immutable`, the
+bucket's ETag, and answer `If-None-Match` with 304. The connection, kind and key
+are checked as for an upload (a kind of that connection, a valid key, one of the
+kind's extensions); a thumbnail's own kind (`screenshots.w360`) is not a kind and
+can be neither read nor uploaded by name. The server only copies bytes; it never
+decodes an image. Logging out sends `Clear-Site-Data: "cache"`, so the browser
+drops the screenshots it kept.
+
 ### The timeline package
 
 The `timeline` analysis package builds the tables the timeline reads. Its inputs
@@ -878,8 +971,8 @@ It writes these relations to `miroir_<analysis>_<identity>_timeline`:
 
 | Relation | What |
 |---|---|
-| `screen_frames` | One row per frame: `captured_at`, `bundle_id` (the app usage row of the same second, or null), `text` (null when withheld), `withheld`, `masked`, `image_path`. Screen text is indexed only here: search with `to_tsvector('simple', text)`, the indexed expression. |
-| `events` | One row per event, the same columns for every source: `source`, `connection`, `event_id`, `started_at`, `ended_at`, `kind`, `title`, `body`, `media_kind`, `media_key`, `group_key`, `payload`, `search`. The screen gives one row per app session (`kind` `app_session`, `group_key` the bundle, `media_key` the first frame), not one per frame; the browser one per visit (`group_key` the site). `search` weights the title over the body, `simple` configuration. |
+| `screen_frames` | One row per frame: `captured_at`, `bundle_id` (the app usage row of the same second, or null), `text` (null when withheld), `withheld`, `masked`, `image_path`, and what the worker recorded of its screenshot: `media_status` (the thumbnail status), `thumbnail_w360`, `thumbnail_w1280`; all null when there is no record yet, which means unknown, not absent. Screen text is indexed only here: search with `to_tsvector('simple', text)`, the indexed expression. |
+| `events` | One row per event, the same columns for every source: `source`, `connection`, `event_id`, `started_at`, `ended_at`, `kind`, `title`, `body`, `media_kind`, `media_key`, `media_status`, `thumbnail_w360`, `thumbnail_w1280`, `group_key`, `payload`, `search`. The screen gives one row per app session (`kind` `app_session`, `group_key` the bundle, `media_key` the first frame), not one per frame; the browser one per visit (`group_key` the site). `search` weights the title over the body, `simple` configuration. |
 | `days` | Per local day, in the analysis's timezone, and source: `events` that started that day and, for the screen, `frames`. |
 | `apps` | Bundle identifier to `name` and `colour`, for a list of common apps and every app seen. Others are named from their identifier, with a palette colour. |
 
@@ -899,6 +992,10 @@ load, say) is still read. A load that never completes is never read.
   gives the frame its app and moves the sessions around it.
 - A session still open at the last build grows. A page's new title reaches its
   visits.
+- A screenshot the worker records (`media_objects`, in the connection's dataset)
+  after its frame was built reaches the frame and its session at the next build;
+  only the frames of the records written since are read again. A record written
+  before its frame is found when the frame arrives.
 - A frame or visit that moves to another time leaves its old session and day. For
   frames, this is not expected from ScreenMemory. For visits, it happens when
   Places reuses the IDs of cleared visits. The old times stay on the row until

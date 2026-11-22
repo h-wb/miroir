@@ -270,3 +270,30 @@
     insert into {{ target }} ({{ columns }})
     select {{ columns }} from {{ source }}{% if removes %} where not _deleted{% endif %}
 {%- endmacro %}
+
+{# What the worker recorded of a row's stored file (media_objects, decision 040):
+   its thumbnail status and which sizes exist. Null where it has no record, which
+   means unknown, not absent: the file may still be queued, or not derived yet. #}
+{% macro timeline_media_columns() -%}
+    {{- return({'media_status': 'text', 'thumbnail_w360': 'boolean', 'thumbnail_w1280': 'boolean'}) -}}
+{%- endmacro %}
+
+{# Whether an incremental table already has the media columns. A table built by
+   code before them lacks them: its rows predate the join and are rebuilt once. #}
+{% macro timeline_has_media_columns() -%}
+    {%- if not (execute and is_incremental()) -%}{{ return(true) }}{%- endif -%}
+    {%- set names = adapter.get_columns_in_relation(this) | map(attribute='name') | list -%}
+    {{- return('media_status' in names) -}}
+{%- endmacro %}
+
+{# Pre-hook: add the media columns to a table built before them. Nullable with no
+   default, so the change touches no row. dbt's on_schema_change is not used: it
+   would also add the `_deleted` column of the new rows to the table. #}
+{% macro timeline_add_media_columns() -%}
+    {%- if is_incremental() -%}
+    alter table {{ this }}
+    {%- for name, type in timeline_media_columns().items() %}
+        add column if not exists {{ adapter.quote(name) }} {{ type }}{% if not loop.last %},{% endif %}
+    {%- endfor %}
+    {%- endif -%}
+{%- endmacro %}

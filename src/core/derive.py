@@ -31,6 +31,7 @@ from src.core.decoder_checks import check_image
 from src.core.media import (
     CONTENT_TYPES,
     IMAGE_DECODERS,
+    MAX_THUMBNAIL_BYTES,
     THUMBNAIL_WIDTHS,
     ObjectStore,
     ObjectTooLarge,
@@ -66,8 +67,6 @@ DECODE_CPU_SECONDS = 25
 # The decoder's address space. The worst accepted image measured 480 MB above
 # the child's own 32 MB (a 40-megapixel PNG with grey and alpha).
 DECODE_MEMORY = 1024 * 1024 * 1024
-# A thumbnail larger than this is not a thumbnail the decoder could have made.
-MAX_THUMBNAIL_BYTES = 16 * 1024 * 1024
 WIDTHS = THUMBNAIL_WIDTHS
 STATUSES = ("made", "unsupported", "too_large", "unreadable")
 REPO = Path(__file__).resolve().parents[2]

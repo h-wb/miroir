@@ -177,3 +177,137 @@ class WebMediaTests(unittest.TestCase):
                 VIEW.replace("/screen/", f"/{connection}/"), headers=bearer(ADMIN)
             )
             self.assertEqual(view.status_code, 404)
+
+
+class WebMediaBytesTests(WebMediaTests):
+    """Thumbnails and image originals copied through the server (decision 040)."""
+
+    def setUp(self):
+        super().setUp()
+        config = json.loads(self.service.config_path.read_text())
+        config["connections"].append(
+            {"id": "phone", "integration": "apple_messages", "settings": {}}
+        )
+        self.service.config_path.write_text(json.dumps(config))
+        self.admin = bearer(ADMIN)
+        self.objects.add("screen/screenshots.w360/dir/a.jpg.webp", b"small", "x/y")
+        self.objects.add("screen/screenshots.w1280/dir/a.jpg.webp", b"larger")
+        self.objects.add(OBJECT, b"original", "text/html")
+
+    def test_thumbnails_are_copied_with_an_immutable_private_cache(self):
+        for size, body in (("360", b"small"), ("1280", b"larger")):
+            with self.subTest(size=size):
+                response = self.client.get(f"{VIEW}?size={size}", headers=self.admin)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.content, body)
+                # Its own type, whatever the bucket says; browsers must not sniff.
+                self.assertEqual(response.headers["content-type"], "image/webp")
+                self.assertEqual(response.headers["x-content-type-options"], "nosniff")
+                self.assertEqual(
+                    response.headers["cache-control"],
+                    "private, max-age=31536000, immutable",
+                )
+                tag = response.headers["etag"]
+                self.assertEqual(tag, f'"{len(body)}"')
+                for header in (tag, f"W/{tag}", f'"other", {tag}'):
+                    again = self.client.get(
+                        f"{VIEW}?size={size}",
+                        headers={**self.admin, "If-None-Match": header},
+                    )
+                    self.assertEqual((again.status_code, again.content), (304, b""))
+                    self.assertEqual(again.headers["etag"], tag)
+                changed = self.client.get(
+                    f"{VIEW}?size={size}",
+                    headers={**self.admin, "If-None-Match": '"other"'},
+                )
+                self.assertEqual(changed.status_code, 200)
+        self.assertEqual(
+            self.objects.gets,
+            ["screen/screenshots.w360/dir/a.jpg.webp"] * 5
+            + ["screen/screenshots.w1280/dir/a.jpg.webp"] * 5,
+        )
+
+    def test_a_missing_thumbnail_is_404_and_bad_requests_are_refused(self):
+        for url, status in (
+            ("/media/screen/screenshots/dir/b.jpg?size=360", 404),
+            # A kind without thumbnails (attachments, until the conversations phase).
+            ("/media/phone/attachments/a.jpg?size=360", 404),
+            # The derived kind is not a kind: neither read nor written by name.
+            ("/media/screen/screenshots.w360/dir/a.jpg.webp", 404),
+            ("/media/screen/screenshots.w360/dir/a.jpg.webp?size=360", 404),
+            ("/media/screen/screenshots/dir/%2e%2e/a.jpg?size=360", 404),
+            ("/media/screen/screenshots/dir/a.txt?size=360", 404),
+            ("/media/unknown/screenshots/dir/a.jpg?size=360", 404),
+            (f"{VIEW}?size=720", 400),
+            (f"{VIEW}?size=360&size=1280", 400),
+            (f"{VIEW}?size=360&x=1", 400),
+        ):
+            with self.subTest(url=url):
+                response = self.client.get(url, headers=self.admin)
+                self.assertEqual(response.status_code, status)
+                if "size=" in url:  # the redirect route's 404 is as it was
+                    self.assertEqual(
+                        response.headers["cache-control"], "private, no-store"
+                    )
+        for url in (UPLOAD, CONFIRM):
+            response = self.client.post(
+                url,
+                json={**self.body, "kind": "screenshots.w360"},
+                headers=self.screen,
+            )
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(response.json(), {"error": "Unknown media kind"})
+        with patch.object(self.objects, "get", side_effect=OSError("detail")):
+            response = self.client.get(f"{VIEW}?size=360", headers=self.admin)
+        self.assertEqual(response.status_code, 503)
+
+    def test_image_originals_are_copied_and_other_files_keep_the_link(self):
+        original = self.client.get(f"{VIEW}?size=original", headers=self.admin)
+        self.assertEqual(original.status_code, 200)
+        self.assertEqual(original.content, b"original")
+        # The type comes from the extension, never from what the bucket stored.
+        self.assertEqual(original.headers["content-type"], "image/jpeg")
+        self.assertEqual(
+            original.headers["cache-control"], "private, max-age=31536000, immutable"
+        )
+        self.objects.add("phone/attachments/clip.mov", b"video")
+        video = self.client.get(
+            "/media/phone/attachments/clip.mov?size=original", headers=self.admin
+        )
+        self.assertEqual(video.status_code, 302)
+        self.assertEqual(
+            video.headers["location"],
+            "https://objects.test/phone/attachments/clip.mov?get=1&expires=300",
+        )
+        self.assertEqual(self.objects.gets, [OBJECT])
+        with patch("src.core.media.MAX_STREAMED_IMAGE", 4):
+            large = self.client.get(f"{VIEW}?size=original", headers=self.admin)
+        self.assertEqual(large.status_code, 302)
+        self.assertEqual(
+            large.headers["location"],
+            f"https://objects.test/{OBJECT}?get=1&expires=300",
+        )
+        absent = self.client.get(
+            "/media/screen/screenshots/dir/b.jpg?size=original", headers=self.admin
+        )
+        self.assertEqual(absent.status_code, 404)
+
+    def test_without_size_the_route_still_redirects_and_bytes_need_the_login(self):
+        view = self.client.get(VIEW, headers=self.admin)
+        self.assertEqual(view.status_code, 302)
+        self.assertEqual(
+            view.headers["location"], f"https://objects.test/{OBJECT}?get=1&expires=300"
+        )
+        self.assertEqual(view.headers["cache-control"], "private, no-store")
+        for size in ("360", "1280", "original"):
+            for headers in ({}, self.screen):
+                response = self.client.get(f"{VIEW}?size={size}", headers=headers)
+                self.assertEqual(response.status_code, 303)
+                self.assertEqual(response.headers["location"], "/login")
+        self.assertEqual(self.objects.gets, [])
+
+    def test_logging_out_clears_the_browsers_cache(self):
+        self.client.post("/login", data={"token": ADMIN})
+        response = self.client.post("/logout")
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["clear-site-data"], '"cache"')

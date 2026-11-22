@@ -2202,6 +2202,120 @@ Consequences:
 - A flow run that Prefect shows as running after its pod died before recording an
   attempt holds the queue until it is cancelled in Prefect or a backfill runs.
 
+### 040 amendment — Queries, the API and images through the server (phase 1c, part 1)
+
+Status: proposed with the phase 1c pull request, 2026-11-22. What the server side
+of the timeline had to decide that the plan above left open. Choices that touched
+security, privacy or cost took the more conservative option; those are marked
+*(conservative)*. The routes and their answers are in the README (*The timeline
+API*).
+
+**Which tables.** The server reads the first analysis of the `timeline` package in
+configuration order, in the schema its build writes, derived by the same code
+(`analysis_plan`), so no setting names it. Further timeline analyses are allowed
+and named in a `warning` on the health check and on every answer. Without one,
+every timeline route, the status page and the health check included, says the
+timeline is not configured (503). The timeline module may therefore import
+`src.core.analysis`, which computes names and touches nothing.
+
+**Stored files in the models.** `screen_frames` joins `media_objects` of the
+screen connection's dataset (kind `screenshots`, that connection's rows only) and
+gains `media_status`, `thumbnail_w360` and `thumbnail_w1280`; a session in
+`events` takes its first frame's. The table is an optional input: without it the
+columns are null. Null means no record, which is unknown, not absent (phase 1b).
+The derive worker's loads are listed in the same dataset's `_dlt_loads`, so the
+existing load cursor already sees them: a build reads again the frames whose
+records a newly completed load wrote (an index on the raw `key` finds them), and a
+frame arriving after its record finds it. That re-read moves the frame's stamp, so
+the sessions around it are recomputed as for any changed frame; a derive run's
+batch of at most 500 files costs one such recomputation. Tables built before these
+columns gain them in a pre-hook (nullable, no rewrite) and read every frame and
+session once. dbt's `on_schema_change` was not used: it would also have added the
+`_deleted` column of the new rows to `events` and `days`. A test checks records
+written before and after their frames, another connection's record in the same
+dataset, a replaced record, the upgrade, and that the result equals a first build.
+
+**Withheld wins** *(conservative)*. A frame with a withholding reason is shown as
+withheld, with no thumbnail, whatever a record says.
+
+**Queries.** Each runs in one read-only session with the 5-second limit and is
+bounded: a days range of at most 400 days; at most 20,000 frames in a day's index
+(`truncated` beyond); a frame's text cut at 100,000 characters; at most 500 events
+a page, titles and bodies cut at 2,000 characters; at most 50 search results a
+page; a search of at most 200 characters. Parameters are always bound. A query at
+the time limit answers 504 with a fixed message; a table, schema or column that is
+missing, or not readable by the role, answers 503 "not built yet". A local day's
+bounds are computed in SQL, exactly as `days` counts them.
+
+- *Days* are read for the analysis's current timezone only; after a timezone
+  change, nothing shows until the next build recounts.
+- *Events* are those that started in the range, not those overlapping it: an
+  overlap needs a scan from the beginning of time *(conservative: cost)*. A page
+  that needs a session already in progress asks from earlier. Each source is one
+  index range, merged; the keyset is `(started_at, event_id)`.
+- *Moments* are fixed five-minute windows, aligned to multiples of five minutes,
+  per app. Fixed windows page with a stable keyset; windows by pause would move as
+  frames arrive. A moment shows its first match, its count and a snippet computed
+  for the returned moments only. Newest first.
+- *Snippets* are returned as alternating plain and matched strings, never as
+  markup *(conservative)*: `ts_headline` marks matches with two private-use
+  characters, removed from the text first, and the server splits on them.
+- *Browser search* matches titles and addresses through `events.search`, newest
+  first, one result per visit. The app filter applies to screen results only.
+- Unknown parameters, and a parameter given twice, are refused *(conservative)*.
+  An unencoded `+` in a time offset arrives as a space and is read back as `+`.
+
+**Caching.** Every answer is `Cache-Control: private, no-store`, except a day's
+screen index: `private, no-cache` with a weak ETag of its content, answered 304
+when it matches. It holds keys, times and apps, no screen text; late frames can
+still change a past day, so it is revalidated, never immutable. The ETag saves the
+transfer, not the query. The timeline's JSON answers of 1 KB or more are gzipped
+for a client that accepts it; nothing else is. They hold no secret and are
+answered only to the logged-in administrator, so compressing them next to a query
+the client chose discloses nothing it did not have.
+
+**Images through the server.** `/media/{connection}/{kind}/{key}` without
+parameters is unchanged: a redirect to a short signed link. With `size=360` or
+`1280` it copies that thumbnail, with `size=original` an image original. This
+revises phase 0's "the web process does not call" `ObjectStore.get`: it now reads,
+and never writes.
+
+- Checked as an upload is: a kind of that connection, a valid key, one of the
+  kind's extensions. A thumbnail's kind (`screenshots.w360`) is not a kind of any
+  integration, so it can be neither read nor uploaded by name; the server builds
+  its object name from the base kind.
+- The content type is fixed by the server (`image/webp`, or the original's by its
+  extension), never the bucket's *(conservative)*, and `nosniff` applies.
+- `Cache-Control: private, max-age=31536000, immutable`, the bucket's ETag as a
+  strong tag, and 304 for a matching `If-None-Match`. The object is still fetched
+  to learn its tag, so a 304 saves the browser's transfer, not the bucket's.
+- 404 when the thumbnail does not exist or the kind has none; 400 for another size
+  or any other parameter; 503 when the bucket cannot be asked.
+- Originals are copied only for image types and up to 25 MB and the kind's own
+  limit *(conservative: memory per request)*; anything else, video included, gets
+  the signed-link redirect. A thumbnail is read with the worker's own bound,
+  16 MB. Bytes are held in memory, not streamed in pieces: these bounds keep that
+  small.
+- Logging out sends `Clear-Site-Data: "cache"`.
+
+Known limits:
+
+- A record can outlive its file (phase 1b): the index then says thumbnails exist
+  and the image answers 404; the page shows its placeholder.
+- A thumbnail made again under a new `DERIVE_VERSION` keeps its old copy in a
+  browser's cache until it is evicted or the user logs out.
+- The day index's `connection` is its first frame's: a table holds one screen
+  connection's rows (others are removed at the next build).
+
+Measured on synthetic data, one development machine, Postgres 17: a day's index
+of 3,001 frames takes 7 ms to query and 14 ms through the route, 109 KB of JSON,
+15 KB gzipped. On 303,000 frames of a year with 80 skewed words each, the first
+page of a screen search takes 108 ms (median; one run of 712 ms) for a word on 30%
+of frames, 216 ms for two words that are on nearly every frame, 5 ms for a word on
+1%, 2 ms for a rare one, 13 ms for the common word within a month, and 72 ms
+within one app. `tests/test_timeline_benchmark.py` repeats this
+(`MIROIR_TIMELINE_BENCHMARK=1`).
+
 ## 041 — A messages analysis: conversations by identifier, no text
 
 Status: accepted, 2026-11-22. Builds on 022, 038 and 040. Revised the same day

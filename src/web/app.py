@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
+from src.core import media
 from src.core.config import ConfigurationConflict, ConfigurationError
 from src.core.operations import OperationError, OrchestratorUnavailable
 from src.core.reports import (
@@ -66,6 +67,8 @@ SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
 }
 STATIC_DIR = Path(__file__).parent / "static"
+# Thumbnails and images copied through the server (decision 040).
+IMMUTABLE = "private, max-age=31536000, immutable"
 # Query parameters of the upload API that are not import options.
 UPLOAD_PARAMETERS = {"import", "name", "format"}
 
@@ -496,7 +499,22 @@ def create_app(
         )
 
     @app.get("/media/{connection_id}/{kind}/{key:path}")
-    def media_view(connection_id: str, kind: str, key: str) -> Response:
+    def media_view(
+        request: Request, connection_id: str, kind: str, key: str
+    ) -> Response:
+        """A redirect to a short signed link; with `size`, the bytes themselves.
+
+        `size=360` or `1280` copies that thumbnail (404 if none was made);
+        `size=original` copies an image original up to a size, and redirects for
+        any other file. Copied bytes are cached as immutable: a key's file and its
+        thumbnails do not change. The server never decodes them (decision 040).
+        """
+        size = request.query_params.get("size")
+        if size is not None:
+            return media_bytes(request, connection_id, kind, key, size)
+        return media_link(connection_id, kind, key)
+
+    def media_link(connection_id: str, kind: str, key: str) -> Response:
         try:
             url = service.media_view_url(connection_id, kind, key)
         except OperationError:
@@ -504,6 +522,40 @@ def create_app(
         return RedirectResponse(
             url, status_code=302, headers={"Cache-Control": "private, no-store"}
         )
+
+    def media_bytes(
+        request: Request, connection_id: str, kind: str, key: str, size: str
+    ) -> Response:
+        no_store = {"Cache-Control": "private, no-store"}
+        if len(request.query_params.multi_items()) != 1:
+            return Response(status_code=400, headers=no_store)
+        try:
+            if size == "original":
+                found = service.media_image(connection_id, kind, key)
+                content_type = media.image_type(key)
+            elif size in ("360", "1280"):
+                found = service.media_thumbnail(connection_id, kind, key, int(size))
+                content_type = "image/webp"
+            else:
+                return Response(status_code=400, headers=no_store)
+        except media.NotStreamed:
+            return media_link(connection_id, kind, key)
+        except media.StorageUnavailable:
+            return Response(status_code=503, headers=no_store)
+        except OperationError:
+            return Response(status_code=404, headers=no_store)
+        if found is None:
+            return Response(status_code=404, headers=no_store)
+        headers = {"Cache-Control": IMMUTABLE}
+        if found.etag:
+            # The store's tag for these bytes, as a strong tag.
+            headers["ETag"] = '"' + found.etag.strip('"').replace('"', "") + '"'
+            if headers["ETag"] in {
+                tag.strip().removeprefix("W/")
+                for tag in request.headers.get("if-none-match", "").split(",")
+            }:
+                return Response(status_code=304, headers=headers)
+        return Response(found.body, media_type=content_type, headers=headers)
 
     @app.post("/api/connections/{connection_id}/delivery-token", status_code=201)
     def create_delivery_token(connection_id: str) -> JSONResponse:
@@ -666,6 +718,8 @@ def create_app(
     def logout() -> Response:
         response = RedirectResponse("/login", status_code=303)
         response.delete_cookie(SESSION_COOKIE)
+        # Screenshots stay in the browser's cache for a year otherwise (decision 040).
+        response.headers["Clear-Site-Data"] = '"cache"'
         return response
 
     from src.web.analyses import analysis_pages
@@ -674,7 +728,7 @@ def create_app(
 
     app.include_router(connection_pages(service, page))
     app.include_router(analysis_pages(service, page))
-    app.include_router(timeline_pages(timeline, page))
+    app.include_router(timeline_pages(timeline, page, service.miroir))
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @app.get("/", response_class=HTMLResponse)

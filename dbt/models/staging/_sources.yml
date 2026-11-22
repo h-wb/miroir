@@ -62,4 +62,6 @@ sources:
     tables:
       - name: frames
       - name: app_usage
+      # Written by the derive worker (decision 040); absent until its first run.
+      - name: media_objects
       - name: _dlt_loads

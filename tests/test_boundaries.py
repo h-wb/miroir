@@ -18,8 +18,9 @@ _ALLOWED = {
 }
 # The warehouse reader (decision 040): it needs nothing of the write side, and
 # only the server's transports open it; flow runs hold their own credentials.
+# It names the timeline's schema as the build does (src.core.analysis).
 _TIMELINE = "src.core.timeline"
-_TIMELINE_IMPORTS = ("src.core.config", "src.core.operations")
+_TIMELINE_IMPORTS = ("src.core.config", "src.core.operations", "src.core.analysis")
 _TIMELINE_IMPORTERS = ("src.web", "src.cli")
 # Media is never decoded in the web process, nor in the worker's own: one module
 # decodes, and it runs as a child process that nothing imports. Only the runner

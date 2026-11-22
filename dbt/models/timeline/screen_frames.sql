@@ -13,8 +13,9 @@
     ],
     grants=timeline_grants(),
     pre_hook=[
-        {'sql': "{{ timeline_raw_indexes('screenmemory', {'frames': ['_dlt_load_id', 'ts', 'image_path'], 'app_usage': ['_dlt_load_id', 'ts'], '_dlt_loads': ['load_id', 'inserted_at']}) }}", 'transaction': false},
+        {'sql': "{{ timeline_raw_indexes('screenmemory', {'frames': ['_dlt_load_id', 'ts', 'image_path'], 'app_usage': ['_dlt_load_id', 'ts'], 'media_objects': ['_dlt_load_id', 'key'], '_dlt_loads': ['load_id', 'inserted_at']}) }}", 'transaction': false},
         "{{ timeline_remove_foreign(['screen']) }}",
+        "{{ timeline_add_media_columns() }}",
     ],
     post_hook=["{{ timeline_exact_acl(true) }}", "{{ timeline_schema_usage() }}"],
 ) }}
@@ -33,8 +34,14 @@
 -- previous times in previous_captured_at, for the models that count by time,
 -- until both have read the row (timeline_previous).
 -- The index on the raw image_path also serves dlt's merge of resent frames.
+--
+-- What the worker recorded of each frame's screenshot comes from media_objects in
+-- the same dataset, when it exists (timeline_media_columns; no record is unknown).
+-- Its loads are listed in the same _dlt_loads, so an incremental build also reads
+-- again the frames whose record a newly completed load wrote. A table built
+-- before these columns reads every frame once.
 {% set replaced = timeline_replaced(['screen']) | length > 0 %}
-{% set cursor = timeline_load_cursor('screenmemory', replaced) %}
+{% set cursor = timeline_load_cursor('screenmemory', replaced or not timeline_has_media_columns()) %}
 {% set stamp = timeline_new_stamp() %}
 {% set previous = is_incremental() and not replaced %}
 {% set consumed = timeline_consumed([('timeline_screen', 'true'), ('days', "source = 'screen'")]) %}
@@ -52,15 +59,33 @@ app_usage as not materialized (
         'ts': 'bigint', 'bundle_id': 'text', '_dlt_load_id': 'text'
     }, ['ts', 'bundle_id']) }}
 ),
+-- This connection's screenshots only; the dataset could hold another's.
+media as not materialized (
+    select * from (
+        {{ optional_input('screenmemory', 'media_objects', {
+            'connection_id': 'text', 'kind': 'text', 'key': 'text',
+            'thumbnail_status': 'text', 'thumbnail_w360': 'boolean',
+            'thumbnail_w1280': 'boolean', '_dlt_load_id': 'text'
+        }, ['connection_id', 'kind', 'key', 'thumbnail_status']) }}
+    ) m
+    where m.connection_id = {{ timeline_connection('screen') }} and m.kind = 'screenshots'
+),
 {% if not cursor.rebuild %}
 new_seconds as (
     select distinct ts from app_usage where {{ timeline_in_loads('_dlt_load_id', cursor.loads) }}
+),
+new_media as (
+    select distinct key from media where {{ timeline_in_loads('_dlt_load_id', cursor.loads) }}
 ),
 changed as (
     select * from frames where {{ timeline_in_loads('_dlt_load_id', cursor.loads) }}
     union all
     select f.* from new_seconds n cross join lateral (
         select * from frames f where f.ts = n.ts and {{ timeline_completed_row('f') }}
+    ) f
+    union all
+    select f.* from new_media n cross join lateral (
+        select * from frames f where f.image_path = n.key and {{ timeline_completed_row('f') }}
     ) f
 ),
 picked as (
@@ -73,6 +98,15 @@ apps as (
         select min(u.bundle_id) as bundle_id from app_usage u
         where u.ts = p.ts and {{ timeline_completed_row('u') }}
     ) a
+),
+stored as (
+    select p.image_path as key, m.thumbnail_status, m.thumbnail_w360, m.thumbnail_w1280
+    from picked p
+    cross join lateral (
+        select * from media m
+        where m.key = p.image_path and {{ timeline_completed_row('m') }}
+        limit 1
+    ) m
 )
 {% else %}
 picked as (select * from frames f where {{ timeline_completed_row('f') }}),
@@ -80,6 +114,11 @@ apps as (
     select ts, min(bundle_id) as bundle_id from app_usage u
     where {{ timeline_completed_row('u') }}
     group by ts
+),
+stored as (
+    select distinct on (key) key, thumbnail_status, thumbnail_w360, thumbnail_w1280
+    from media m where {{ timeline_completed_row('m') }}
+    order by key
 )
 {% endif %}
 select
@@ -89,6 +128,9 @@ select
     case when f.withheld is null then f.text end as text,
     f.withheld,
     f.masked,
+    m.thumbnail_status as media_status,
+    m.thumbnail_w360,
+    m.thumbnail_w1280,
     {{ timeline_connection('screen') }} as connection,
     {% if previous %}
     {{ timeline_previous('previous_captured_at', 't.captured_at', 'to_timestamp(f.ts)', consumed) }}
@@ -98,4 +140,5 @@ select
     {{ timeline_literal(stamp) }} as _stamp
 from picked f
 left join apps a on a.ts = f.ts
+left join stored m on m.key = f.image_path
 {% if previous %}left join {{ this }} t on t.image_path = f.image_path{% endif %}

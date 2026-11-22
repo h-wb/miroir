@@ -236,6 +236,24 @@ class MiroirService:
         connection = self._connection(miroir, connection_id)
         return media.view_url(miroir.media, self.object_store, connection, kind, key)
 
+    def media_thumbnail(
+        self, connection_id: str, kind: str, key: str, width: int
+    ) -> media.StoredObject | None:
+        """A thumbnail to copy to the browser (decision 040); None if none was made."""
+        miroir = self.miroir()
+        connection = self._connection(miroir, connection_id)
+        return media.read_thumbnail(
+            miroir.media, self.object_store, connection, kind, key, width
+        )
+
+    def media_image(
+        self, connection_id: str, kind: str, key: str
+    ) -> media.StoredObject | None:
+        """An original image to copy to the browser; media.NotStreamed otherwise."""
+        miroir = self.miroir()
+        connection = self._connection(miroir, connection_id)
+        return media.read_image(miroir.media, self.object_store, connection, kind, key)
+
     def _dashboards(
         self, miroir: ResolvedMiroir, analysis: ResolvedAnalysis
     ) -> list[dict[str, Any]]:
