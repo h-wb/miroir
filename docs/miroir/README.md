@@ -501,8 +501,8 @@ metadata. Downgrading requires restoring that matching backup; old runtimes cann
 read the migrated database. Production connector cutover remains separate.
 
 The Prefect flow `src/pipelines/miroir.py:sync_connection` uses the same runner
-against Postgres and builds analyses that link the loaded connection. Miroir manages its deployments through plan/apply; `prefect.yaml` holds
-the legacy deployments only.
+against Postgres and builds analyses that link the loaded connection. Miroir manages its deployments through plan/apply; the repository has no other
+Prefect deployments (decision 042).
 
 Configuration version 1 contains a miroir ID, connections, analyses, and optional
 deployment settings and service links. Each connection has an integration, validated
@@ -637,8 +637,8 @@ person is their number or address.
   included. `day`, `weekday`, `messages_sent`, `messages_received`,
   `conversations_active`, `attachments`, `reactions`.
 
-The models are built only for an analysis; the nightly `run_dbt` skips them. They
-are rebuilt in full after every load, in about four seconds for 200,000 messages.
+The models are built only for an analysis. They are rebuilt in full after every
+load, in about four seconds for 200,000 messages.
 
 ### Media: files that rows point at
 

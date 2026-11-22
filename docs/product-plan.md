@@ -144,8 +144,8 @@ Persist normalized non-secret configuration revisions separately from the mutabl
 configuration file. Executions use the revision attached to their deployment/request,
 plus a pinned code/runtime reference. Secret values resolve at execution time;
 credential rotation does not require saving old credentials in configuration history.
-The runtime proof must establish how the worker obtains those credentials: current
-`prefect.yaml` copies values into deployments, while this host uses fnox. Do not
+The runtime proof must establish how the worker obtains those credentials: the legacy
+`prefect.yaml` (removed by decision 042) copied values into deployments, while this host uses fnox. Do not
 assume the worker has the same vault session. Select and document a worker-side
 resolver or explicit secret injection boundary before changing that behavior.
 

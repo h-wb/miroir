@@ -748,7 +748,8 @@ attempt (`SubmitFailed`), so nothing stays requested without a run to observe.
 
 ## 025 — Legacy per-source loads are retired; `run_dbt` stays for the mart schemas
 
-Status: accepted, 2026-11-11. Completes the cutovers planned in 020 and 021.
+Status: accepted, 2026-11-11. Completes the cutovers planned in 020 and 021. The
+part that keeps `run_dbt` is superseded by 042 (2026-11-22).
 
 GitHub, ListenBrainz, Bike Share and Health load through Miroir connections bound
 to their original pipelines and raw schemas, so history and cursors carried over.
@@ -1902,3 +1903,35 @@ person waits for a reliable source of that link.
 Every table is rebuilt in full after each load. On 200,000 synthetic messages a
 build takes about four seconds, of which dbt's own start is more than a third;
 incremental tables would add complexity for little.
+
+## 042 — Dashboards read the analysis outputs; `run_dbt` is removed
+
+Status: accepted, 2026-11-22. Supersedes the part of 025 that kept `run_dbt`.
+
+On 2026-11-22 every Metabase dashboard was moved onto the Miroir analysis
+outputs (the `miroir_<analysis>_…` schemas), and a `crossovers` analysis was
+added in Miroir for the crossover dashboards. The schemas only the legacy
+nightly `run_dbt` built were then dropped from the warehouse: the mart schemas
+`music`, `health`, `github`, `biking`, `browser` and `crossovers`, the shared
+`staging` and `intermediate` schemas, and the frozen `browser_history_data`
+dataset. Nothing read them any more, and the next `run_dbt` would have
+recreated them.
+
+So `run_dbt` goes, with everything that existed only for it: the flow in
+`transform.py`, `prefect.yaml` (it held no other deployment), the `deploy`,
+`run:dbt` and `worker` mise tasks, and the `GITHUB__AUTHOR_EMAILS` secret
+reference. The dbt macros lose the branches only a build without an analysis
+reached: the author emails from that environment variable, and the raw
+`select *` and "every input present" paths of `optional_input` and
+`input_present`. `generate_schema_name` keeps its fallback to the bare group
+name: dbt calls it for every model, even when it parses without an analysis.
+
+Miroir deployments still come from the configuration (013). The `local-pool`
+process worker runs flows from other repositories; this repository no longer
+deploys to it.
+
+**By hand.** Removing the deployment from the code does not remove it from the
+Prefect server. An installation that registered `run_dbt` must delete it
+(`mise run prefect -- deployment delete run-dbt/run_dbt`; check the name with
+`deployment ls`) or pause its schedule, or the
+next run recreates the dropped schemas.
