@@ -28,7 +28,7 @@ from src.core.artifacts import submit_artifact
 from src.core.config import ConfigurationError, parse_miroir
 from src.core.operations import MetadataStore
 from src.core.runner import import_artifact
-from src.pipelines.transform import build_connection_models, build_models
+from src.pipelines.transform import build_connection_models
 from tests.postgres import start_postgres
 from tests.test_miroir import example
 
@@ -189,7 +189,7 @@ class TimelinePackageTests(unittest.TestCase):
         self.assertNotIn("miroir_connections", music.variables)
 
     def test_builds_without_a_miroir_analysis_leave_the_timeline_out(self):
-        # The nightly legacy build reads every model; the timeline has no legacy source.
+        # dbt reads every model when it parses the project without an analysis.
         dbt = Path(__file__).parents[1] / "dbt"
         env = {
             f"DESTINATION__POSTGRES__CREDENTIALS__{part}": "unused"
@@ -798,7 +798,14 @@ class TimelineModelTests(unittest.TestCase):
         def first_model_only(name):
             def transform(plan):
                 variables = {**plan.variables, "timeline_cursor_margin": self.margin}
-                build_models(f"path:models/timeline/{name}.sql", variables=variables)
+                build_connection_models(
+                    replace(
+                        plan,
+                        selector=f"path:models/timeline/{name}.sql",
+                        variables=variables,
+                        ready=None,
+                    )
+                )
 
             return transform
 
