@@ -820,14 +820,19 @@ def _transform(
         outcome, ok = _build(run, child, child_attempt, analysis, secrets)
         outcomes.append((analysis.id, outcome))
         recorded = recorded and ok
-    built = [o for _, o in outcomes if o != "deferred"]
+    # Deferred and blocked builds did not run; neither is a failed build.
+    built = [o for _, o in outcomes if o not in ("deferred", "blocked")]
     if not built:
         transformation = "skipped"
     elif all(o == "succeeded" for o in built):
         transformation = "succeeded"
     else:
         transformation = "failed"
-    summary = ", ".join(f"{analysis_id} {outcome}" for analysis_id, outcome in outcomes)
+    summary = ", ".join(
+        f"{analysis_id} {outcome}"
+        + (" (its settings changed while it waited)" if outcome == "blocked" else "")
+        for analysis_id, outcome in outcomes
+    )
     ok = _record(
         store,
         attempt,
@@ -940,8 +945,12 @@ def _deferred(
 
 
 def _still_requested(run: Execution, operation: Operation) -> None:
-    """Raise Superseded unless the configuration read now still describes this
-    build: its connection's revision and its analysis's receipt."""
+    """Raise Superseded unless the analysis read now still has this build's
+    receipt. The receipt is everything the build applies (selector, variables
+    with the raw bindings and parameters, relations, version), so a connection
+    edit that leaves it unchanged does not stop a build: a load's own build runs
+    after an edit saved during the load. Whether a request still matches its
+    connection's revision is checked once, when it starts (_execute_operation)."""
     if run.reload is None:
         return
     try:
@@ -950,14 +959,6 @@ def _still_requested(run: Execution, operation: Operation) -> None:
         raise Superseded(
             f"The configuration could not be read again: {type(error).__name__}"
         ) from None
-    connection = next(
-        (c for c in miroir.connections if c.config.id == operation.connection_id),
-        None,
-    )
-    if connection is None or connection.revision != operation.config_revision:
-        raise Superseded(
-            "Connection configuration changed while this build waited to run"
-        )
     analysis = next((a for a in miroir.analyses if a.id == operation.analysis_id), None)
     receipt = json.loads(operation.options or "{}").get("analysis_receipt")
     if analysis is None or analysis_plan(analysis).receipt != receipt:
@@ -974,7 +975,7 @@ def _build(
     """Run one analysis build and record it on `attempt`.
 
     Checked again once the connection lock and then the dbt slot are held: a
-    build whose configuration changed while it waited ends as blocked.
+    build whose analysis settings changed while it waited ends as blocked.
     """
     full_refresh = bool(json.loads(operation.options or "{}").get("full_refresh"))
     plan = replace(

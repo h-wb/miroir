@@ -28,7 +28,7 @@ from src.core.artifacts import submit_artifact
 from src.core.config import ConfigurationError, parse_miroir
 from src.core.operations import MetadataStore
 from src.core.runner import import_artifact
-from src.pipelines.transform import build_connection_models
+from src.pipelines.transform import build_connection_models, build_models
 from tests.postgres import start_postgres
 from tests.test_miroir import example
 
@@ -43,6 +43,7 @@ SAFARI, TERMINAL, NOTES, MAIL = (
 )
 UNLISTED = "com.example.unlisted-app"
 LINKS = "timeline_links"  # a miroir of its own: other raw datasets
+MOVES = "timeline_moves"
 
 
 def configuration(analyses, miroir_id="timeline_tests"):
@@ -755,3 +756,82 @@ class TimelineModelTests(unittest.TestCase):
             {"screen_frames": 2, "timeline_screen": 2, "events": 2, "days": 1},
         )
         self.assertEqual(browser_rows(), browser)
+
+    def test_a_build_that_fails_after_reading_a_move_loses_no_old_position(self):
+        self.margin = "10 minutes"  # the installation's: the next build reads again
+        both = {"screen": "screen", "browser": "browser"}
+        miroir = configuration(
+            [timeline("timeline", both), timeline("fresh", both)], MOVES
+        )
+        schema = self.schema(miroir, "timeline")
+        datasets = [c.binding.dataset_name for c in miroir.connections[:2]]
+        only_first = miroir.analyses[:1]
+        loading = configuration([timeline("timeline", both)], MOVES)
+        # A Safari session over local midnight, a Notes session after it; a visit.
+        self.send(
+            loading,
+            "screen",
+            screen_batch(
+                *screen(-20, SAFARI),
+                *screen(-10, SAFARI),
+                *screen(0, SAFARI),
+                *screen(1000, NOTES),
+            ),
+        )
+        self.send(
+            loading,
+            "browser",
+            browser_batch(
+                place(1, "https://example.org/a", "Page A"), visit(1, 1, 100, 1)
+            ),
+            "firefox_places_batch",
+        )
+        for dataset in datasets:  # long done: outside the margin from now on
+            self.query(
+                f"update {dataset}._dlt_loads "
+                "set inserted_at = inserted_at - interval '1 hour'"
+            )
+
+        # The moves: a frame leaves for the Notes session, across midnight; the
+        # visit's id is reused the next day. Each build stops after its first
+        # model, as one that fails there would.
+        def first_model_only(name):
+            def transform(plan):
+                variables = {**plan.variables, "timeline_cursor_margin": self.margin}
+                build_models(f"path:models/timeline/{name}.sql", variables=variables)
+
+            return transform
+
+        transform = self.execution["transform"]
+        self.execution["transform"] = first_model_only("screen_frames")
+        self.send(
+            loading,
+            "screen",
+            screen_batch(frame(-10) | {"ts": MIDNIGHT + 1010}, usage(1010, NOTES)),
+        )
+        self.execution["transform"] = first_model_only("timeline_browser")
+        self.send(
+            loading,
+            "browser",
+            browser_batch(visit(1, 1, 100 + 86400, 1)),
+            "firefox_places_batch",
+        )
+        self.execution["transform"] = transform
+
+        # The next build, inside the margin, reads both loads again.
+        self.build(analysis_plan(only_first[0]))
+        self.build(analysis_plan(miroir.analyses[1]))
+        self.assertEqual(
+            self.snapshot(self.schema(miroir, "fresh")), self.snapshot(schema)
+        )
+        self.assertEqual(
+            self.query(
+                f"select source, day::text, events, frames from {schema}.days "
+                "order by source, day"
+            ),
+            [
+                ("browser", "2026-11-21", 1, None),
+                ("screen", "2026-11-19", 1, 1),
+                ("screen", "2026-11-20", 1, 3),
+            ],
+        )

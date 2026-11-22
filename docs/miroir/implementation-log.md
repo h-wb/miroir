@@ -2274,3 +2274,40 @@ Outside the suite, with invented rows only:
 
 Not done: `refresh` resubmitting lost deferred builds (left as decision 040
 describes); concurrent index creation.
+
+## 2026-11-22 — Timeline phase 1a, second review (PR #43)
+
+A second independent review, at `5fc94c4`, confirmed the nine fixes and found
+two regressions and one cost. All three are fixed.
+
+- **A connection edit during a load blocked its build.** After waiting for the
+  connection lock or the dbt slot, `_still_requested` now compares only the
+  analysis receipt. A load whose child build is blocked records `skipped` with
+  "<id> blocked (its settings changed while it waited)". Requested and
+  scheduled builds still go through the unchanged revision check when they
+  start.
+- **An old position was lost after a failed build.** `previous_captured_at` and
+  `previous_started_at` are now arrays of times not yet recounted.
+  - A rewritten row carries them until every model that reads them has read the
+    row (`timeline_consumed`: the least of the readers' newest stamps, looked up
+    by name). It then clears them, and adds its old time if it moved now.
+  - `timeline_screen` and `days` unnest them.
+- **Full reads of the sessions.** `apps` walks an index on `(deleted,
+  group_key)`, one probe per app. The join from new sessions to their old rows
+  is a `LATERAL … LIMIT 1` lookup by `event_id`. The plain join had been planned
+  as a hash join over all sessions.
+
+Validation:
+- New tests: a connection edited during a load, for a package without an
+  interval (the build runs); analysis settings edited while a load's build
+  waits (blocked, the load shows skipped); and the reviewer's move scenario.
+  - In the move scenario, a frame leaves its session across midnight and a
+    visit moves to the next day.
+  - The build that reads each move stops after its first model; the next build,
+    inside the 10-minute margin, reads the loads again.
+  - It matches a first build, and fails on the models of `5fc94c4`.
+- The two runner tests fail on the runner of `5fc94c4`. The first review's test
+  of a rebuild that waited still passes.
+- The reviewer's 300,000-frame measurement now shows no large sequential read.
+  An ordinary build reads in full only `days` and dlt's bookkeeping tables.
+- 6 random seeds still match incremental and fresh builds.

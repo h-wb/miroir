@@ -1866,8 +1866,14 @@ privacy or cost:
   on every build. Unique indexes hold their keys.
 - *Legacy builds* (no analysis) leave the timeline's models out.
 - *Builds that waited* for the connection lock or the dbt slot read the
-  configuration again once they hold each. If the connection's revision or the
-  analysis's receipt changed, the build ends as blocked.
+  configuration again once they hold each, and end as blocked if the
+  analysis's receipt changed. The receipt holds everything a build applies
+  (raw bindings, the settings a package reads, parameters), so a connection
+  edit alone does not block. A load whose build was blocked this way records
+  its transformation as skipped, not failed. Requested and scheduled builds
+  keep the check every request has when it starts: a changed connection
+  revision blocks them, as every operation runs only against the configuration
+  it was requested with. After waiting, only the receipt matters for correctness.
 - *Joining a deferred build.* A load joins only a scheduled build that has its
   own flow run bound. A load that builds at once registers that build under the
   same lock as the decision, so a second load deciding meanwhile defers instead.
@@ -1889,6 +1895,20 @@ reported eleven findings; each was decided as follows:
 10. Long uninterrupted sessions and the 50-range cap: left as they are, accepted
     costs.
 11. A repeated local midnight: listed as a limit.
+
+*Second review (2026-11-22)*, at `5fc94c4`. It confirmed the nine fixes and found
+two regressions and one cost:
+1. The re-check after waiting also compared the connection's revision, so any
+   connection edit during a load blocked that load's own build, for every
+   package. Fixed: only the receipt is compared after waiting, and a blocked
+   child counts as skipped in its load's summary.
+2. An old position was overwritten with null when the build that read a move
+   failed part way and the next build read the same load again inside the
+   margin. Fixed: old times are kept as a list, carried until every model that
+   recounts them has read the row (its stamp at most theirs), then cleared.
+3. `apps` and the join to old sessions read all sessions on every build. Fixed:
+   a skip scan over an index on (deleted, group_key), and one index probe per
+   session.
 
 Considered and left out:
 

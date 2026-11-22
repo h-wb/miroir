@@ -30,12 +30,14 @@
 -- incremental build reads the frames of the loads completed since its cursor and
 -- the frames of the seconds their app usage rows name: a resent frame replaces its
 -- row, and a frame whose app arrives late gets it. A frame that moved keeps its
--- previous time in previous_captured_at, for the models that count by time.
+-- previous times in previous_captured_at, for the models that count by time,
+-- until both have read the row (timeline_previous).
 -- The index on the raw image_path also serves dlt's merge of resent frames.
 {% set replaced = timeline_replaced(['screen']) | length > 0 %}
 {% set cursor = timeline_load_cursor('screenmemory', replaced) %}
 {% set stamp = timeline_new_stamp() %}
 {% set previous = is_incremental() and not replaced %}
+{% set consumed = timeline_consumed([('timeline_screen', 'true'), ('days', "source = 'screen'")]) %}
 with completed as not materialized (
     {{ timeline_completed('screenmemory') }}
 ),
@@ -89,8 +91,8 @@ select
     f.masked,
     {{ timeline_connection('screen') }} as connection,
     {% if previous %}
-    case when t.captured_at <> to_timestamp(f.ts) then t.captured_at end
-    {% else %}null::timestamptz{% endif %} as previous_captured_at,
+    {{ timeline_previous('previous_captured_at', 't.captured_at', 'to_timestamp(f.ts)', consumed) }}
+    {% else %}null::timestamptz[]{% endif %} as previous_captured_at,
     {{ timeline_literal(timeline_input('screen')) }} as _input,
     nullif({{ timeline_literal(cursor.cursor) }}, '')::timestamptz as _cursor,
     {{ timeline_literal(stamp) }} as _stamp

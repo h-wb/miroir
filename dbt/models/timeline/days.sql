@@ -49,17 +49,17 @@ with affected as (
     {% else %}
     select 'screen'::text as source, {{ timeline_local_day('moved.at') }} as day
     from {{ ref('screen_frames') }} f
-    cross join lateral (values (f.captured_at), (f.previous_captured_at)) moved (at)
+    cross join lateral (select f.captured_at union all select unnest(f.previous_captured_at)) moved (at)
     where f._stamp > {{ screen_lower }} and moved.at is not null
     union
     select 'screen', {{ timeline_local_day('moved.at') }}
     from {{ ref('timeline_screen') }} s
-    cross join lateral (values (s.started_at), (s.previous_started_at)) moved (at)
+    cross join lateral (select s.started_at union all select unnest(s.previous_started_at)) moved (at)
     where s._stamp > {{ screen_lower }} and moved.at is not null
     union
     select 'browser', {{ timeline_local_day('moved.at') }}
     from {{ ref('timeline_browser') }} v
-    cross join lateral (values (v.started_at), (v.previous_started_at)) moved (at)
+    cross join lateral (select v.started_at union all select unnest(v.previous_started_at)) moved (at)
     where v._stamp > {{ browser_lower }} and moved.at is not null
     {% endif %}
 ),

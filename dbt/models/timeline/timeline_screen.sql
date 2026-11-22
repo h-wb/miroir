@@ -7,6 +7,7 @@
         {'columns': ['event_id'], 'unique': True},
         {'columns': ['_input']},
         {'columns': ['deleted', 'started_at']},
+        {'columns': ['deleted', 'group_key']},
         {'columns': ['_stamp']},
     ],
     grants={'select': []},
@@ -24,7 +25,7 @@
 -- that no longer exists stays as a row with deleted = true, so events drops it.
 -- Frames of one second share their app and are never split between sessions. A
 -- frame that moved counts as changed at its old time too. A session whose start
--- moved keeps the previous one in previous_started_at, for days.
+-- moved keeps the previous ones in previous_started_at until days has read it.
 -- Internal: the reader has no access (an empty grant list makes dbt revoke).
 -- The windows are found first, by a query of their own, and inlined as
 -- literal ranges, so frames and sessions are read through their time indexes.
@@ -32,6 +33,7 @@
 {% set upper = timeline_resume(ref('screen_frames')) %}
 {% set replaced = timeline_replaced(['screen']) | length > 0 %}
 {% set incremental = is_incremental() and not replaced %}
+{% set consumed = timeline_consumed([('days', "source = 'screen'")]) %}
 {% set ns = namespace(windows=[('-infinity', 'infinity')]) %}
 {% if incremental %}
     {% set lower = timeline_resume(this) %}
@@ -40,7 +42,7 @@
             select captured_at from {{ ref('screen_frames') }}
             where _stamp > {{ timeline_literal(lower) }}
             union
-            select previous_captured_at from {{ ref('screen_frames') }}
+            select unnest(previous_captured_at) from {{ ref('screen_frames') }}
             where _stamp > {{ timeline_literal(lower) }} and previous_captured_at is not null
         ),
         reach as (
@@ -147,13 +149,16 @@ current_sessions as (
         ) as payload,
         false as deleted,
         {% if incremental %}
-        case when t.started_at <> s.started_at then t.started_at end
-        {% else %}null::timestamptz{% endif %} as previous_started_at,
+        {{ timeline_previous('previous_started_at', 't.started_at', 's.started_at', consumed) }}
+        {% else %}null::timestamptz[]{% endif %} as previous_started_at,
         {{ timeline_literal(timeline_input('screen')) }} as _input,
         {{ timeline_literal(upper) }} as _stamp
     from sessions s
     left join {{ ref('timeline_known_apps') }} k on k.bundle_id = s.bundle_id
-    {% if incremental %}left join {{ this }} t on t.event_id = 'screen:' || s.first_frame{% endif %}
+    -- One index probe per session: a plain join was planned as a read of them all.
+    {% if incremental %}left join lateral (
+        select * from {{ this }} o where o.event_id = 'screen:' || s.first_frame limit 1
+    ) t on true{% endif %}
 )
 select * from current_sessions
 {% if incremental %}
@@ -162,7 +167,7 @@ select
     t.source, t.connection, t.event_id, t.started_at, t.ended_at, t.kind, t.title,
     t.body, t.media_kind, t.media_key, t.group_key, t.payload,
     true as deleted,
-    null::timestamptz as previous_started_at,
+    {{ timeline_previous('previous_started_at', 't.started_at', 't.started_at', consumed) }} as previous_started_at,
     t._input,
     {{ timeline_literal(upper) }} as _stamp
 from {{ this }} t

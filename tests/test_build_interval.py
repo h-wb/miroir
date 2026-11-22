@@ -342,3 +342,56 @@ class BuildIntervalTests(WebFixture):
         self.assertEqual(
             self.store.attempts(rebuild)[-1]["transformation"], "succeeded"
         )
+
+    def load_with_edit(self, edit):
+        """A load whose build finds the configuration edited, as if saved while
+        the load ran (the edit is made on the build's first reload)."""
+        edits = []
+
+        def reload():
+            if not edits:
+                edit()
+                edits.append(True)
+            return self.miroir()
+
+        self.service.executor = InlineExecutor(
+            lambda operation_id: self.run_operation(operation_id, reload=reload)
+        )
+        operation_id = self.load()
+        self.assertEqual(edits, [True])
+        return operation_id
+
+    def child_attempts(self, load):
+        return [
+            attempt
+            for operation in self.store.recent_operations("personal", limit=50)
+            if operation.get("parent_operation_id") == load
+            for attempt in operation["attempts"]
+        ]
+
+    def test_a_connection_edit_during_a_load_does_not_stop_its_build(self):
+        self.intervals = {}  # a package that builds after every load
+
+        def edit():
+            config = json.loads(self.config_path.read_text())
+            config["connections"][0]["settings"]["start_date"] = "2021-01-01T00:00:00Z"
+            self.config_path.write_text(json.dumps(config))
+
+        load = self.load_with_edit(edit)
+        self.assertEqual(self.built, ["Music analysis"])
+        self.assertEqual(self.store.attempts(load)[-1]["transformation"], "succeeded")
+        self.assertEqual(
+            [a["transformation"] for a in self.child_attempts(load)], ["succeeded"]
+        )
+
+    def test_an_analysis_edit_while_a_loads_build_waits_blocks_it(self):
+        self.intervals = {}
+        load = self.load_with_edit(lambda: self.retime("Europe/Paris"))
+        self.assertEqual(self.built, [])
+        self.assertEqual(
+            [(a["ingestion"], a["error_type"]) for a in self.child_attempts(load)],
+            [("blocked", "Blocked")],
+        )
+        attempt = self.store.attempts(load)[-1]
+        self.assertEqual(attempt["transformation"], "skipped")
+        self.assertIn("music blocked", attempt["transformation_detail"])

@@ -369,8 +369,11 @@ skips Postgres models.
 
 A build waits for its connection's lock and then for the dbt slot. Once it holds
 each, a build run by Prefect or by `execute` reads the configuration again. If
-its connection or its analysis changed meanwhile, it ends as blocked, like a
-request that is out of date when it starts. With a minimum build interval
+the analysis's settings changed meanwhile, it ends as blocked, and a load whose
+build was blocked this way shows its transformation as skipped, with the reason.
+A connection edit alone does not stop a build, since what a build applies is in
+the analysis's receipt. A requested rebuild or a scheduled build is still
+blocked when its connection changed before it started, as any request is. With a minimum build interval
 (decision 040), a load joins only a scheduled build bound to its own flow run.
 Two loads deciding at once do not both build: the one that builds is registered
 before the other decides.
@@ -709,7 +712,9 @@ load, say) is still read. A load that never completes is never read.
   visits.
 - A frame or visit that moves to another time leaves its old session and day. For
   frames, this is not expected from ScreenMemory. For visits, it happens when
-  Places reuses the IDs of cleared visits.
+  Places reuses the IDs of cleared visits. The old times stay on the row until
+  every model that recounts them has read it, so a build that fails part way
+  loses none.
 - The result is what a first build over the same rows gives.
 
 `timeline_screen` and `timeline_browser` are the two sources' own models and are
@@ -740,7 +745,9 @@ visits; load ID and completion time in dlt's list of loads.
 
 On a test machine with a million frames, an ordinary build took under half a
 second per model. A million frames arriving at once took about 50 seconds; a
-first build over them took about 15.
+first build over them took about 15. An ordinary build reads no table in full
+except `days` (one row per day and source) and dlt's own small bookkeeping
+tables.
 
 **Read access.** `reader_role` names the role the server reads the timeline with
 (the installation uses `miroir_timeline`). Each build leaves the four relations

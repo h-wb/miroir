@@ -204,6 +204,31 @@
     {{- statements | join(';\ncommit;\n') ~ ';\ncommit' if statements else 'commit' -}}
 {%- endmacro %}
 
+{# How far every model that reads this one's previous positions has read it:
+   the least of their newest stamps, looked up by name (no dependency between
+   the models), or '' while one of them has not been built. #}
+{% macro timeline_consumed(readers) -%}
+    {%- set stamps = [] -%}
+    {%- for identifier, where in readers -%}
+        {%- set relation = adapter.get_relation(database=this.database, schema=this.schema, identifier=identifier) if execute else none -%}
+        {%- do stamps.append(timeline_scalar('select max(_stamp) from ' ~ relation ~ ' where ' ~ where) if relation is not none else '') -%}
+    {%- endfor -%}
+    {{- return(stamps | min if stamps else '') -}}
+{%- endmacro %}
+
+{# The times a row has left that its readers may not have recounted yet: the
+   ones it carried, until a build of every reader has read the row (its stamp is
+   at most `consumed`), and its old time if it moved now. A build that failed
+   part way therefore loses none: they stay until they have been used. `t` is
+   the row before this build; null for a new row. #}
+{% macro timeline_previous(column, old, new, consumed) -%}
+    nullif(
+        (case when t._stamp <= {{ timeline_literal(consumed) }} then '{}'::timestamptz[]
+            else coalesce(t.{{ column }}, '{}'::timestamptz[]) end)
+        || (case when {{ old }} <> {{ new }} then array[{{ old }}] else '{}'::timestamptz[] end),
+        '{}'::timestamptz[])
+{%- endmacro %}
+
 {# Whether a time falls in one of the ranges [lo, hi), given as text. #}
 {% macro timeline_in_ranges(column, ranges) -%}
     {%- for lo, hi in ranges -%}

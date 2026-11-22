@@ -20,7 +20,7 @@
 -- hops, reloads, embeds and framed links are not visits here; a visit of that kind,
 -- or one whose page has not arrived, is a row with deleted = true, so events drops
 -- it (Places reuses the ids of cleared visits, decision 032). A visit whose time
--- changed keeps the previous one in previous_started_at, for days.
+-- changed keeps the previous ones in previous_started_at until days has read it.
 -- Internal: the reader has no access (an empty grant list makes dbt revoke).
 --
 -- Only rows of loads dlt lists as complete are read. An incremental build reads
@@ -30,6 +30,7 @@
 {% set cursor = timeline_load_cursor('browser_history', replaced) %}
 {% set stamp = timeline_new_stamp() %}
 {% set previous = is_incremental() and not replaced %}
+{% set consumed = timeline_consumed([('days', "source = 'browser'")]) %}
 with completed as not materialized (
     {{ timeline_completed('browser_history') }}
 ),
@@ -81,8 +82,8 @@ select
     -- 4 embed, 5 and 6 redirects, 8 framed link, 9 reload
     (p.id is null or v.visit_date is null or coalesce(v.visit_type in (4, 5, 6, 8, 9), false)) as deleted,
     {% if previous %}
-    case when t.started_at <> to_timestamp(v.visit_date / 1000000.0) then t.started_at end
-    {% else %}null::timestamptz{% endif %} as previous_started_at,
+    {{ timeline_previous('previous_started_at', 't.started_at', 'to_timestamp(v.visit_date / 1000000.0)', consumed) }}
+    {% else %}null::timestamptz[]{% endif %} as previous_started_at,
     {{ timeline_literal(timeline_input('browser')) }} as _input,
     nullif({{ timeline_literal(cursor.cursor) }}, '')::timestamptz as _cursor,
     {{ timeline_literal(stamp) }} as _stamp

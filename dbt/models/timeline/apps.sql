@@ -8,10 +8,20 @@
 with known as (
     select * from {{ ref('timeline_known_apps') }}
 ),
+-- Every app of a session, one index probe per app rather than a read of every
+-- session (index on deleted, group_key).
 seen as (
-    select distinct group_key as bundle_id
-    from {{ ref('timeline_screen') }}
-    where not deleted
+    with recursive walk (bundle_id) as (
+        (select group_key from {{ ref('timeline_screen') }}
+         where not deleted and group_key is not null order by group_key limit 1)
+        union all
+        select (
+            select s.group_key from {{ ref('timeline_screen') }} s
+            where not s.deleted and s.group_key > w.bundle_id order by s.group_key limit 1
+        )
+        from walk w where w.bundle_id is not null
+    )
+    select bundle_id from walk where bundle_id is not null
 ),
 ids as (
     select bundle_id from known
