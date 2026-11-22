@@ -186,6 +186,12 @@ class WebTests(WebFixture):
         self.assertIn("daily_summary", page.text)
         self.assertIn("Open Health", page.text)
         self.assertIn("Inputs and settings", page.text)
+        # A rebuild from scratch, from the page and the API, reaches the plan.
+        self.assertIn("Rebuild from scratch", page.text)
+        self.client.post("/analyses/health/models")
+        self.client.post("/analyses/health/models", data={"full_refresh": "true"})
+        self.client.post(url + "?full_refresh=true", headers=BEARER)
+        self.assertEqual([p.full_refresh for p in plans[1:]], [False, True, True])
 
     def test_everything_but_login_requires_the_token(self):
         self.assertEqual(self.client.get("/healthz").status_code, 200)

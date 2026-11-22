@@ -341,8 +341,12 @@ def create_app(
         return {"saved": True}
 
     @app.post("/api/analyses/{analysis_id}/models", status_code=202)
-    def api_models(analysis_id: str) -> dict:
-        return {"operation_id": service.request_models(analysis_id)}
+    def api_models(analysis_id: str, full_refresh: bool = False) -> dict:
+        return {
+            "operation_id": service.request_models(
+                analysis_id, full_refresh=full_refresh
+            )
+        }
 
     @app.delete("/api/analyses/{analysis_id}", status_code=204)
     def api_remove_analysis(request: Request, analysis_id: str) -> Response:

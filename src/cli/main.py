@@ -124,6 +124,11 @@ def main(argv: list[str] | None = None) -> int:
         "models", help="Rebuild an analysis in Prefect from loaded data"
     )
     models.add_argument("analysis")
+    models.add_argument(
+        "--full-refresh",
+        action="store_true",
+        help="Rebuild incremental tables from scratch",
+    )
     analyses = commands.add_parser(
         "analyses", help="List analyses, their linked inputs, and build status"
     )
@@ -346,7 +351,13 @@ def _orchestrate(
         if args.command == "refresh":
             return _print(service.refresh())
         if args.command == "models":
-            return _print({"operation_id": service.request_models(args.analysis)})
+            return _print(
+                {
+                    "operation_id": service.request_models(
+                        args.analysis, full_refresh=args.full_refresh
+                    )
+                }
+            )
         if args.command == "media-backfill":
             operation_id = service.request_media_backfill(
                 args.connection, args.kind, args.limit
@@ -474,7 +485,12 @@ def _with_store(
             outcome = _backfill_here(args, miroir, store, common)
         elif args.command == "execute":
             outcome = execute_operation(
-                miroir, args.operation, lock_wait=EXECUTE_LOCK_WAIT, **common
+                miroir,
+                args.operation,
+                lock_wait=EXECUTE_LOCK_WAIT,
+                # A queued request checks the configuration again before dbt.
+                reload=lambda: load_miroir(args.config),
+                **common,
             )
         elif args.command == "run":
             outcome = run_connection(miroir, args.connection, origin="local", **common)

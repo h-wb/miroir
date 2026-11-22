@@ -78,6 +78,13 @@ class Execution:
     defer: Callable[[str, datetime], None] | None = None
     # Where a derive run reads originals and writes thumbnails (decision 040).
     object_store: "ObjectStore | None" = None
+    # Reads the configuration again, so a build that waited for the connection
+    # lock or the dbt slot can check it is still the build it was requested as.
+    reload: Callable[[], ResolvedMiroir] | None = None
+
+
+class Superseded(OperationError):
+    """The configuration changed while the build waited; it must not run."""
 
 
 class IngestionFailed(RuntimeError):
@@ -155,11 +162,13 @@ def request_models(
     *,
     store: MetadataStore,
     origin: Origin,
+    full_refresh: bool = False,
 ) -> Operation:
     """Record a rebuild of one analysis from already loaded data.
 
     It runs through the first linked input's connection (its deployment and
-    lock); nothing is fetched or loaded.
+    lock); nothing is fetched or loaded. `full_refresh` rebuilds incremental
+    tables from scratch.
     """
     analysis = find_analysis(miroir, analysis_id)
     linked = list(analysis.inputs.values())
@@ -175,7 +184,12 @@ def request_models(
         origin,
         kind="models",
         analysis_id=analysis.id,
-        options=json.dumps({"analysis_receipt": analysis_plan(analysis).receipt}),
+        options=json.dumps(
+            {
+                "analysis_receipt": analysis_plan(analysis).receipt,
+                **({"full_refresh": True} if full_refresh else {}),
+            }
+        ),
     )
 
 
@@ -339,6 +353,7 @@ def execute_operation(
     artifact_root: Path | None = None,
     defer: Callable[[str, datetime], None] | None = None,
     object_store: "ObjectStore | None" = None,
+    reload: Callable[[], ResolvedMiroir] | None = None,
 ) -> RunOutcome:
     """Run one recorded operation as a new attempt and record each stage.
 
@@ -362,6 +377,7 @@ def execute_operation(
         artifact_root,
         defer,
         object_store,
+        reload,
     )
     return _execute_operation(run, miroir, operation_id, backend_run_id)
 
@@ -835,7 +851,7 @@ def _transform(
     store = run.store
     if operation.kind == "models":
         analysis = find_analysis(miroir, str(operation.analysis_id))
-        return _build(run, attempt, analysis, secrets)
+        return _build(run, operation, attempt, analysis, secrets)
     analyses = analyses_linking(miroir, connection.config.id)
     skipped = None
     if not analyses:
@@ -853,39 +869,37 @@ def _transform(
     recorded = _record(store, attempt, "Transformation start", transformation="running")
     outcomes = []
     for analysis in analyses:
-        if _deferred(run, operation, miroir, connection, analysis):
+        decision = _deferred(run, operation, miroir, connection, analysis)
+        if decision is True:
             outcomes.append((analysis.id, "deferred"))
             continue
         try:
-            child = _new_operation(
-                store,
-                miroir,
-                connection,
-                operation.origin,
-                kind="models",
-                analysis_id=analysis.id,
-                parent_operation_id=operation.id,
-                options=json.dumps(
-                    {"analysis_receipt": analysis_plan(analysis).receipt}
-                ),
+            child, child_attempt = (
+                decision
+                if isinstance(decision, tuple)
+                else _register_build(store, miroir, connection, operation, analysis)
             )
-            child_attempt, _ = store.start_attempt(child.id, "not_run")
         except SQLAlchemyError:
             log.exception("Build of %s could not be registered", analysis.id)
             outcomes.append((analysis.id, "failed"))
             recorded = False
             continue
-        outcome, ok = _build(run, child_attempt, analysis, secrets)
+        outcome, ok = _build(run, child, child_attempt, analysis, secrets)
         outcomes.append((analysis.id, outcome))
         recorded = recorded and ok
-    built = [o for _, o in outcomes if o != "deferred"]
+    # Deferred and blocked builds did not run; neither is a failed build.
+    built = [o for _, o in outcomes if o not in ("deferred", "blocked")]
     if not built:
         transformation = "skipped"
     elif all(o == "succeeded" for o in built):
         transformation = "succeeded"
     else:
         transformation = "failed"
-    summary = ", ".join(f"{analysis_id} {outcome}" for analysis_id, outcome in outcomes)
+    summary = ", ".join(
+        f"{analysis_id} {outcome}"
+        + (" (its settings changed while it waited)" if outcome == "blocked" else "")
+        for analysis_id, outcome in outcomes
+    )
     ok = _record(
         store,
         attempt,
@@ -896,19 +910,43 @@ def _transform(
     return transformation, recorded and ok
 
 
+def _register_build(
+    store: MetadataStore,
+    miroir: ResolvedMiroir,
+    connection: ResolvedConnection,
+    operation: Operation,
+    analysis: ResolvedAnalysis,
+) -> tuple[Operation, int]:
+    """Record a load's build of one analysis as a started child operation."""
+    child = _new_operation(
+        store,
+        miroir,
+        connection,
+        operation.origin,
+        kind="models",
+        analysis_id=analysis.id,
+        parent_operation_id=operation.id,
+        options=json.dumps({"analysis_receipt": analysis_plan(analysis).receipt}),
+    )
+    child_attempt, _ = store.start_attempt(child.id, "not_run")
+    return child, child_attempt
+
+
 def _deferred(
     run: Execution,
     operation: Operation,
     miroir: ResolvedMiroir,
     connection: ResolvedConnection,
     analysis: ResolvedAnalysis,
-) -> bool:
+) -> bool | tuple[Operation, int]:
     """Leave this load's build to one at the end of the package's interval.
 
     The load joins a scheduled build that has not started, or, inside the
     interval after the latest build started, schedules one at its end. False
     (build now, as without an interval) whenever that cannot be done safely: a
-    redundant build costs time, a missing one leaves the analysis stale.
+    redundant build costs time, a missing one leaves the analysis stale. A build
+    due now is registered under the decision's lock, so a load deciding next sees
+    it started; it is returned with its attempt.
     """
     interval = analysis.package.min_build_interval
     if interval is None or run.defer is None:
@@ -926,8 +964,10 @@ def _deferred(
                 # Not started, so it starts after this load committed. One that
                 # would be blocked, or was due longer than an interval ago and
                 # may never run, is not joined.
+                # One with no flow run of its own was never scheduled.
                 if (
-                    options.get("analysis_receipt") == receipt
+                    scheduled.backend_run_id is not None
+                    and options.get("analysis_receipt") == receipt
                     and revisions.get(scheduled.connection_id)
                     == scheduled.config_revision
                     and "not_before" in options
@@ -936,7 +976,7 @@ def _deferred(
                     return True
             started = store.last_build_started(miroir.id, analysis.id)
             if started is None or now >= started + interval:
-                return False
+                return _register_build(store, miroir, connection, operation, analysis)
             due = started + interval
             build = _new_operation(
                 store,
@@ -971,14 +1011,45 @@ def _deferred(
         return False
 
 
+def _still_requested(run: Execution, operation: Operation) -> None:
+    """Raise Superseded unless the analysis read now still has this build's
+    receipt. The receipt is everything the build applies (selector, variables
+    with the raw bindings and parameters, relations, version), so a connection
+    edit that leaves it unchanged does not stop a build: a load's own build runs
+    after an edit saved during the load. Whether a request still matches its
+    connection's revision is checked once, when it starts (_execute_operation)."""
+    if run.reload is None:
+        return
+    try:
+        miroir = run.reload()
+    except Exception as error:  # noqa: BLE001 - unverifiable means not run
+        raise Superseded(
+            f"The configuration could not be read again: {type(error).__name__}"
+        ) from None
+    analysis = next((a for a in miroir.analyses if a.id == operation.analysis_id), None)
+    receipt = json.loads(operation.options or "{}").get("analysis_receipt")
+    if analysis is None or analysis_plan(analysis).receipt != receipt:
+        raise Superseded("Analysis settings changed while this build waited to run")
+
+
 def _build(
     run: Execution,
+    operation: Operation,
     attempt: int,
     analysis: ResolvedAnalysis,
     secrets: list[str],
 ) -> tuple[str, bool]:
-    """Run one analysis build and record it on `attempt`."""
-    plan = analysis_plan(analysis)
+    """Run one analysis build and record it on `attempt`.
+
+    Checked again once the connection lock and then the dbt slot are held: a
+    build whose analysis settings changed while it waited ends as blocked.
+    """
+    full_refresh = bool(json.loads(operation.options or "{}").get("full_refresh"))
+    plan = replace(
+        analysis_plan(analysis),
+        full_refresh=full_refresh,
+        ready=lambda: _still_requested(run, operation),
+    )
     detail = plan.receipt
     recorded = True
     if run.transform is None:
@@ -988,8 +1059,20 @@ def _build(
             run.store, attempt, "Transformation start", transformation="running"
         )
         try:
+            _still_requested(run, operation)
             run.transform(plan)
             transformation = "succeeded"
+        except Superseded as error:
+            ok = _record(
+                run.store,
+                attempt,
+                "Blocked build",
+                ingestion="blocked",
+                transformation="not_run",
+                error_type="Blocked",
+                error_message=str(error),
+            )
+            return "blocked", recorded and ok
         except Exception as error:  # noqa: BLE001 - dbt must not fail the load
             transformation = "failed"
             detail = ": ".join(redact(error, secrets))[:200]

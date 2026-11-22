@@ -13,7 +13,13 @@ import sqlalchemy as sa
 
 from src.core.config import load_miroir
 from src.core.operations import attempts, operations
-from src.core.runner import execute_operation
+from src.core.runner import (
+    Execution,
+    _deferred,
+    _new_operation,
+    execute_operation,
+    request_models,
+)
 from src.core.service import InlineExecutor
 from tests.test_web import WebFixture
 
@@ -45,9 +51,16 @@ class BuildIntervalTests(WebFixture):
         )
 
     def schedule(self, operation_id, start_at):
+        # As the flow does: the scheduled build is bound to its own run.
         self.scheduled.append((operation_id, start_at))
+        self.store.bind_backend_run(operation_id, f"run-{operation_id}")
 
-    def run_operation(self, operation_id):
+    def retime(self, timezone):
+        self.service.update_analysis(
+            "music", {"timezone": timezone}, self.service._raw_config()[1]
+        )
+
+    def run_operation(self, operation_id, reload=None):
         return execute_operation(
             self.miroir(),
             operation_id,
@@ -59,6 +72,7 @@ class BuildIntervalTests(WebFixture):
             pipelines_dir=str(self.root / "state"),
             transform=lambda plan: self.built.append(plan.title),
             defer=self.defer,
+            reload=reload,
         )
 
     def add_crossovers(self):
@@ -243,3 +257,141 @@ class BuildIntervalTests(WebFixture):
         self.assertEqual(
             {o.id for o in self.unstarted()}, {stale, outdated, self.scheduled[2][0]}
         )
+
+    def test_a_build_with_no_run_of_its_own_is_not_joined(self):
+        # Recorded, but the worker stopped before a flow run was bound to it.
+        self.defer = lambda operation_id, start_at: self.scheduled.append(
+            (operation_id, start_at)
+        )
+        self.load()
+        self.load()
+        self.assertEqual(len(self.scheduled), 1)
+        self.load()
+        self.assertEqual(len(self.scheduled), 2)
+        self.assertEqual(
+            {o.id for o in self.unstarted()}, {s for s, _ in self.scheduled}
+        )
+
+    def test_a_build_due_now_is_registered_before_the_next_load_decides(self):
+        miroir = self.miroir()
+        connection = next(c for c in miroir.connections if c.config.id == "music")
+        analysis = next(a for a in miroir.analyses if a.id == "music")
+        run = Execution(self.store, None, lambda c: {}, defer=self.defer)
+        loads = [_new_operation(self.store, miroir, connection, "local") for _ in "ab"]
+        # Both loads decide before either builds: the first is registered and
+        # started under the lock, so the second defers to the interval's end.
+        first = _deferred(run, loads[0], miroir, connection, analysis)
+        self.assertIsInstance(first, tuple)
+        self.assertEqual(self.store.attempts(first[0].id)[0]["ingestion"], "not_run")
+        self.assertIs(_deferred(run, loads[1], miroir, connection, analysis), True)
+        self.assertEqual(len(self.scheduled), 1)
+
+    def requested(self, **options):
+        """A rebuild recorded but not run, and the configuration it was read with."""
+        miroir = self.miroir()
+        operation = request_models(
+            miroir, "music", store=self.store, origin="local", **options
+        )
+        return miroir, operation.id
+
+    def execute(self, miroir, operation_id, transform):
+        return execute_operation(
+            miroir,
+            operation_id,
+            store=self.store,
+            destination=None,
+            resolve_credentials=lambda c: {},
+            transform=transform,
+            reload=self.miroir,
+        )
+
+    def test_a_build_whose_settings_changed_while_it_waited_is_blocked(self):
+        self.load()
+        built = []
+        # Read before it waited for the connection lock; saved meanwhile.
+        miroir, rebuild = self.requested()
+        self.retime("Europe/Paris")
+        self.execute(miroir, rebuild, built.append)
+        self.assertEqual(built, [])
+        attempt = self.store.attempts(rebuild)[-1]
+        self.assertEqual(
+            (attempt["ingestion"], attempt["transformation"], attempt["error_type"]),
+            ("blocked", "not_run", "Blocked"),
+        )
+        self.assertIn("Analysis settings changed", attempt["error_message"])
+
+        # The same check runs again once the build holds the dbt slot.
+        miroir, rebuild = self.requested()
+
+        def transform(plan):
+            self.retime("Asia/Tokyo")  # saved while it waited for the dbt slot
+            plan.ready()
+            built.append(plan)
+
+        self.execute(miroir, rebuild, transform)
+        self.assertEqual(built, [])
+        self.assertEqual(self.store.attempts(rebuild)[-1]["ingestion"], "blocked")
+
+        # Unchanged, it builds, and a requested full refresh reaches the plan.
+        miroir, rebuild = self.requested(full_refresh=True)
+        self.execute(miroir, rebuild, built.append)
+        self.assertEqual([plan.full_refresh for plan in built], [True])
+        self.assertTrue(
+            json.loads(self.store.get_operation(rebuild).options)["full_refresh"]
+        )
+        self.assertEqual(
+            self.store.attempts(rebuild)[-1]["transformation"], "succeeded"
+        )
+
+    def load_with_edit(self, edit):
+        """A load whose build finds the configuration edited, as if saved while
+        the load ran (the edit is made on the build's first reload)."""
+        edits = []
+
+        def reload():
+            if not edits:
+                edit()
+                edits.append(True)
+            return self.miroir()
+
+        self.service.executor = InlineExecutor(
+            lambda operation_id: self.run_operation(operation_id, reload=reload)
+        )
+        operation_id = self.load()
+        self.assertEqual(edits, [True])
+        return operation_id
+
+    def child_attempts(self, load):
+        return [
+            attempt
+            for operation in self.store.recent_operations("personal", limit=50)
+            if operation.get("parent_operation_id") == load
+            for attempt in operation["attempts"]
+        ]
+
+    def test_a_connection_edit_during_a_load_does_not_stop_its_build(self):
+        self.intervals = {}  # a package that builds after every load
+
+        def edit():
+            config = json.loads(self.config_path.read_text())
+            config["connections"][0]["settings"]["start_date"] = "2021-01-01T00:00:00Z"
+            self.config_path.write_text(json.dumps(config))
+
+        load = self.load_with_edit(edit)
+        self.assertEqual(self.built, ["Music analysis"])
+        self.assertEqual(self.store.attempts(load)[-1]["transformation"], "succeeded")
+        self.assertEqual(
+            [a["transformation"] for a in self.child_attempts(load)], ["succeeded"]
+        )
+
+    def test_an_analysis_edit_while_a_loads_build_waits_blocks_it(self):
+        self.intervals = {}
+        load = self.load_with_edit(lambda: self.retime("Europe/Paris"))
+        self.assertEqual(self.built, [])
+        self.assertEqual(
+            [(a["ingestion"], a["error_type"]) for a in self.child_attempts(load)],
+            [("blocked", "Blocked")],
+        )
+        attempt = self.store.attempts(load)[-1]
+        self.assertEqual(attempt["transformation"], "skipped")
+        self.assertIn("music blocked", attempt["transformation_detail"])

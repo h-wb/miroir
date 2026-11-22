@@ -102,6 +102,7 @@ class BatchTests(unittest.TestCase):
             "absolute path": batch(FRAME | {"image_path": "/" + FRAME["image_path"]}),
             "parent segment": batch(FRAME | {"image_path": "2026/../image.jpeg"}),
             "null text": batch(FRAME | {"text": None}),
+            "withheld with text": batch(FRAME | {"withheld": "excluded_app"}),
             "long line": batch(FRAME | {"text": "x" * (2 * 1024 * 1024)}),
             "repeated header": [HEADER, HEADER, trailer],
             "repeated trailer": [HEADER, FRAME, trailer, trailer],

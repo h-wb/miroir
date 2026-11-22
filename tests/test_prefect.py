@@ -497,6 +497,7 @@ class OrchestrationCliTests(unittest.TestCase):
         with temporary_settings({PREFECT_API_URL: closed_api()}):
             for command, message in (
                 (["models", "nope"], "Unknown analysis"),
+                (["models", "nope", "--full-refresh"], "Unknown analysis"),
                 (["deployments", "plan"], "try again"),
                 (["deployments", "apply"], "try again"),
                 (["refresh"], "try again"),
