@@ -2137,3 +2137,52 @@ Not done: the read-only role in the installation (home-ops) and its settings; th
 `timeline` package and its models, grants and schema privilege; thumbnails and
 the stored-media table; any timeline page beyond its status. The Safari check of
 `Clear-Site-Data` belongs to the phase that caches images.
+
+## 2026-11-22 — The messages analysis package (decision 041)
+
+Built the `messages` package, so dashboards on Apple Messages can read analysis
+tables instead of the source's raw tables.
+
+- **Catalogue and connector.** `messages` in `src/analyses/catalog.py`: one required
+  input (`apple_messages`), six relations. The Apple Messages connector now
+  recommends it, so a new connection gets the analysis.
+- **Staging.** One view per raw table (`stg_apple_messages__*`), through
+  `optional_input`, so absent tables (`contacts`, `chat_handles`) are empty. The
+  messages view classifies each row (message, reaction, removal, event, other),
+  turns the text into a length and drops it, names the reaction kind and strips the
+  `p:<part>/` or `bp:` prefix from its target.
+- **Models.** `int_apple_messages__rows` (every row with its conversation, local
+  time and attachment count), then `conversations`, `messages`, `reactions`,
+  `participants`, `attachments` and `daily` in the `messages` group. Every model
+  is enabled only for a Miroir analysis (`miroir_namespace`), so the nightly
+  `run_dbt`, which has no Apple Messages schema, skips them. Plain tables.
+- **Apple's codes.** The repository only passes them through, so they were checked
+  against imessage-exporter's source (`item_type`, `associated_message_type`
+  1000/2000–2007/3000–3007/4000, the `p:`/`bp:` target prefixes, and that a removed
+  reaction's row is deleted) and against several open-source readers for
+  `chat.style` 43 (group) and 45 (direct). The source's code showed that a
+  message's handle comes from `handle_id`, which is the other person for my own
+  messages in a direct chat, so a sender is set only for messages from others.
+- **Docs.** Decision 041; the package's section in `docs/miroir/README.md`; the
+  source page and the sources table point at the package.
+
+Not changed, to keep the merge with the open timeline pull request (#43) easy: the
+one-line package list in the README's analyses section, which that pull request
+also edits.
+
+Validation: `tests/test_messages_models.py` loads synthetic batches (555 numbers,
+example.com addresses) through the real import into a disposable Postgres and
+builds the package: one person over three chat guids is one conversation;
+direct conversations named from contacts and not; titled, untitled and unstyled
+groups (with "+N"); reactions added, removed, removed without an add, and added
+again; group events and a poll vote left out; reply minutes both ways and the
+24-hour cap; a link preview and a sticker's file left out of attachments; a local
+day and hour across midnight in Toronto; a message in no chat; and a build with no
+`contacts` table and with an empty one. Build time on 200,000 synthetic messages
+(a throwaway script, not committed; 400 conversations, 25,000 attachment links):
+3.9 seconds a build warm, 5.2 cold, of which 2.4 are the models and their tests.
+`tests/test_apple_messages_batch.py` now expects the connector to recommend the
+package. The server suite is green (284 tests, 10 of them new, including the
+Postgres and Prefect ones), with ruff, format, mypy and the collector's strict
+mypy clean. Without an analysis's variables, `dbt ls` lists none of the new
+models.

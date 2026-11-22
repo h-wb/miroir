@@ -20,6 +20,10 @@ models:
     crossovers:
       +schema: crossovers
       +materialized: table
+    # Built only for a Miroir analysis (each model checks miroir_namespace)
+    messages:
+      +schema: messages
+      +materialized: table
     music:
       +schema: music
       +materialized: table

@@ -1,0 +1,34 @@
+version: 2
+
+# Built only for a Miroir analysis (each model checks miroir_namespace).
+models:
+  - name: messages_conversations
+    description: One row per conversation, keyed by the chats' own identifier, with its name and totals.
+    columns:
+      - name: conversation_key
+        data_tests: [unique, not_null]
+  - name: messages_messages
+    description: One row per message (no reactions or group events), without its text.
+    columns:
+      - name: guid
+        data_tests: [unique, not_null]
+  - name: messages_reactions
+    description: One row per reaction that was added and not removed.
+    columns:
+      - name: guid
+        data_tests: [unique, not_null]
+  - name: messages_participants
+    description: One row per conversation and person other than me.
+    columns:
+      - name: handle
+        data_tests: [not_null]
+  - name: messages_attachments
+    description: One row per attachment of a message; link previews are left out.
+    columns:
+      - name: attachment_guid
+        data_tests: [not_null]
+  - name: messages_daily
+    description: One row per local day from the first message to the last.
+    columns:
+      - name: day
+        data_tests: [unique, not_null]

@@ -6,7 +6,8 @@ collector (decision 038).
 - **Status**: collector source and connector built; not deployed
 - **Code**: connector [`src/integrations/apple_messages/`](../../src/integrations/apple_messages/),
   source [`collector/miroir_collector/sources/apple_messages.py`](../../collector/miroir_collector/sources/apple_messages.py)
-- **dbt and dashboards**: none yet
+- **dbt and dashboards**: the `messages` analysis package (decision 041,
+  [its tables](../miroir/README.md#the-messages-package)); no dashboards yet
 
 ## Where the data comes from
 

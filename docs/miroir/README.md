@@ -593,6 +593,53 @@ Sources today: `screenmemory` ([what it sends and what it withholds](../sources/
 and `apple_messages` ([Apple Messages rows](../sources/apple-messages.md)).
 The collector adds the source's format to the receiving URL itself.
 
+### The messages package
+
+The `messages` package reads one Apple Messages connection (decision 041) and
+builds six tables in its `…_messages` schema. Creating an Apple Messages
+connection adds it. Local days and hours are in the analysis's timezone.
+
+The tables hold no message text, only lengths and flags. Names come from the
+connection's `contacts` when the collector sends them (`names`); without them a
+person is their number or address.
+
+- **conversations**: one row per conversation. A conversation is the chat's own
+  identifier, so one person over iMessage, SMS and RCS, or the same chat seen from
+  two Macs, is one row. `conversation_key`, `display_name` (a group's title, else
+  its participants' names; a direct conversation's contact name, else its
+  identifier), `is_group`, `participants`, `first_message_at`,
+  `last_message_at`, `messages_sent`, `messages_received`, `attachments`,
+  `services` (for example `SMS, iMessage`).
+- **messages**: one row per message: not reactions, group events, calls or poll
+  votes. `guid`, `conversation_key` (null for the few messages in no chat),
+  `is_group`, `sent_at`, local `day`, `hour` and `weekday` (1 is Monday),
+  `is_from_me`, `sender_handle` and `sender_name` (null for my own, and when
+  Apple stores no handle), `service`,
+  `has_text` and `text_length` (null when the text could not be read),
+  `attachments`, `is_thread_reply`, `is_edited`, `is_unsent`, `is_audio`, and
+  `reply_minutes`: in a direct conversation, for the first message after one from
+  the other side, the minutes since that message, null beyond 24 hours.
+- **reactions**: one row per reaction that stands, a removed one cancelled.
+  `guid`, `conversation_key`, `sent_at`, `day`, `hour`, `kind` (`love`, `like`,
+  `dislike`, `laugh`, `emphasis`, `question`, `emoji`, `sticker`), `is_from_me`,
+  `sender_handle`, `sender_name`, `target_guid` (the message it reacts to) and
+  `target_part` (which part of it, 0 for the first).
+- **participants**: one row per conversation and person other than me: everyone
+  listed in its chats and everyone who sent in it. `conversation_key`, `handle`,
+  `display_name`, `has_contact_name`, `messages_sent`, `first_message_at`,
+  `last_message_at`.
+- **attachments**: one row per attachment of a message. `attachment_guid`,
+  `message_guid`, `conversation_key`, `sent_at`, `day`, `is_from_me`, `kind`
+  (`image`, `video`, `audio`, `document`, `other`, from the mime type or the
+  extension), `mime_type`, `extension`, `bytes`, `has_media_key` (whether the file
+  has a name to be stored under). Link previews are left out.
+- **daily**: one row per local day from the first message to the last, quiet days
+  included. `day`, `weekday`, `messages_sent`, `messages_received`,
+  `conversations_active`, `attachments`, `reactions`.
+
+The models are built only for an analysis; the nightly `run_dbt` skips them. They
+are rebuilt in full after every load, in about four seconds for 200,000 messages.
+
 ### Media: files that rows point at
 
 Some rows point at a file, such as a screen frame at its screenshot. Miroir keeps

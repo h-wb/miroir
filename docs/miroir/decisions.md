@@ -1828,3 +1828,77 @@ Consequences:
 - The read-only role and its settings belong to the installation. The schema
   privilege (`USAGE`) on the timeline's schema is not something dbt `grants`
   gives and has to be granted with it.
+
+## 041 — A messages analysis: conversations by identifier, no text
+
+Status: accepted, 2026-11-22. Builds on 022 and 038.
+
+Dashboards read an analysis package's tables, never a source's raw tables. The
+`messages` package is what makes dashboards on Apple Messages possible: who is
+talked to, when, how much and how fast replies come. It has one required input,
+an `apple_messages` connection, and the package timezone. Creating an Apple
+Messages connection now creates it, as for the other sources.
+
+**A conversation is the chat's own identifier** (`chat_identifier`: a number, an
+address or a group id), never Apple's chat guid. One person reached over iMessage,
+SMS and RCS has a chat per service, and the same chat has a different guid on Macs
+on different macOS versions (038); all of those are one conversation. A chat with
+no identifier falls back to the last part of its guid, which holds the same value.
+One person reached at a number and at an address is still two conversations:
+nothing in the data says they are the same person.
+
+**What counts as a message.** A row is a message when its `item_type` is 0 and its
+`associated_message_type` is 0, 2 or 3 (or absent). A reaction is 2000 to 2007
+(love, like, dislike, laugh, emphasis, question, emoji, sticker), plus 1000, a
+sticker placed on a message; 3000 to 3007 remove one. Every other `item_type` is a
+group event, a call, a shared location or a kept audio message, and is left out,
+as is any other associated type (4000 is a poll vote). These codes are not in
+Apple's documentation. They were checked against the reader in imessage-exporter
+and several other open-source readers of the same database. Where a code is not
+known, the row counts as nothing rather than as a message.
+
+**Reactions that were removed.** Messages deletes a reaction's row when it is
+removed, but rows already loaded are never deleted (038), so the warehouse can hold
+both. For each sender, target message, part and kind, the latest row decides: a
+reaction stands if it is newer than any removal, and a removal at the same time
+wins. A reaction changed to another kind with no removal row would count as both.
+The emoji of an emoji reaction is not sent by the collector; such reactions have
+the kind `emoji` only.
+
+**Reply times** are measured only in direct conversations, for the first message
+after one from the other side, as the minutes since that message. Beyond 24 hours
+the value is null: the conversation is taken to have started again, and a reply
+two days later would otherwise dominate an average.
+
+**No text.** The tables hold lengths and flags, never text. Message text, subjects
+and group renames stay in the raw tables, which only the staging view reads. The
+text of a group's title, a chat's display name and contact names are names, not
+messages, and are kept. Lengths are counted after the collector's masking, without
+the placeholder character Messages puts in the text for each attachment.
+
+Choices where the data cannot tell:
+
+- A message linked to chats of two conversations takes the first key in order. A
+  message in no chat is kept, with no conversation: it counts in the daily totals
+  and in no conversation.
+- A sender is set only for messages from someone else. For my own messages the
+  source's handle is the other person in a direct chat and empty in a group.
+- A chat is a group when its style is 43, direct when 45, and otherwise a group
+  when it has a room name or more than one participant.
+- Participants are the handles listed in a conversation's chats and those who sent
+  in it, never me. A conversation with no listed handles and no received messages
+  has none.
+- An unsent message counts as sent and unsent, not edited, even if it carries an
+  edit time.
+- An attachment counts only when its metadata arrived. Link previews
+  (`.pluginPayloadAttachment`, what Messages fetched for a link) are not
+  attachments anyone sent and are left out, as are files on reactions (stickers).
+
+Left out: the text and anything derived from it beyond its length, edit history,
+read and delivery times, calls and shared locations, poll votes, and the
+attachment files themselves. Merging a person's number and address into one
+person waits for a reliable source of that link.
+
+Every table is rebuilt in full after each load. On 200,000 synthetic messages a
+build takes about four seconds, of which dbt's own start is more than a third;
+incremental tables would add complexity for little.

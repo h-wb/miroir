@@ -59,7 +59,7 @@ DEFINITION = IntegrationDefinition(
             received_name="apple-messages-batch.jsonl.gz",
         ),
     ),
-    analysis=None,
+    analysis="messages",
     media=(
         MediaKind(
             "attachments",
