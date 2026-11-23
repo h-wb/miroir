@@ -107,7 +107,8 @@
     {%- if not execute -%}{{ return(result) }}{%- endif -%}
     {%- set completed = '(' ~ timeline_completed(source_name) ~ ')' -%}
     {%- if not result.rebuild -%}
-        {%- set lower = timeline_scalar('select max(_cursor)::text from ' ~ this) -%}
+        {%- set lower = (timeline_kept_cursor() if config.get('keep_cursor') else '')
+            or timeline_scalar('select max(_cursor)::text from ' ~ this) -%}
         {%- set found = timeline_scalar(
             "select string_agg(load_id, ',' order by inserted_at, load_id) || '|' || max(inserted_at)::text from (select * from "
             ~ completed ~ " l where inserted_at > coalesce(nullif(" ~ timeline_literal(lower) ~ ", '')::timestamptz, '-infinity') - interval '"
@@ -300,8 +301,29 @@
     where {% for key in keys %}t.{{ adapter.quote(key) }} = s.{{ adapter.quote(key) }}{% if not loop.last %} and {% endif %}{% endfor %};
     insert into {{ target }} ({{ columns }})
     select {{ columns }} from {{ source }}{% if removes %} where not _deleted{% endif %};
+    {%- if config.get('keep_cursor') %}
+    {{ timeline_keep_cursor(target, source) }};
+    {%- endif %}
     {#- The staging table is a table of the schema (timeline_staging.sql). -#}
     drop table {{ source }}
+{%- endmacro %}
+
+{# A model with keep_cursor keeps the cursor it read in its table's comment,
+   so a load that wrote none of its rows still counts as read; without it, every
+   build would read again the loads since the last one that wrote a row, and at
+   5,000 read everything. The model stages one row more on incremental builds,
+   with _deleted true and its cursor, which the upsert never inserts. A first
+   build, or a rebuild from scratch, keeps the cursor of its rows (post-hook
+   timeline_keep_cursor(this, this)). #}
+{% macro timeline_keep_cursor(target, source) -%}
+    do $cursor$ begin
+        execute format('comment on table {{ target }} is %L',
+            'miroir cursor ' || (select max(_cursor)::text from {{ source }}));
+    end $cursor$
+{%- endmacro %}
+
+{% macro timeline_kept_cursor() -%}
+    {{- return(timeline_scalar("select substring(obj_description('" ~ this ~ "'::regclass, 'pg_class') from '^miroir cursor (.+)$')")) -}}
 {%- endmacro %}
 
 {# What the worker recorded of a row's stored file (media_objects, decision 040):

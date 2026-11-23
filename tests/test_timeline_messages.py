@@ -894,6 +894,43 @@ class TimelineMessagesTests(TimelineMessagesFixture):
         (after,) = self.query(indexes)
         self.assertIn('"left"(text, 100000)', after[0])
 
+    def test_loads_that_write_no_message_count_as_read(self):
+        miroir = self.configure([timeline("t", reader_role=READER)])
+        schema = self.schema(miroir, "t")
+        dataset = miroir.connections[0].binding.dataset_name
+        alex = DIRECT[0]
+        self.deliver(
+            miroir, [*chat(alex, ALEX, ALEX), *message("x1", 0, alex, handle=ALEX)]
+        )
+        stamps = self.query(f"select guid, _stamp from {schema}.messages")
+
+        def unread():
+            # Completed loads after the cursor the table keeps: read again by
+            # every build until one writes a message, read all at 5,000.
+            return self.query(
+                f"select count(*) from {dataset}._dlt_loads where status = 0 "
+                "and inserted_at > coalesce(substring(obj_description("
+                f"'{schema}.messages'::regclass, 'pg_class') "
+                "from '^miroir cursor (.+)$')::timestamptz, "
+                f"(select max(_cursor) from {schema}.messages))"
+            )[0][0]
+
+        self.assertEqual(unread(), 0)
+        for records in (
+            [contact(ALEX, first_name="Alex")],
+            [contact(ALEX, first_name="Alexandra")],
+            chat(alex, ALEX, ALEX),
+            [],
+        ):
+            self.deliver(miroir, records)
+            self.assertEqual(unread(), 0)
+        self.media_record(miroir, "unknown.jpeg")
+        self.build(analysis_plan(miroir.analyses[0]))
+        self.assertEqual(unread(), 0)
+        self.assertEqual(
+            self.query(f"select guid, _stamp from {schema}.messages"), stamps
+        )
+
     def test_a_build_that_fails_at_its_end_changes_nothing(self):
         # The raw-index hook runs outside the model's transaction and opens it
         # again (decision 040, the media upgrade): a build that fails in a

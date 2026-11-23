@@ -2,6 +2,7 @@
     enabled=var('miroir_namespace', none) is not none,
     materialized='incremental',
     unique_key='guid',
+    keep_cursor=true,
     incremental_strategy='timeline_upsert',
     indexes=[
         {'columns': ['guid'], 'unique': True},
@@ -30,7 +31,10 @@
         "{{ timeline_messages_retime() }}",
         "{{ timeline_search_index('text') }}",
     ],
-    post_hook="{{ timeline_exact_acl(true) }}",
+    post_hook=[
+        "{{ timeline_keep_cursor(this, this) if not is_incremental() else '' }}",
+        "{{ timeline_exact_acl(true) }}",
+    ],
 ) }}
 -- One row per Apple message (decision 041's rule: messages_row_kind; not
 -- reactions, not group events), with its text as the collector delivered it,
@@ -339,6 +343,7 @@ select
     {{ timeline_literal(stamp) }} as _stamp,
     {{ timeline_literal(chats_upper) }} as _chats_seen,
     m.reactions_from as _reactions_from
+    {% if is_incremental() %}, false as _deleted{% endif %}
 from current_messages m
 {% if previous %}
 -- One index probe per message: a plain join was planned as a read of them all.
@@ -356,10 +361,24 @@ select
     nullif({{ timeline_literal(cursor.cursor) }}, '')::timestamptz,
     {{ timeline_literal(stamp) }},
     {{ timeline_literal(chats_upper) }},
-    '{}'::text[]
+    '{}'::text[],
+    false
 from picked p
 cross join lateral (
     select * from {{ this }} o where o.guid = p.guid and not o.deleted limit 1
 ) t
 where p.kind <> 'message'
+{% endif %}
+{% if is_incremental() %}
+union all
+-- The cursor this build read, kept even when it writes no message
+-- (keep_cursor); never inserted.
+select
+    '', null::text, null::timestamptz, null::date, null::text, false, null::text,
+    null::text, null::text, null::text, false, false, false, null::timestamptz,
+    false, null::text, '[]'::jsonb, '[]'::jsonb, true, null::text,
+    null::timestamptz[], null::text,
+    nullif({{ timeline_literal(cursor.cursor) }}, '')::timestamptz,
+    {{ timeline_literal(stamp) }}, {{ timeline_literal(chats_upper) }}, '{}'::text[],
+    true
 {% endif %}
