@@ -2662,8 +2662,18 @@ SHA-256 over a random key of the analysis and the conversation key. The key
 (`timeline_secret`, one row, 244 random bits from two `gen_random_uuid()`) is made
 at the first build and readable by the owner alone; a plain hash of the key was
 rejected because direct conversation keys are phone numbers, few enough to try
-every one, and the schema's name is no secret. The conversation key itself is in
-no table the reader can read: `conversations` and `messages` hold only the id.
+every one, and the schema's name is no secret. What the id protects is what
+leaves the database: an address, a log line or a browser's history holding it
+cannot be turned back into a number or an address without the database, and the
+key and the chats' lookup (`timeline_message_chats`) are the owner's alone, so
+the id cannot be computed offline. It does not hide a handle from the reader
+role, and is not meant to *(revised after review)*: the reader is the server,
+behind the login, and it must show unnamed people by their number. Whoever holds
+the reader's password reads everything the tables hold, and finds a number's
+conversation in one query (`conversations.participants`, `people`,
+`messages.sender_handle` and `sender_written`, the events' payloads, a direct
+conversation's `display_name`, which falls back to the identifier). No table
+the reader can read holds the conversation key column itself.
 - Unchanged by ordinary incremental builds, by a rebuild from scratch
   (`timeline_secret` is `full_refresh=false`, so `--full-refresh` keeps it), by a
   replaced or unlinked input, a new timezone or a changed reader role.
@@ -2743,8 +2753,16 @@ media key, and the reaction's target expression), created by the build as for th
 screen. A guid sent again as something other than a message is kept as a deleted
 row until `events` and `days` have read it; `days`' last post-hook removes it. A
 message that moves keeps its old times in `previous_sent_at` until `days` has read
-it. After a new timezone a pre-hook gives every message the new local day in
-place, through an index on its `timezone` column, instead of reading all again.
+it. After a new timezone every message is read again *(revised after review)*:
+an update in place of `day` cost as much (29 to 33 s against 36 s on the
+review's history: no update is HOT and the text index is rewritten) and grew
+the table from 129 to 359 MB. The rows' indexed `timezone` column tells the
+build. A load that writes no message still counts as read *(revised after
+review)*: `messages` keeps the cursor it read in its table's comment
+(`keep_cursor`), carried through the upsert by one more staged row that is never
+inserted. Without it, contact-only loads, unchanged chats, empty batches and
+media records for unknown keys were read again by every build until one wrote a
+message, and at 5,000 the build read everything.
 A test checks after every step of a sequence (an edit, an unsend, reactions
 changed and removed, messages before their chat, a chat sent again, a chat that
 becomes a group, attachment metadata and links late, media records written and
@@ -2793,11 +2811,65 @@ edit history and read times, none of which the tables hold; the source name
 `messages` in the server's list of sources; and thumbnails for attachments, which
 the worker does not make yet.
 
+*Review of #52 (2026-11-23).* An independent review found, and these were fixed,
+each with a test that fails without the fix:
+1. *One long text stopped the timeline.* A message (or a frame) of about 1 MB of
+   distinct words is more than a tsvector holds (1 MB of words); the GIN index
+   failed every build, and every model after `messages` was skipped, screen and
+   browser included. Both indexes now cover the first 100,000 characters
+   (`timeline_search_vector`; `search_vector` and `SEARCH_CHARACTERS` in
+   `src/core/timeline.py`, the same expression, which the server's search uses so
+   the index answers). At most 400 KB of words. The text is stored whole; words
+   after its first 100,000 characters are not found by search, in a message or a
+   frame. An existing `screen_frames` gets the bounded index once.
+2. *A reaction sent again elsewhere stayed on its old target.* Only its new
+   target was recomputed. Each message now lists every reaction and removal row
+   aimed at it (`_reactions_from`, GIN-indexed), and a row in a new load
+   recomputes the messages listing it. The sequence test runs with no margin and
+   includes a reaction aimed elsewhere and one sent again as a message.
+3. *The cursor did not move* after loads that wrote no message (above).
+4. *Backups were readable.* dbt renames a table it rebuilds whole to
+   `…__dbt_backup` and drops it after the commit; it kept the reader's grant
+   until then, or for good if the session died. `conversations`, `people` and
+   `apps` are rebuilt every build and now replace their rows in one transaction
+   (strategy `timeline_replace`): nothing is renamed, and their index names stay
+   the same for the routes. A rebuild from scratch still renames every table:
+   `timeline_exact_acl` strips every grant from the backup in the transaction that
+   makes it, so it is never readable. Staging tables (#51) are created and dropped
+   inside the model's transaction and never visible. A test reads, as the reader,
+   every relation of the schema while a build and a rebuild from scratch run.
+5. *Pages changed.* `GET /timeline` opened a day with only messages, showing no
+   frame and no visit. The days answer keeps to the server's sources (`SOURCES`)
+   until the message pages add `messages`: home page, calendar and days API are as
+   before.
+6. *A new timezone* is read again in full (above).
+7. *Atomic per model, not per build.* A failed build keeps what the models before
+   the failure wrote: `messages`, `people` and `conversations` can be ahead of
+   `events` and `days`, and deleted rows can stay, until the next build. No query
+   of the server goes wrong on it; the pages must read `messages` with `not
+   deleted` and must not assume a message has its event or its day count yet. One
+   transaction per build was not attempted (dbt commits per model).
+
+Recorded, not changed:
+- The reader can read the bookkeeping columns of `messages` (`_input`, `_stamp`,
+  `_cursor`, `_chats_seen`, `_reactions_from`, `previous_sent_at`). Column grants
+  would need the dbt `grants` config, the exact ACL and every reader query to
+  change together, not one line; they hold no message content.
+- For the routes slice: `conversations` has no last-message preview or sender,
+  lists conversations with no message, and has a null `last_message_at` when every
+  message is undated; undated messages sort last in the `(conversation_id,
+  sent_at, guid)` index, so keyset paging must handle null times; `media_withheld`
+  knows only screenshots, so `/media/<connection>/attachments/<key>` is served
+  with no timeline check, and `media_url` in the pages names `screenshots`; "me"
+  has no row in `people`.
+- For the thumbnails slice: the kind is `attachments` and the key is exactly the
+  collector's `media_key` (the attachment's guid and its lower-case extension).
+
 Consequences:
 - The reader role can read message text. It is the server's own role (040).
 - Links to a conversation last as long as `timeline_secret`; dropping it, or the
   schema, breaks them.
-- `conversations` and `people` are rebuilt in full every build. They read the
+- `conversations`, `people` and `apps` are rebuilt in full every build. They read the
   chats and contacts whole and scan `messages`' indexes, which grow with the
   history (measured above).
 

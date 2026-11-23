@@ -1099,7 +1099,9 @@ load, say) is still read. A load that never completes is never read.
   reaches its message at the next build; so does a chat whose conversation
   changed, for all its messages. Chats, their handles and contacts are small and
   read whole each build: a chat sent again unchanged, or a new title or name,
-  reads no message. A new timezone changes every message's `day` in place.
+  reads no message. A new timezone reads every message again (their local days
+  change). A load that changes no message still counts as read: `messages` keeps
+  the cursor it read in its table's comment.
 - The result is what a first build over the same rows gives.
 - Tables built before the media columns, or whose upgrade did not finish, read
   every frame and session again once: the rule is that a row still has no
@@ -1124,8 +1126,14 @@ person whatever the service or the macOS version, and the rules are the macros
 the messages package uses too (`dbt/macros/messages.sql`), so the two packages
 agree. Routes name a conversation only by `conversation_id`: 32 hex characters, a
 keyed hash of the conversation key with a random key of the analysis
-(`timeline_secret`, which only the owner can read). A direct conversation's key is
-a phone number or an address; it is in no table the reader can read.
+(`timeline_secret`). What the id protects is everything that leaves the database:
+an address, a log line or the browser's history holding it cannot be turned back
+into a phone number or an address without the database. The key and the chats'
+lookup (`timeline_message_chats`) are the owner's alone, so the id cannot be
+computed elsewhere. It hides nothing from the reader role: whoever holds its
+password reads everything these tables hold, which maps a number to its
+conversation in one query (`participants`, `people`, `sender_handle`, a
+direct conversation's `display_name`), as the pages must to show people by number.
 - The id stays the same across builds and across a rebuild from scratch, and
   when the input is replaced or unlinked. It changes when `timeline_secret` or
   the schema is dropped, for a new analysis, and for one conversation whose key
@@ -1148,7 +1156,16 @@ a phone number or an address; it is in no table the reader can read.
   `service`, `attachments` and `reactions` (counts), `edited`, `unsent`, `audio`
   and `reply_to`. Its `search` is empty: message text is searched in `messages`.
 - A row with `deleted` true is a guid sent again as something other than a
-  message. It has no conversation, time or text, and is gone after the build.
+  message. It has no conversation, time or text, and `days`' post-hook removes it
+  at the end of a build that reaches `days`. Read `messages` with `not deleted`.
+- Builds are atomic per model, not per build: after a failed build the models
+  that ran before the failure keep their changes, so `messages`, `people` and
+  `conversations` can be ahead of `events` and `days` until the next build, and
+  rows with `deleted` true can stay. Nothing a reader does breaks on that; a page
+  must not assume a message's event or day count exists yet.
+- Search covers the first 100,000 characters of a message's or a frame's text
+  (the index bound, `search_vector` in `src/core/timeline.py`); words after them
+  are not found. The text is kept whole.
 `timeline_message_chats` (one row per Apple chat with its conversation) is the
 models' own and not meant to be read.
 
@@ -1188,7 +1205,11 @@ readable by the owner and that role only, with `SELECT`, and grants `USAGE` on
 their schema, so nothing has to be granted by hand. The models' own tables
 (`timeline_screen`, `timeline_browser`, `timeline_message_chats`,
 `timeline_secret`) are left readable by the owner alone. `messages` holds message
-text, so the role can read it.
+text, so the role can read it. `conversations`, `people` and `apps`, rebuilt every
+build, replace their rows in one transaction instead of being renamed, so their
+indexes keep their names; a rebuild from scratch leaves the old table, renamed
+`…__dbt_backup` until dbt drops it, without any grant. The reader never reads a
+relation but the outputs.
 - The role must exist before the build that names it, or the build fails.
 - With `reader_role` empty, nothing is granted, and the next build takes back the
   `SELECT` an earlier build gave. It leaves the schema's `USAGE`.

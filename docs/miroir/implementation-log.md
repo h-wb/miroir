@@ -2865,3 +2865,34 @@ At 20,000: first build 7 to 9 s, one message 2.7 to 4.3 s, on both versions.
 
 Not done here: routes and pages, attachment thumbnails, `subject` and group
 events in the tables, `messages` in the server's list of sources.
+
+## 2026-11-23 — Review of pull request #52
+
+Each finding reproduced from the review's scripts, then fixed with a test that
+fails without the fix (decision 040, amendment *Conversations data*, review):
+
+- F1: a message or frame of about 1 MB of distinct words failed every build at
+  the GIN index ("string is too long for tsvector"), and the models after it,
+  screen and browser included, were skipped. Both indexes and the server's search
+  use `to_tsvector('simple', left(text, 100000))`; an existing `screen_frames`
+  index is replaced once. Tests: a 1.36 MB message and frame build, are stored
+  whole, are found by their first word and not by their last, through the index;
+  an old index is replaced.
+- F3: a reaction sent again aimed elsewhere, or as a message, stayed on its old
+  target. `_reactions_from` lists the rows aimed at each message. Test: two steps
+  added to the sequence, which runs with no margin.
+- F8: loads that wrote no message were read again by every build. The cursor is
+  kept in `messages`' comment. Test: contact-only, unchanged-chat, empty and
+  unknown-media loads leave no completed load after the cursor.
+- F7: the timezone update cost as much as a full read and doubled the table; it
+  is a full read now.
+- F5: the reader could read `…__dbt_backup` tables. `conversations`, `people` and
+  `apps` replace their rows (`timeline_replace`); backups of a rebuild from
+  scratch lose every grant in the transaction that makes them. Test: the reader
+  reads every relation while builds run, and a backup left behind.
+- F6: the home page and the days answer changed. The days query keeps to
+  `SOURCES`. Test: linking messages leaves every route and page of screen and
+  browser as it was.
+- F2, F4 and the notes: the README and the decision now say what the id protects
+  and what the reader can read, that builds are atomic per model, and what the
+  routes and thumbnails slices need to know.
