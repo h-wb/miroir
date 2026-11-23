@@ -2754,10 +2754,11 @@ screen. A guid sent again as something other than a message is kept as a deleted
 row until `events` and `days` have read it; `days`' last post-hook removes it. A
 message that moves keeps its old times in `previous_sent_at` until `days` has read
 it. After a new timezone every message is read again *(revised after review)*:
-an update in place of `day` cost as much (29 to 33 s against 36 s on the
-review's history: no update is HOT and the text index is rewritten) and grew
-the table from 129 to 359 MB. The rows' indexed `timezone` column tells the
-build. A load that writes no message still counts as read *(revised after
+one code path instead of two, at the same cost. On the review's history, two
+changes took 29.4 and 33.0 s by an update of `day` in place and 28.8 and 34.3 s
+by a full read, and left the table at 359 and 385 MB: no update is HOT, and
+either way every row and its text index entry are written again. The rows'
+indexed `timezone` column tells the build. A load that writes no message still counts as read *(revised after
 review)*: `messages` keeps the cursor it read in its table's comment
 (`keep_cursor`), carried through the upsert by one more staged row that is never
 inserted. Without it, contact-only loads, unchanged chats, empty batches and
@@ -2824,13 +2825,27 @@ each with a test that fails without the fix:
    frame. An existing `screen_frames` gets the bounded index once.
 2. *A reaction sent again elsewhere stayed on its old target.* Only its new
    target was recomputed. Each message now lists every reaction and removal row
-   aimed at it (`_reactions_from`, GIN-indexed), and a row in a new load
-   recomputes the messages listing it. The sequence test runs with no margin and
-   includes a reaction aimed elsewhere and one sent again as a message.
+   aimed at it (`_reactions_from`), and `messages`' post-hook keeps the same
+   turned around in `timeline_message_reaction_targets` (owner only), indexed by
+   the reaction's guid, in its own transaction. A row in a new load recomputes
+   the messages the map gives for its guid, one btree probe per row, whatever the
+   row is now, so a reaction sent again as a plain message still finds its old
+   target. The sequence test runs with no margin and includes a reaction aimed
+   elsewhere and one sent again as a message. *Second review:* the first version
+   looked the guids up in a GIN index on `_reactions_from` with one array of
+   every guid of the new loads; inside the margin of an import of 180,000
+   messages that took 43 s and doubled the build (80.1 s). With the map that
+   build takes 31.5 s (PostgreSQL 18.1, the review's history; 40.7 s before
+   the fix of finding 2), and later builds about 3 s as before.
+8. *An empty guid* (second review) passed batch validation and was stored, then
+   deleted by the next build's staged cursor row, keyed `''`. The batch now
+   refuses an empty value in every guid key (messages, chats, attachments and the
+   three link tables), and the cursor row's guid is null, which matches no key.
 3. *The cursor did not move* after loads that wrote no message (above).
 4. *Backups were readable.* dbt renames a table it rebuilds whole to
    `…__dbt_backup` and drops it after the commit; it kept the reader's grant
-   until then, or for good if the session died. `conversations`, `people` and
+   until then, and if the session died after the commit, until the next build
+   dropped it. `conversations`, `people` and
    `apps` are rebuilt every build and now replace their rows in one transaction
    (strategy `timeline_replace`): nothing is renamed, and their index names stay
    the same for the routes. A rebuild from scratch still renames every table:
@@ -2864,6 +2879,15 @@ Recorded, not changed:
   has no row in `people`.
 - For the thumbnails slice: the kind is `attachments` and the key is exactly the
   collector's `media_key` (the attachment's guid and its lower-case extension).
+- `apps`, `conversations` and `people` are incremental now (`timeline_replace`)
+  with dbt's default `on_schema_change` (ignore): a column added to one of them
+  later is not added to its existing table, and its rows are written without it,
+  until a rebuild from scratch. `timeline_add_media_columns` covers only the media
+  columns of the screen models.
+- The first build after this is deployed replaces `screen_frames`' search index
+  (`timeline_search_index`) inside its transaction: searches of the screen wait
+  for it, at most 4.1 s over 18,000 frames (60 MB) in the review, longer on a
+  larger history.
 
 Consequences:
 - The reader role can read message text. It is the server's own role (040).

@@ -11,7 +11,6 @@
         {'columns': ['_cursor']},
         {'columns': ['timezone']},
         {'columns': ['deleted']},
-        {'columns': ['_reactions_from'], 'type': 'gin'},
         {'columns': ['conversation_id', 'sent_at', 'guid']},
         {'columns': ['conversation_id', 'sender_handle']},
         {'columns': ['sender_handle', 'sender_written']},
@@ -27,11 +26,13 @@
             'media_objects': ['_dlt_load_id', 'key'],
             '_dlt_loads': ['load_id', 'inserted_at']}) }}", 'transaction': false},
         "{{ timeline_messages_plan() }}",
+        "{{ timeline_message_reactions_reset() }}",
         "{{ timeline_remove_foreign(['messages']) }}",
         "{{ timeline_search_index('text') }}",
     ],
     post_hook=[
         "{{ timeline_keep_cursor(this, this) if not is_incremental() else '' }}",
+        "{{ timeline_message_reactions_map() }}",
         "{{ timeline_exact_acl(true) }}",
     ],
 ) }}
@@ -53,8 +54,9 @@
 --     each with what the worker recorded of its file in media_objects; null
 --     there means no record, which is unknown.
 --   reactions: the ones that stand (messages_standing_reactions), oldest first.
---     _reactions_from lists every reaction and removal row aimed at it, so a
---     row sent again aimed elsewhere, or as something else, recomputes it.
+--     _reactions_from lists every reaction and removal row aimed at it; the
+--     post-hook keeps timeline_message_reaction_targets, the same turned around,
+--     so a row sent again aimed elsewhere, or as something else, recomputes it.
 --   deleted: a guid this table held as a message whose row is now something
 --     else. It has no conversation, time or text, so no conversation or search
 --     query meets it; events drops it and days' post-hook removes it.
@@ -162,9 +164,9 @@ touched as (
     ) al
     union
     -- A reaction or removal sent again, aimed elsewhere or as something else:
-    -- the message it was aimed at before.
-    select o.guid from {{ this }} o
-    where o._reactions_from && array(
+    -- the message it was aimed at before (one probe per row of the new loads).
+    select t.message_guid from {{ ref('timeline_message_reaction_targets') }} t
+    where t.reaction_guid in (
         select guid from raw where {{ timeline_in_loads('_dlt_load_id', cursor.loads) }}
     )
 ),
@@ -371,9 +373,9 @@ where p.kind <> 'message'
 {% if is_incremental() %}
 union all
 -- The cursor this build read, kept even when it writes no message
--- (keep_cursor); never inserted.
+-- (keep_cursor); never inserted, and its null guid matches no row's.
 select
-    '', null::text, null::timestamptz, null::date, null::text, false, null::text,
+    null::text, null::text, null::timestamptz, null::date, null::text, false, null::text,
     null::text, null::text, null::text, false, false, false, null::timestamptz,
     false, null::text, '[]'::jsonb, '[]'::jsonb, true, null::text,
     null::timestamptz[], null::text,

@@ -428,8 +428,8 @@
 
 {# Whether messages holds rows of another timezone than the analysis's: a
    new timezone is read as everything again (their local days change). An
-   update in place cost as much (every row rewritten, its text index too) and
-   left the table twice its size. #}
+   update in place cost the same and left the table as large; one code path
+   instead of two. #}
 {% macro timeline_messages_retimed() -%}
     {%- if not (execute and is_incremental()) -%}{{ return(false) }}{%- endif -%}
     {%- set tz = timeline_literal(var('timezone')) -%}
@@ -485,5 +485,26 @@
         end if;
     end
     $index$
+    {%- endif -%}
+{%- endmacro %}
+
+{# Post-hook of messages: the reactions map (timeline_message_reaction_targets)
+   for the messages this build wrote (the newest stamp; a build that wrote none
+   writes the previous build's again, unchanged). A stale entry only makes a
+   message be recomputed for nothing; a missing one would leave a reaction on a
+   message it left. #}
+{% macro timeline_message_reactions_map() -%}
+    {%- set map = ref('timeline_message_reaction_targets') -%}
+    {%- set written = 'select guid, _reactions_from from ' ~ this ~ ' where _stamp = (select max(_stamp) from ' ~ this ~ ')' -%}
+    delete from {{ map }} m using ({{ written }}) w where m.message_guid = w.guid;
+    insert into {{ map }} (reaction_guid, message_guid)
+    select distinct r.guid, w.guid from ({{ written }}) w cross join unnest(w._reactions_from) r (guid)
+{%- endmacro %}
+
+{# Pre-hook of messages: a replaced or unlinked input empties the map, as the
+   messages of that input are removed. #}
+{% macro timeline_message_reactions_reset() -%}
+    {%- if timeline_replaced(['messages']) | length > 0 -%}
+    delete from {{ ref('timeline_message_reaction_targets') }}
     {%- endif -%}
 {%- endmacro %}

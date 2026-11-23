@@ -2884,8 +2884,8 @@ fails without the fix (decision 040, amendment *Conversations data*, review):
 - F8: loads that wrote no message were read again by every build. The cursor is
   kept in `messages`' comment. Test: contact-only, unchanged-chat, empty and
   unknown-media loads leave no completed load after the cursor.
-- F7: the timezone update cost as much as a full read and doubled the table; it
-  is a full read now.
+- F7: the timezone update cost the same as a full read and left the table as
+  large; a new timezone is a full read now, one code path instead of two.
 - F5: the reader could read `…__dbt_backup` tables. `conversations`, `people` and
   `apps` replace their rows (`timeline_replace`); backups of a rebuild from
   scratch lose every grant in the transaction that makes them. Test: the reader
@@ -2896,3 +2896,18 @@ fails without the fix (decision 040, amendment *Conversations data*, review):
 - F2, F4 and the notes: the README and the decision now say what the id protects
   and what the reader can read, that builds are atomic per model, and what the
   routes and thumbnails slices need to know.
+
+## 2026-11-23 — Second review of pull request #52
+
+- S1: the lookup of reactions sent again elsewhere used a GIN index with an
+  array of every guid of the new loads; inside the margin of a 180,000-message
+  import the build took 80.1 s (PostgreSQL 18.1). `messages`' post-hook now keeps
+  `timeline_message_reaction_targets` (reaction guid to message, btree) in its
+  own transaction, and the lookup probes it: 31.5 s instead of 80.1 s. The review's four margin-0
+  sequences equal a rebuild at every step.
+- S2, N1: the timezone and backup sentences say what is true.
+- N2: a batch with an empty guid key is refused (`formats.py`, tested for each
+  of the eight guid keys); the staged cursor row's guid is null.
+- Recorded: `on_schema_change` of the three replace models; the first build
+  after deploy replaces the screen search index (about 4 s of waiting searches
+  in the review).

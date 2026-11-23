@@ -134,6 +134,19 @@ class AppleMessagesBatchTests(unittest.TestCase):
             ),
             "contact extra key": batch(record("contact") | {"phone": "private"}),
             "contact empty handle": batch(record("contact", handle="")),
+            **{
+                f"empty {kind} {key}": batch(record(kind, **{key: ""}))
+                for kind, key in (
+                    ("message", "guid"),
+                    ("chat", "guid"),
+                    ("attachment", "guid"),
+                    ("chat_message", "chat_guid"),
+                    ("chat_message", "message_guid"),
+                    ("message_attachment", "message_guid"),
+                    ("message_attachment", "attachment_guid"),
+                    ("chat_handle", "chat_guid"),
+                )
+            },
             "contact null handle": batch(record("contact", handle=None)),
             "contact wrong type": batch(record("contact", first_name=1)),
             "NUL in text": batch(message | {"text": "a\x00b"}),
