@@ -320,6 +320,17 @@
     {{- return(found.rows | length > 0) -}}
 {%- endmacro %}
 
+{# Post-hook: rows a build cannot rewrite stop counting as pending. A full read
+   rewrites every row that has data behind it; one that has none (an orphan: its
+   raw rows or its load gone) would keep its null and make every later build read
+   everything again. Such rows get the value the models give: `value`, where
+   `where` holds. The partial index makes this free when nothing is pending. #}
+{% macro timeline_media_settle(value, where='true', screen_only=false) -%}
+    {%- set where = "source = 'screen'" if screen_only else where -%}
+    update {{ this }} set media_withheld = {{ value }}
+    where media_withheld is null and ({{ where }})
+{%- endmacro %}
+
 {# Pre-hook, after timeline_add_media_columns: the index for that check. Empty
    once every row is read again; created once, on an existing table. #}
 {% macro timeline_media_pending_index(key, where='true', screen_only=false) -%}

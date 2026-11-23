@@ -47,6 +47,7 @@ LINKS = "timeline_links"  # a miroir of its own: other raw datasets
 MOVES = "timeline_moves"
 MEDIA = "timeline_media"
 ATOMIC = "timeline_atomic"
+ORPHANS = "timeline_orphans"
 BUFFERS = "timeline_buffers"
 
 
@@ -1207,4 +1208,113 @@ class TimelineModelTests(TimelineBuildFixture):
                 f"where schemaname = '{schema}' and tablename like '%dbt_tmp%'"
             ),
             [],
+        )
+
+    def orphan(self, schema, table, key_column, key, values):
+        """A copy of one row under a new key with no data behind it, as left by
+        raw rows or a load that are gone, and pending (no media_withheld)."""
+        columns = [
+            row[0]
+            for row in self.query(
+                "select column_name from information_schema.columns where "
+                f"table_schema = '{schema}' and table_name = '{table}' "
+                "order by ordinal_position"
+            )
+        ]
+        changed = {key_column: f"'{key}'", "media_withheld": "null", **values}
+        chosen = ", ".join(changed.get(c, f'"{c}"') for c in columns)
+        self.query(
+            f"insert into {schema}.{table} select {chosen} from {schema}.{table} "
+            f"where {values.get('_where', 'true')} limit 1"
+        )
+
+    def test_rows_with_nothing_behind_them_stop_being_pending(self):
+        both = {"screen": "screen", "browser": "browser"}
+        miroir = configuration([timeline("timeline", both, READER)], ORPHANS)
+        schema = self.schema(miroir, "timeline")
+        plan = analysis_plan(miroir.analyses[0])
+        self.send(
+            miroir, "screen", screen_batch(*screen(0, SAFARI), *screen(10, SAFARI))
+        )
+        self.media_record(miroir, 0)
+        self.build(plan)
+        # One orphan per table that carries the media columns: a withheld frame,
+        # a session and a screen event, each pending.
+        self.orphan(
+            schema,
+            "screen_frames",
+            "image_path",
+            "2026/11/20/orphan.jpeg",
+            {"withheld": "'excluded_app'", "text": "null"},
+        )
+        self.orphan(schema, "timeline_screen", "event_id", "screen:orphan", {})
+        self.orphan(
+            schema,
+            "events",
+            "event_id",
+            "screen:orphan-event",
+            {"_where": "source = 'screen'"},
+        )
+
+        def pending():
+            return [
+                self.query(
+                    f"select count(*) from {schema}.{table} "
+                    f"where media_withheld is null and {where}"
+                )[0][0]
+                for table, where in (
+                    ("screen_frames", "true"),
+                    ("timeline_screen", "not deleted"),
+                    ("events", "source = 'screen'"),
+                )
+            ]
+
+        def stamps():
+            return self.query(
+                f"select image_path, _stamp from {schema}.screen_frames order by 1"
+            )
+
+        self.assertEqual(pending(), [1, 1, 1])
+        before = stamps()
+        # The first build reads everything (a frame is pending) and settles what
+        # it cannot rewrite.
+        self.build(plan)
+        self.assertEqual(pending(), [0, 0, 0])
+        first = stamps()
+        self.assertNotEqual(
+            [s for k, s in first if "orphan" not in k],
+            [s for k, s in before if "orphan" not in k],
+        )
+        self.assertEqual(
+            self.query(
+                f"select media_withheld, media_status from {schema}.screen_frames "
+                "where image_path = '2026/11/20/orphan.jpeg'"
+            ),
+            [(True, None)],
+        )
+        self.assertEqual(
+            self.query(
+                f"select media_withheld from {schema}.events "
+                "where event_id = 'screen:orphan-event'"
+            ),
+            [(False,)],
+        )
+        # The second is an ordinary one: nothing new, so no frame is read again.
+        self.build(plan)
+        self.assertEqual(stamps(), first)
+        self.assertEqual(pending(), [0, 0, 0])
+        # The rows with data are what a first build gives.
+        fresh = configuration(
+            [timeline("timeline", both, READER), timeline("fresh", both)], ORPHANS
+        )
+        self.build(analysis_plan(fresh.analyses[1]))
+        fresh_schema = self.schema(fresh, "fresh")
+        with_data = (
+            "select image_path, media_status, thumbnail_w360, thumbnail_w1280, "
+            "media_withheld, bundle_id, text from {}.screen_frames "
+            "where image_path not like '%orphan%' order by 1"
+        )
+        self.assertEqual(
+            self.query(with_data.format(schema)),
+            self.query(with_data.format(fresh_schema)),
         )

@@ -1092,7 +1092,9 @@ load, say) is still read. A load that never completes is never read.
   every frame and session again once: the rule is that a row still has no
   `media_withheld` (the current models always write one for frames, sessions
   and screen events), not that a column is missing. So an upgrade whose first
-  build failed is done by the next one.
+  build failed is done by the next one. A row with nothing behind it (its raw
+  frame or load gone) is given its value at the end of that build and keeps an
+  unknown media state, so it does not make every later build read everything.
 - Each model builds in one transaction: a build that fails leaves its tables as
   they were. New rows are staged in an unlogged table of the timeline's schema,
   not in a temporary table, so large reads do not depend on `temp_buffers`

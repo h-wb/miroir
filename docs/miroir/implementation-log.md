@@ -2801,3 +2801,11 @@ frames of about 3 KB with the smallest `temp_buffers` (the old code fails this
 on 18.1). "Rebuild from scratch" with the code before the fix, on 18.1 with the
 smallest `temp_buffers`, from the installation's state: every frame filled.
 The timeline's model and API tests ran on PostgreSQL 17.11 and 18.1.
+
+Review of #51: a row with nothing behind it (raw frame or load gone) kept its
+null `media_withheld` and made every later build read everything. Each of the
+three models now settles such rows at the end of its build
+(`timeline_media_settle`: `withheld is not null` on frames, false on sessions and
+screen events); a test makes one orphan per table and builds twice, the second
+rewriting no frame. The amendment records what stays unexplained about the
+failure at 8 MB of `temp_buffers`, with the installation's settings.
