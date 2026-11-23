@@ -16,7 +16,10 @@
         "{{ timeline_add_media_columns() }}",
         "{{ timeline_media_pending_index('event_id', 'not deleted') }}",
     ],
-    post_hook="{{ timeline_exact_acl(false) }}",
+    post_hook=[
+        "{{ timeline_media_settle('false', 'not deleted') }}",
+        "{{ timeline_exact_acl(false) }}",
+    ],
 ) }}
 -- Screen events: one row per app session, a run of frames of the same app with
 -- no pause longer than five minutes between them. Frames without an app neither

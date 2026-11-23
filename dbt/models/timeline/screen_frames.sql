@@ -18,7 +18,11 @@
         "{{ timeline_add_media_columns() }}",
         "{{ timeline_media_pending_index('image_path') }}",
     ],
-    post_hook=["{{ timeline_exact_acl(true) }}", "{{ timeline_schema_usage() }}"],
+    post_hook=[
+        "{{ timeline_media_settle('withheld is not null') }}",
+        "{{ timeline_exact_acl(true) }}",
+        "{{ timeline_schema_usage() }}",
+    ],
 ) }}
 -- This model alone grants the reader USAGE on the schema: two GRANTs on one
 -- schema at once fail.

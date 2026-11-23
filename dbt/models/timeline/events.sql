@@ -17,7 +17,10 @@
         "{{ timeline_add_media_columns() }}",
         "{{ timeline_media_pending_index('event_id', screen_only=true) }}",
     ],
-    post_hook="{{ timeline_exact_acl(true) }}",
+    post_hook=[
+        "{{ timeline_media_settle('false', screen_only=true) }}",
+        "{{ timeline_exact_acl(true) }}",
+    ],
 ) }}
 -- Every source's events with the same columns; each source reaches it through one
 -- model, timeline_<source>. An incremental build reads the rows each of those

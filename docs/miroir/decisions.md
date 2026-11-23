@@ -2596,6 +2596,35 @@ only; reproduced on synthetic rows. Three causes, each fixed:
   covers every path at once. A full read is slower than a rebuild (about a
   minute for 18,000 frames of 3 KB here) and happens once.
 
+*Rows with nothing behind them* (review of #51). A row whose raw frame or load
+is gone is never rewritten, so its null `media_withheld` would make every later
+build read everything again, silently. Each of the three models now ends its
+build by giving such rows the value the models give: on `screen_frames`,
+`media_withheld = (withheld is not null)` from the row's own `withheld`; on the
+sessions not deleted and the screen events, `false`. The partial index makes
+this free when nothing is pending. Rows that have data were all rewritten by
+the full read, so only orphans are touched, and for every row with data the
+incremental tables still equal a first build. An orphan keeps everything else
+it had: its media status stays null ("not known yet"), and it stays until a
+rebuild from scratch, which drops it, as before the media columns. That is
+acceptable: its file cannot be shown from the timeline's record anyway, and a
+withheld orphan still answers 404 on the media route, which reads `withheld`.
+A session with nothing behind it is marked deleted by the full recompute
+itself. A test makes one orphan in each table and builds twice: the first
+settles them, the second rewrites no frame.
+
+*What stays unexplained.* Neither this work nor the review reproduced the
+failure with `temp_buffers` at 8 MB. On the installation: PostgreSQL 18.1,
+`temp_buffers` 8 MB, `shared_buffers` 128 MB, `io_method` worker, `io_workers`
+3, `io_combine_limit` 16, `effective_io_concurrency` 200,
+`maintenance_io_concurrency` 16, and about 18,000 frames holding 38 MB of text
+(median 2.2 KB, 99th percentile 5.3 KB, largest 7 KB). Here, 8,000 frames of
+about 3 KB failed at 800 kB and passed at 8 MB, also with both I/O concurrency
+settings at 200 and with frames of 20 KB; the review saw failures from 800 kB to
+2 MB, growing with the row count, and none at 8 MB up to 708 MB of text. The
+fix does not depend on the cause: no timeline model uses a temporary table any
+more.
+
 A rebuild from scratch (`--full-refresh`) never used the temporary table: dbt
 builds a real table and swaps it in. With the code before this fix it fills
 every frame on 18.1 with the smallest `temp_buffers` (checked on synthetic rows
