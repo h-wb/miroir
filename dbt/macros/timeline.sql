@@ -57,7 +57,7 @@
    carry it as `_input`; rows of another identity belong to an input no longer
    linked, or replaced, and are removed before the build. #}
 {% macro timeline_input(role) -%}
-    {%- set sources = {'screen': 'screenmemory', 'browser': 'browser_history'} -%}
+    {%- set sources = {'screen': 'screenmemory', 'browser': 'browser_history', 'messages': 'apple_messages'} -%}
     {%- set connection = var('miroir_connections', {}).get(role) -%}
     {%- if not connection -%}{{ return('') }}{%- endif -%}
     {{- return(connection ~ '@' ~ var('miroir_sources', {}).get(sources[role], '')) -}}
@@ -174,7 +174,9 @@
    created once, when missing, and committed at once, so the lock that holds
    writes to that raw table lasts only while the index is built. An invalid one
    (an interrupted build) is rebuilt. A table the build's role does not own is
-   left alone: reads stay correct, only slower. #}
+   left alone: reads stay correct, only slower. An entry is a column name, or
+   (name, column, expression) for an index on an expression of that column; an
+   entry whose column the table lacks is skipped. #}
 {% macro timeline_raw_indexes(source_name, indexes) -%}
     {%- set statements = [] -%}
     {%- if execute and source_name not in var('miroir_unlinked_sources', []) -%}
@@ -186,14 +188,22 @@
                 {%- if not owned -%}
                     {%- do log('Not indexing ' ~ relation ~ ': owned by another role', info=true) -%}
                 {%- endif -%}
-                {%- for column in columns if owned -%}
-                    {%- set name = 'miroir_' ~ raw.identifier ~ '_' ~ column.strip('_') -%}
+                {%- set present = adapter.get_columns_in_relation(relation) | map(attribute='name') | map('lower') | list if owned else [] -%}
+                {%- for entry in columns if owned -%}
+                    {%- if entry is string -%}
+                        {%- set suffix, column, expression = entry.strip('_'), entry, adapter.quote(entry) -%}
+                    {%- else -%}
+                        {%- set suffix, column, expression = entry[0], entry[1], '(' ~ entry[2] ~ ')' -%}
+                    {%- endif -%}
+                    {%- set name = 'miroir_' ~ raw.identifier ~ '_' ~ suffix -%}
                     {%- set qualified = adapter.quote(raw.schema) ~ '.' ~ adapter.quote(name) -%}
-                    {%- set state = run_query("select coalesce((select indisvalid::text from pg_index where indexrelid = to_regclass('" ~ qualified ~ "')), 'missing')").columns[0].values()[0] -%}
-                    {%- if state == 'missing' -%}
-                        {%- do statements.append('create index if not exists ' ~ adapter.quote(name) ~ ' on ' ~ relation ~ ' (' ~ adapter.quote(column) ~ ')') -%}
-                    {%- elif state == 'false' -%}
-                        {%- do statements.append('reindex index ' ~ qualified) -%}
+                    {%- if column in present -%}
+                        {%- set state = run_query("select coalesce((select indisvalid::text from pg_index where indexrelid = to_regclass('" ~ qualified ~ "')), 'missing')").columns[0].values()[0] -%}
+                        {%- if state == 'missing' -%}
+                            {%- do statements.append('create index if not exists ' ~ adapter.quote(name) ~ ' on ' ~ relation ~ ' (' ~ expression ~ ')') -%}
+                        {%- elif state == 'false' -%}
+                            {%- do statements.append('reindex index ' ~ qualified) -%}
+                        {%- endif -%}
                     {%- endif -%}
                 {%- endfor -%}
             {%- endif -%}
@@ -304,5 +314,41 @@
     {%- for name, type in timeline_media_columns().items() %}
         add column if not exists {{ adapter.quote(name) }} {{ type }}{% if not loop.last %},{% endif %}
     {%- endfor %}
+    {%- endif -%}
+{%- endmacro %}
+
+{# A conversation's opaque id: the first 128 bits of SHA-256 over the package's
+   own random key (timeline_secret) and the conversation key, in hex. Stable for
+   as long as the key and the conversation key are; never derivable from a
+   phone number without the key, which only the owner may read. #}
+{% macro timeline_conversation_id(key) -%}
+    encode(substr(sha256((select s.secret from {{ ref('timeline_secret') }} s limit 1)
+        || convert_to('conversation:' || {{ key }}, 'UTF8')), 1, 16), 'hex')
+{%- endmacro %}
+
+{# A time as fixed ISO 8601 text in UTC, for JSON: never the session's zone. #}
+{% macro timeline_utc_text(column) -%}
+    to_char({{ column }} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+{%- endmacro %}
+
+{# As timeline_previous, for a time that can be null (an undated message): a
+   time left for no time, or for another, is kept; no time is never kept. #}
+{% macro timeline_previous_moved(column, old, new, consumed) -%}
+    nullif(
+        (case when t._stamp <= {{ timeline_literal(consumed) }} then '{}'::timestamptz[]
+            else coalesce(t.{{ column }}, '{}'::timestamptz[]) end)
+        || (case when {{ old }} is not null and {{ old }} is distinct from {{ new }}
+            then array[{{ old }}] else '{}'::timestamptz[] end),
+        '{}'::timestamptz[])
+{%- endmacro %}
+
+{# Pre-hook of messages: after a change of the analysis's timezone, give every
+   message the local day of the new one, in place (an index range, nothing when
+   none differ). Reading every message again would cost far more. #}
+{% macro timeline_messages_retime() -%}
+    {%- if is_incremental() -%}
+    {%- set tz = timeline_literal(var('timezone')) -%}
+    update {{ this }} set day = {{ timeline_local_day('sent_at') }}, timezone = {{ tz }}
+    where timezone < {{ tz }} or timezone > {{ tz }}
     {%- endif -%}
 {%- endmacro %}

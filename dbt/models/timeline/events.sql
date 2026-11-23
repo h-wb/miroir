@@ -13,7 +13,7 @@
     ],
     grants=timeline_grants(),
     pre_hook=[
-        "{{ timeline_remove_foreign(['screen', 'browser'], by_source=true) }}",
+        "{{ timeline_remove_foreign(['screen', 'browser', 'messages'], by_source=true) }}",
         "{{ timeline_add_media_columns() }}",
     ],
     post_hook="{{ timeline_exact_acl(true) }}",
@@ -24,8 +24,17 @@
 -- the ones they mark deleted. A source whose input was unlinked or replaced loses
 -- its rows here first and is read again in full. Media columns: what the worker
 -- recorded of the event's file (timeline_media_columns), null when unknown.
+--
+-- A message (source 'messages', from the messages model) is one event at its
+-- time: title is its text, body is null, group_key its conversation_id, media
+-- its first attachment, and payload what the lane draws without a join (who,
+-- counts, flags). Who sent it and in which conversation are not written as
+-- names: those resolve through people and conversations, so a renamed contact
+-- rewrites no event. Its search vector is empty: message text is searched in
+-- messages, and the browser's search through this index must not wade through
+-- every message. An undated message is not on the time axis and has no event.
 {% set sources = [('screen', 'timeline_screen'), ('browser', 'timeline_browser')] %}
-{% set replaced = timeline_replaced(['screen', 'browser'], by_source=true) %}
+{% set replaced = timeline_replaced(['screen', 'browser', 'messages'], by_source=true) %}
 {# A table built before the media columns reads every source's rows once. #}
 {% set upgrade = not timeline_has_media_columns() %}
 {% for source, model in sources %}
@@ -59,5 +68,41 @@ where true
 {% else %}
 where not deleted
 {% endif %}
-{% if not loop.last %}union all{% endif %}
+union all
 {% endfor %}
+select
+    'messages'::text as source,
+    connection,
+    'messages:' || guid as event_id,
+    sent_at as started_at,
+    sent_at as ended_at,
+    'message'::text as kind,
+    text as title,
+    null::text as body,
+    case when attachments->0->>'media_key' is not null then 'attachments' end as media_kind,
+    attachments->0->>'media_key' as media_key,
+    attachments->0->>'media_status' as media_status,
+    (attachments->0->>'thumbnail_w360')::boolean as thumbnail_w360,
+    (attachments->0->>'thumbnail_w1280')::boolean as thumbnail_w1280,
+    null::boolean as media_withheld,
+    conversation_id as group_key,
+    jsonb_build_object(
+        'guid', guid, 'conversation', conversation_id, 'from_me', is_from_me,
+        'sender', sender_handle, 'service', service,
+        'attachments', jsonb_array_length(attachments),
+        'reactions', jsonb_array_length(reactions),
+        'edited', is_edited, 'unsent', is_unsent, 'audio', is_audio,
+        'reply_to', reply_to_guid
+    ) as payload,
+    ''::tsvector as search,
+    _input,
+    _stamp
+    {% if is_incremental() %}, (deleted or sent_at is null) as _deleted{% endif %}
+from {{ ref('messages') }}
+{% if is_incremental() and 'messages' not in replaced and not upgrade %}
+where _stamp > {{ timeline_literal(timeline_resume(this, "source = 'messages'")) }}
+{% elif is_incremental() %}
+where true
+{% else %}
+where not deleted and sent_at is not null
+{% endif %}
