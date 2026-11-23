@@ -2540,6 +2540,99 @@ found one blocking point, widened on purpose, and three more:
   limit (six, defined in the home-ops repository) covers one process at full
   use, not two. Recorded in the README's notes; no limit is changed here.
 
+### 040 amendment — The media upgrade on the warehouse (2026-11-23)
+
+The first build with the media columns failed on the installation's warehouse
+(PostgreSQL 18.1) in `screen_frames`: "no empty local buffer available". The
+table was left with the four columns added and empty, and every later build took
+it as upgraded, so every frame stayed "unknown". Found from counts and the schema
+only; reproduced on synthetic rows. Three causes, each fixed:
+
+- *Building without a transaction.* dbt sends a literal `commit` before a hook
+  that runs outside the model's transaction; `screen_frames` and
+  `timeline_browser` have one (the raw indexes), which also committed as SQL.
+  psycopg2 opens transactions implicitly and does not see a commit sent as SQL,
+  so it opened none again, and dbt sends no BEGIN of its own on PostgreSQL.
+  Everything after the hook ran with each statement committed on its own: the
+  removal of a replaced input's rows, the `alter table`, the staged rows, the
+  upsert, the ACL post-hook. So a failed build kept the columns it had added,
+  and the exact ACL was not, as stated above, applied in the model's
+  transaction. Now the hook creates its indexes one by one, each committed, and
+  then opens the model's transaction itself (`begin`); dbt's final COMMIT, or its
+  ROLLBACK on failure, ends it. Checked in the server's statement log, and by a
+  test in which a build fails at its end (a reader role that does not exist):
+  the table keeps neither the columns nor any change. `timeline_screen`,
+  `events`, `days` and `apps` have no such hook and were in a transaction.
+- *The upgrade decided by columns.* It is now decided by rows
+  (`timeline_media_pending`): a table reads everything again while a media
+  column is missing or a row that the current models always give a
+  `media_withheld` (true or false) has none: every frame, every session not
+  deleted, every screen event (browser events carry no media; their nulls are
+  by design). A partial index on those rows, created by a pre-hook, answers the
+  check at once when none is left. A test puts a table in the installation's
+  state (columns present, all null in `screen_frames`, absent downstream) and
+  one build fills every frame and session. This does not rely on the build
+  being atomic.
+- *Staging in a temporary table.* An incremental dbt build writes its new rows
+  to a temporary table, then analyses it, deletes the rows it replaces and
+  inserts it. Temporary tables use local buffers (`temp_buffers`, 8 MB by
+  default). On PostgreSQL 18 a large staged table fails with "no empty local
+  buffer available" where 17 does not: reproduced on 18.1 with 8,000 frames of
+  about 3 KB and the smallest `temp_buffers` (800 kB), with the same rows and
+  setting passing on 17.11; the installation's 17,805 real frames did it with
+  8 MB. Every build that reads everything on an existing table stages that much:
+  the upgrade, a replaced or relinked input (`cursor.rebuild`), more loads than
+  one statement lists; a large ordinary increment too. The timeline models now
+  stage in an unlogged table of their own schema (`timeline_staging.sql`
+  overrides dbt-postgres's temporary relation for models with the
+  `timeline_upsert` strategy only), which uses shared buffers and spills like
+  any table; it is created in the model's transaction and dropped by the
+  upsert. Raising `temp_buffers` was not an option: it cannot change once a
+  session has touched a temporary table, and threads share connections. Swapping
+  in a table built from scratch, as a rebuild does, was considered for the
+  full reads; it would need every model to render as a first build in those
+  cases (`events` and `days` keep deleted rows and previous positions
+  differently), while staging in a real table changes no model's result and
+  covers every path at once. A full read is slower than a rebuild (about a
+  minute for 18,000 frames of 3 KB here) and happens once.
+
+*Rows with nothing behind them* (review of #51). A row whose raw frame or load
+is gone is never rewritten, so its null `media_withheld` would make every later
+build read everything again, silently. Each of the three models now ends its
+build by giving such rows the value the models give: on `screen_frames`,
+`media_withheld = (withheld is not null)` from the row's own `withheld`; on the
+sessions not deleted and the screen events, `false`. The partial index makes
+this free when nothing is pending. Rows that have data were all rewritten by
+the full read, so only orphans are touched, and for every row with data the
+incremental tables still equal a first build. An orphan keeps everything else
+it had: its media status stays null ("not known yet"), and it stays until a
+rebuild from scratch, which drops it, as before the media columns. That is
+acceptable: its file cannot be shown from the timeline's record anyway, and a
+withheld orphan still answers 404 on the media route, which reads `withheld`.
+A session with nothing behind it is marked deleted by the full recompute
+itself. A test makes one orphan in each table and builds twice: the first
+settles them, the second rewrites no frame.
+
+*What stays unexplained.* Neither this work nor the review reproduced the
+failure with `temp_buffers` at 8 MB. On the installation: PostgreSQL 18.1,
+`temp_buffers` 8 MB, `shared_buffers` 128 MB, `io_method` worker, `io_workers`
+3, `io_combine_limit` 16, `effective_io_concurrency` 200,
+`maintenance_io_concurrency` 16, and about 18,000 frames holding 38 MB of text
+(median 2.2 KB, 99th percentile 5.3 KB, largest 7 KB). Here, 8,000 frames of
+about 3 KB failed at 800 kB and passed at 8 MB, also with both I/O concurrency
+settings at 200 and with frames of 20 KB; the review saw failures from 800 kB to
+2 MB, growing with the row count, and none at 8 MB up to 708 MB of text. The
+fix does not depend on the cause: no timeline model uses a temporary table any
+more.
+
+A rebuild from scratch (`--full-refresh`) never used the temporary table: dbt
+builds a real table and swaps it in. With the code before this fix it fills
+every frame on 18.1 with the smallest `temp_buffers` (checked on synthetic rows
+in the installation's state), so it is the way out on an installation that has
+not taken this fix.
+
+The timeline's model tests run on PostgreSQL 17.11 and 18.1.
+
 ## 041 — A messages analysis: conversations by identifier, no text
 
 Status: accepted, 2026-11-22. Builds on 022, 038 and 040. Revised the same day

@@ -11,8 +11,15 @@
         {'columns': ['_stamp']},
     ],
     grants={'select': []},
-    pre_hook=["{{ timeline_remove_foreign(['screen']) }}", "{{ timeline_add_media_columns() }}"],
-    post_hook="{{ timeline_exact_acl(false) }}",
+    pre_hook=[
+        "{{ timeline_remove_foreign(['screen']) }}",
+        "{{ timeline_add_media_columns() }}",
+        "{{ timeline_media_pending_index('event_id', 'not deleted') }}",
+    ],
+    post_hook=[
+        "{{ timeline_media_settle('false', 'not deleted') }}",
+        "{{ timeline_exact_acl(false) }}",
+    ],
 ) }}
 -- Screen events: one row per app session, a run of frames of the same app with
 -- no pause longer than five minutes between them. Frames without an app neither
@@ -31,14 +38,15 @@
 -- literal ranges, so frames and sessions are read through their time indexes.
 -- A session's media is its first frame's, with what the worker recorded of it;
 -- a frame whose record arrives later is a changed frame of screen_frames. A
--- table built before the media columns recomputes every session once.
+-- table holding sessions built before the media columns recomputes every
+-- session once (timeline_media_pending, by its rows).
 {% set gap_seconds = 300 %}
 {% set upper = timeline_resume(ref('screen_frames')) %}
 {% set replaced = timeline_replaced(['screen']) | length > 0 %}
 {% set incremental = is_incremental() and not replaced %}
 {% set consumed = timeline_consumed([('days', "source = 'screen'")]) %}
 {% set ns = namespace(windows=[('-infinity', 'infinity')]) %}
-{% if incremental and timeline_has_media_columns() %}
+{% if incremental and not timeline_media_pending('not deleted') %}
     {% set lower = timeline_resume(this) %}
     {% set reach_sql %}
         with changed as (

@@ -15,8 +15,12 @@
     pre_hook=[
         "{{ timeline_remove_foreign(['screen', 'browser'], by_source=true) }}",
         "{{ timeline_add_media_columns() }}",
+        "{{ timeline_media_pending_index('event_id', screen_only=true) }}",
     ],
-    post_hook="{{ timeline_exact_acl(true) }}",
+    post_hook=[
+        "{{ timeline_media_settle('false', screen_only=true) }}",
+        "{{ timeline_exact_acl(true) }}",
+    ],
 ) }}
 -- Every source's events with the same columns; each source reaches it through one
 -- model, timeline_<source>. An incremental build reads the rows each of those
@@ -26,8 +30,9 @@
 -- recorded of the event's file (timeline_media_columns), null when unknown.
 {% set sources = [('screen', 'timeline_screen'), ('browser', 'timeline_browser')] %}
 {% set replaced = timeline_replaced(['screen', 'browser'], by_source=true) %}
-{# A table built before the media columns reads every source's rows once. #}
-{% set upgrade = not timeline_has_media_columns() %}
+{# A table holding screen events built before the media columns reads every
+   source's rows once (browser events carry no media: null by design). #}
+{% set upgrade = timeline_media_pending("source = 'screen'") %}
 {% for source, model in sources %}
 select
     source,

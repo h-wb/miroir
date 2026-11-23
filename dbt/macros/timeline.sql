@@ -174,7 +174,17 @@
    created once, when missing, and committed at once, so the lock that holds
    writes to that raw table lasts only while the index is built. An invalid one
    (an interrupted build) is rebuilt. A table the build's role does not own is
-   left alone: reads stay correct, only slower. #}
+   left alone: reads stay correct, only slower.
+
+   The hook ends by opening the model's transaction itself. dbt sends a literal
+   `commit` before a hook outside the transaction; psycopg2, which opens
+   transactions implicitly, does not see a commit sent as SQL and opens none
+   again, and dbt sends no BEGIN of its own. Without this, every statement after
+   the hook (the pre-hooks inside the transaction, the staging table, the upsert,
+   the ACL post-hook) was committed on its own, and a failed build kept the
+   changes made before the failure. With it they run in one transaction, which
+   dbt's final COMMIT (or its ROLLBACK on failure) ends. Where one is already
+   open, Postgres only warns. The hook itself renders to nothing. #}
 {% macro timeline_raw_indexes(source_name, indexes) -%}
     {%- set statements = [] -%}
     {%- if execute and source_name not in var('miroir_unlinked_sources', []) -%}
@@ -199,9 +209,13 @@
             {%- endif -%}
         {%- endfor -%}
     {%- endif -%}
-    {#- Each index commits on its own. The checks opened a transaction, which the
-        last commit ends before the model's own begins. -#}
-    {{- statements | join(';\ncommit;\n') ~ ';\ncommit' if statements else 'commit' -}}
+    {%- if execute -%}
+        {%- for sql_text in statements -%}
+            {%- call statement('timeline_raw_index', auto_begin=false) -%}{{ sql_text }}{%- endcall -%}
+            {%- call statement('timeline_raw_index', auto_begin=false) -%}commit{%- endcall -%}
+        {%- endfor -%}
+        {%- call statement('timeline_begin', auto_begin=false) -%}begin{%- endcall -%}
+    {%- endif -%}
 {%- endmacro %}
 
 {# How far every model that reads this one's previous positions has read it:
@@ -275,7 +289,9 @@
     delete from {{ target }} as t using {{ source }} as s
     where {% for key in keys %}t.{{ adapter.quote(key) }} = s.{{ adapter.quote(key) }}{% if not loop.last %} and {% endif %}{% endfor %};
     insert into {{ target }} ({{ columns }})
-    select {{ columns }} from {{ source }}{% if removes %} where not _deleted{% endif %}
+    select {{ columns }} from {{ source }}{% if removes %} where not _deleted{% endif %};
+    {#- The staging table is a table of the schema (timeline_staging.sql). -#}
+    drop table {{ source }}
 {%- endmacro %}
 
 {# What the worker recorded of a row's stored file (media_objects, decision 040):
@@ -287,12 +303,42 @@
     {{- return({'media_status': 'text', 'thumbnail_w360': 'boolean', 'thumbnail_w1280': 'boolean', 'media_withheld': 'boolean'}) -}}
 {%- endmacro %}
 
-{# Whether an incremental table already has the media columns. A table built by
-   code before them lacks them: its rows predate the join and are rebuilt once. #}
-{% macro timeline_has_media_columns() -%}
-    {%- if not (execute and is_incremental()) -%}{{ return(true) }}{%- endif -%}
+{# Whether an incremental table still holds rows built before the media join,
+   which a build must read again in full: a media column is missing, or a row
+   matching `where` has no media_withheld, which the current models always write
+   (true or false) for such rows. It follows the data, not the columns, so an
+   upgrade whose first build failed after the columns were added is done by the
+   next build. A partial index (timeline_media_pending_index) answers it at once
+   when no row is left. #}
+{% macro timeline_media_pending(where='true') -%}
+    {%- if not (execute and is_incremental()) -%}{{ return(false) }}{%- endif -%}
     {%- set names = adapter.get_columns_in_relation(this) | map(attribute='name') | list -%}
-    {{- return(timeline_media_columns().keys() | reject('in', names) | list | length == 0) -}}
+    {%- if timeline_media_columns().keys() | reject('in', names) | list | length > 0 -%}
+        {{- return(true) -}}
+    {%- endif -%}
+    {%- set found = run_query('select 1 from ' ~ this ~ ' where media_withheld is null and (' ~ where ~ ') limit 1') -%}
+    {{- return(found.rows | length > 0) -}}
+{%- endmacro %}
+
+{# Post-hook: rows a build cannot rewrite stop counting as pending. A full read
+   rewrites every row that has data behind it; one that has none (an orphan: its
+   raw rows or its load gone) would keep its null and make every later build read
+   everything again. Such rows get the value the models give: `value`, where
+   `where` holds. The partial index makes this free when nothing is pending. #}
+{% macro timeline_media_settle(value, where='true', screen_only=false) -%}
+    {%- set where = "source = 'screen'" if screen_only else where -%}
+    update {{ this }} set media_withheld = {{ value }}
+    where media_withheld is null and ({{ where }})
+{%- endmacro %}
+
+{# Pre-hook, after timeline_add_media_columns: the index for that check. Empty
+   once every row is read again; created once, on an existing table. #}
+{% macro timeline_media_pending_index(key, where='true', screen_only=false) -%}
+    {%- set where = "source = 'screen'" if screen_only else where -%}
+    {%- if is_incremental() -%}
+    create index if not exists {{ adapter.quote(this.identifier ~ '_media_pending') }}
+        on {{ this }} ({{ adapter.quote(key) }}) where media_withheld is null and ({{ where }})
+    {%- endif -%}
 {%- endmacro %}
 
 {# Pre-hook: add the media columns to a table built before them. Nullable with no
