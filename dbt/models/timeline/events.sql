@@ -15,6 +15,7 @@
     pre_hook=[
         "{{ timeline_remove_foreign(['screen', 'browser', 'messages'], by_source=true) }}",
         "{{ timeline_add_media_columns() }}",
+        "{{ timeline_media_pending_index('event_id', screen_only=true) }}",
     ],
     post_hook="{{ timeline_exact_acl(true) }}",
 ) }}
@@ -35,8 +36,10 @@
 -- every message. An undated message is not on the time axis and has no event.
 {% set sources = [('screen', 'timeline_screen'), ('browser', 'timeline_browser')] %}
 {% set replaced = timeline_replaced(['screen', 'browser', 'messages'], by_source=true) %}
-{# A table built before the media columns reads every source's rows once. #}
-{% set upgrade = not timeline_has_media_columns() %}
+{# A table holding screen events built before the media columns reads every
+   source's rows once (browser and message events carry no media_withheld: null by
+   design). #}
+{% set upgrade = timeline_media_pending("source = 'screen'") %}
 {% for source, model in sources %}
 select
     source,

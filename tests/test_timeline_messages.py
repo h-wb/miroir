@@ -988,6 +988,12 @@ class TimelineMessagesLargeTests(TimelineMessagesFixture):
         them again into tables that exist, as after a replaced input. The timings
         are printed. No margin: each build reads only the loads completed since
         the last, so the incremental timings are an incremental build's."""
+        # With the smallest temp_buffers: PostgreSQL 18 fails with "no empty local
+        # buffer available" where a build stages many rows in a temporary table
+        # (decision 040, the media upgrade). The timeline stages in an unlogged
+        # table of its schema instead.
+        self.query("alter database postgres set temp_buffers = 100")
+        self.addCleanup(self.query, "alter database postgres reset temp_buffers")
         miroir = self.configure([timeline("t", reader_role=READER)])
         schema = self.schema(miroir, "t")
         plan = analysis_plan(miroir.analyses[0])

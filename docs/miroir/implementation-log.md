@@ -2777,6 +2777,31 @@ ruff, format, mypy and the collector's strict mypy clean.
 Validation: 423 tests, one skipped (the benchmark, on request), with ruff,
 format, mypy and the collector's strict mypy clean.
 
+## 2026-11-23 — The media upgrade on the warehouse
+
+The first build with the media columns failed on the warehouse (PostgreSQL 18.1,
+"no empty local buffer available") and left `screen_frames` with empty media
+columns that later builds took as done. Traced from counts and the schema;
+reproduced on synthetic rows with PostgreSQL 18.1 installed by mise beside
+17.11 (decision 040, amendment "The media upgrade on the warehouse").
+
+- `timeline_raw_indexes` creates and commits its indexes one by one, then opens
+  the model's transaction (`begin`): after dbt's literal `commit`, psycopg2 had
+  opened none, so every later statement of the model was committed on its own.
+- `timeline_media_pending` decides the full read from the rows (`media_withheld`
+  null where the models always write it), with a partial index per table.
+- `timeline_staging.sql`: the timeline's incremental models stage their rows in
+  an unlogged table of their schema instead of a temporary table.
+- The image tile for an unknown state says "Image state not known yet".
+
+Validation: model tests for the installation's state (columns present, all
+null), for a build failing at its end (nothing kept, the upgrade done by the
+next build; the test fails without the `begin`), and for full reads of 8,000
+frames of about 3 KB with the smallest `temp_buffers` (the old code fails this
+on 18.1). "Rebuild from scratch" with the code before the fix, on 18.1 with the
+smallest `temp_buffers`, from the installation's state: every frame filled.
+The timeline's model and API tests ran on PostgreSQL 17.11 and 18.1.
+
 ## 2026-11-23 — Timeline phase 2a: the data for conversations
 
 What: the `timeline` package reads Apple Messages as a third optional input,
