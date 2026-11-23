@@ -6,17 +6,21 @@ Every row is invented: the messages package's fixture
 addresses and 555 numbers.
 """
 
+import getpass
 import hashlib
 import json
 import os
 import random
+import threading
 import time
 import unittest
+from contextlib import closing
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import mkdtemp
 
+import psycopg2
 import psycopg2.errors
 
 from src.analyses.catalog import PACKAGES
@@ -930,6 +934,84 @@ class TimelineMessagesTests(TimelineMessagesFixture):
         self.assertEqual(
             self.query(f"select guid, _stamp from {schema}.messages"), stamps
         )
+
+    def test_the_reader_never_reads_a_backup_or_a_staging_table(self):
+        # Default privileges that would hand the reader every new table.
+        self.query(f"alter default privileges grant select on tables to {READER}")
+        self.addCleanup(
+            self.query,
+            f"alter default privileges revoke select on tables from {READER}",
+        )
+        miroir = self.configure([timeline("t", reader_role=READER)])
+        schema = self.schema(miroir, "t")
+        plan = analysis_plan(miroir.analyses[0])
+        self.deliver(miroir, FIXTURE)
+        indexes = (
+            f"select indexname from pg_indexes where schemaname = '{schema}' "
+            "and tablename in ('conversations', 'people', 'apps') order by 1"
+        )
+        named = self.query(indexes)
+        stop, seen = threading.Event(), set()
+
+        def watch():
+            # Reads as the reader, each in a statement of its own, so the
+            # privilege check sees the catalog as it is then.
+            with closing(
+                psycopg2.connect(
+                    host="127.0.0.1",
+                    port=self.port,
+                    user=getpass.getuser(),
+                    dbname="postgres",
+                )
+            ) as db:
+                db.autocommit = True
+                with db.cursor() as cursor:
+                    cursor.execute(f"set role {READER}")
+                    while not stop.is_set():
+                        cursor.execute(
+                            "select c.relname from pg_class c join pg_namespace n "
+                            "on n.oid = c.relnamespace where n.nspname = %s "
+                            "and c.relkind in ('r', 'v', 'm', 'p')",
+                            (schema,),
+                        )
+                        for (name,) in cursor.fetchall():
+                            try:
+                                cursor.execute(f'select from {schema}."{name}" limit 1')
+                                seen.add(name)
+                            except psycopg2.Error:
+                                pass
+
+        watcher = threading.Thread(target=watch, daemon=True)
+        watcher.start()
+        try:
+            self.deliver(miroir, [*message("w1", 2000, DIRECT[0], handle=ALEX)])
+            # Rebuilt every build without a rename: the same indexes.
+            self.assertEqual(self.query(indexes), named)
+            self.build(replace(plan, full_refresh=True))
+        finally:
+            stop.set()
+            watcher.join()
+        self.assertEqual(seen, OUTPUTS)
+        # A backup the build could not drop after its commit (a session killed
+        # there) is left without a grant.
+        self.query(
+            "create or replace function backup_kept() returns event_trigger "
+            "language plpgsql as $f$ begin if current_query() ilike "
+            "'%drop table%dbt_backup%' then raise exception 'kept'; end if; end $f$; "
+            "create event trigger backup_kept on ddl_command_start "
+            "execute function backup_kept()"
+        )
+        self.addCleanup(self.query, "drop event trigger if exists backup_kept")
+        with self.assertRaises(RuntimeError):
+            self.build(replace(plan, full_refresh=True))
+        self.query("drop event trigger backup_kept")
+        kept = self.query(
+            f"select c.relname, has_table_privilege('{READER}', c.oid, 'select') "
+            "from pg_class c join pg_namespace n on n.oid = c.relnamespace "
+            f"where n.nspname = '{schema}' and c.relname like '%dbt_backup'"
+        )
+        self.assertTrue(kept)
+        self.assertEqual({privilege for _, privilege in kept}, {False})
 
     def test_a_build_that_fails_at_its_end_changes_nothing(self):
         # The raw-index hook runs outside the model's transaction and opens it

@@ -1,5 +1,7 @@
 {{ config(
     enabled=var('miroir_namespace', none) is not none,
+    materialized='incremental',
+    incremental_strategy='timeline_replace',
     grants=timeline_grants(),
     indexes=[{'columns': ['handle'], 'unique': True}],
     post_hook="{{ timeline_exact_acl(true) }}",

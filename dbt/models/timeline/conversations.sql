@@ -1,5 +1,7 @@
 {{ config(
     enabled=var('miroir_namespace', none) is not none,
+    materialized='incremental',
+    incremental_strategy='timeline_replace',
     grants=timeline_grants(),
     indexes=[
         {'columns': ['conversation_id'], 'unique': True},

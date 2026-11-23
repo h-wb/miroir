@@ -28,7 +28,6 @@
             '_dlt_loads': ['load_id', 'inserted_at']}) }}", 'transaction': false},
         "{{ timeline_messages_plan() }}",
         "{{ timeline_remove_foreign(['messages']) }}",
-        "{{ timeline_messages_retime() }}",
         "{{ timeline_search_index('text') }}",
     ],
     post_hook=[
@@ -72,7 +71,7 @@
 -- index on the raw tables. A message that moved keeps its previous times in
 -- previous_sent_at until days has read the row (as timeline_previous).
 {% set replaced = timeline_replaced(['messages']) | length > 0 %}
-{% set cursor = timeline_load_cursor('apple_messages', replaced) %}
+{% set cursor = timeline_load_cursor('apple_messages', replaced or timeline_messages_retimed()) %}
 {% set stamp = timeline_new_stamp() %}
 {% set previous = is_incremental() and not replaced %}
 {% set consumed = timeline_consumed([('days', "source = 'messages'")]) %}

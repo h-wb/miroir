@@ -150,18 +150,23 @@
    the model's transaction, so no other state is ever visible. #}
 {% macro timeline_exact_acl(readable) -%}
     {%- set role = timeline_reader_role() if readable else none -%}
+    {%- set backup = this.incorporate(path={'identifier': this.identifier ~ '__dbt_backup'}) -%}
     do $acl$
-    declare grantee oid;
+    declare relation regclass; grantee oid;
     begin
-        for grantee in
-            select distinct a.grantee from pg_class c, aclexplode(c.relacl) a
-            where c.oid = '{{ this }}'::regclass and a.grantee <> c.relowner
-        loop
-            if grantee = 0 then
-                execute 'revoke all on {{ this }} from public';
-            else
-                execute format('revoke all on {{ this }} from %s', grantee::regrole);
-            end if;
+        -- A rebuild from scratch renamed the old table to its backup in this
+        -- transaction; dbt drops it only after the commit. It keeps no grant.
+        foreach relation in array array_remove(array['{{ this }}'::regclass, to_regclass('{{ backup }}')], null) loop
+            for grantee in
+                select distinct a.grantee from pg_class c, aclexplode(c.relacl) a
+                where c.oid = relation and a.grantee <> c.relowner
+            loop
+                if grantee = 0 then
+                    execute format('revoke all on %s from public', relation);
+                else
+                    execute format('revoke all on %s from %s', relation, grantee::regrole);
+                end if;
+            end loop;
         end loop;
         {%- if role %}
         execute 'grant select on {{ this }} to {{ role }}';
@@ -326,6 +331,17 @@
     {{- return(timeline_scalar("select substring(obj_description('" ~ this ~ "'::regclass, 'pg_class') from '^miroir cursor (.+)$')")) -}}
 {%- endmacro %}
 
+{# Incremental strategy for a table rebuilt in full every build: replace its
+   rows in the model's transaction. No table is renamed, so no backup of it
+   exists at any moment, and its indexes keep their names. #}
+{% macro get_incremental_timeline_replace_sql(arg_dict) -%}
+    {%- set columns = get_quoted_csv(arg_dict['dest_columns'] | map(attribute='name')) -%}
+    delete from {{ arg_dict['target_relation'] }};
+    insert into {{ arg_dict['target_relation'] }} ({{ columns }})
+    select {{ columns }} from {{ arg_dict['temp_relation'] }};
+    drop table {{ arg_dict['temp_relation'] }}
+{%- endmacro %}
+
 {# What the worker recorded of a row's stored file (media_objects, decision 040):
    its thumbnail status and which sizes exist. Null where it has no record, which
    means unknown, not absent: the file may still be queued, or not derived yet.
@@ -410,19 +426,19 @@
         '{}'::timestamptz[])
 {%- endmacro %}
 
-{# Pre-hook of messages: after a change of the analysis's timezone, give every
-   message the local day of the new one, in place (an index range, nothing when
-   none differ). Reading every message again would cost far more. #}
-{% macro timeline_messages_retime() -%}
-    {%- if is_incremental() -%}
+{# Whether messages holds rows of another timezone than the analysis's: a
+   new timezone is read as everything again (their local days change). An
+   update in place cost as much (every row rewritten, its text index too) and
+   left the table twice its size. #}
+{% macro timeline_messages_retimed() -%}
+    {%- if not (execute and is_incremental()) -%}{{ return(false) }}{%- endif -%}
     {%- set tz = timeline_literal(var('timezone')) -%}
-    update {{ this }} set day = {{ timeline_local_day('sent_at') }}, timezone = {{ tz }}
-    where timezone < {{ tz }} or timezone > {{ tz }}
-    {%- endif -%}
+    {{- return(timeline_scalar('select 1 from ' ~ this ~ ' where timezone < ' ~ tz ~ ' or timezone > ' ~ tz ~ ' limit 1') != '') -}}
 {%- endmacro %}
 
 {# Pre-hook of messages, before any other in its transaction: when this build
-   reads every message (a first build, a replaced input, too many loads), join by
+   reads every message (a first build, a replaced input, a new timezone, too
+   many loads), join by
    hash. The planner cannot estimate how many raw rows are messages (a CASE over
    two columns of a table that may not be analysed yet) and otherwise takes one,
    then repeats each per-message aggregate once per message. An incremental
@@ -430,6 +446,7 @@
 {% macro timeline_messages_plan() -%}
     {%- if not is_incremental()
         or timeline_replaced(['messages']) | length > 0
+        or timeline_messages_retimed()
         or timeline_load_cursor('apple_messages', false).rebuild -%}
     set local enable_nestloop = off
     {%- endif -%}
