@@ -548,6 +548,8 @@ class TimelineMessagesTests(TimelineMessagesFixture):
             self.assertTrue(any("Bitmap Index Scan" in line for (line,) in plan), plan)
 
     def test_incremental_builds_equal_a_rebuild_from_scratch_at_every_step(self):
+        # No margin: each build reads only the loads completed since the last.
+        self.assertEqual(self.margin, "0 seconds")
         miroir = self.configure([timeline("t"), timeline("fresh")])
         deliveries = self.configure([timeline("t")])
         schema, fresh = self.schema(miroir, "t"), self.schema(miroir, "fresh")
@@ -628,6 +630,25 @@ class TimelineMessagesTests(TimelineMessagesFixture):
             ),
             [("like",)],
         )
+
+        # A reaction sent again aimed at another message leaves the first; one
+        # sent again as an ordinary message leaves its target too.
+        def kinds(guid):
+            return self.query(
+                f"select r->>'kind' from {schema}.messages m, "
+                f"jsonb_array_elements(m.reactions) r where m.guid = '{guid}'"
+            )
+
+        step(
+            [*tapback("rx3", 12, alex, 2001, "p:0/x1", me=True, handle=ALEX)],
+            "reaction aimed elsewhere",
+        )
+        self.assertEqual((kinds("x3"), kinds("x1")), ([], [("like",)]))
+        step(
+            [*message("rx3", 12, alex, me=True, handle=ALEX, text="now a message")],
+            "reaction becomes a message",
+        )
+        self.assertEqual(kinds("x1"), [])
 
         # Messages before their chat: no conversation, then the chat's.
         late = "iMessage;-;" + KAI

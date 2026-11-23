@@ -10,6 +10,7 @@
         {'columns': ['_cursor']},
         {'columns': ['timezone']},
         {'columns': ['deleted']},
+        {'columns': ['_reactions_from'], 'type': 'gin'},
         {'columns': ['conversation_id', 'sent_at', 'guid']},
         {'columns': ['conversation_id', 'sender_handle']},
         {'columns': ['sender_handle', 'sender_written']},
@@ -49,6 +50,8 @@
 --     each with what the worker recorded of its file in media_objects; null
 --     there means no record, which is unknown.
 --   reactions: the ones that stand (messages_standing_reactions), oldest first.
+--     _reactions_from lists every reaction and removal row aimed at it, so a
+--     row sent again aimed elsewhere, or as something else, recomputes it.
 --   deleted: a guid this table held as a message whose row is now something
 --     else. It has no conversation, time or text, so no conversation or search
 --     query meets it; events drops it and days' post-hook removes it.
@@ -154,6 +157,13 @@ touched as (
         select al.message_guid from attachment_links al
         where al.attachment_guid = a.guid and {{ timeline_completed_row('al') }}
     ) al
+    union
+    -- A reaction or removal sent again, aimed elsewhere or as something else:
+    -- the message it was aimed at before.
+    select o.guid from {{ this }} o
+    where o._reactions_from && array(
+        select guid from raw where {{ timeline_in_loads('_dlt_load_id', cursor.loads) }}
+    )
 ),
 picked as (
     select r.* from touched t
@@ -269,6 +279,11 @@ reaction_items as (
     from standing
     group by 1
 ),
+reaction_sources as (
+    select target_guid as message_guid, array_agg(distinct guid order by guid) as guids
+    from reaction_targets
+    group by 1
+),
 current_messages as (
     select
         p.guid,
@@ -287,11 +302,13 @@ current_messages as (
         coalesce(p.is_audio_message, false) as is_audio,
         p.thread_originator_guid as reply_to_guid,
         coalesce(ai.items, '[]'::jsonb) as attachments,
-        coalesce(ri.items, '[]'::jsonb) as reactions
+        coalesce(ri.items, '[]'::jsonb) as reactions,
+        coalesce(rs.guids, '{}'::text[]) as reactions_from
     from messages_picked p
     left join conversations_of co on co.guid = p.guid
     left join attachment_items ai on ai.message_guid = p.guid
     left join reaction_items ri on ri.message_guid = p.guid
+    left join reaction_sources rs on rs.message_guid = p.guid
 )
 select
     m.guid,
@@ -320,7 +337,8 @@ select
     {{ timeline_literal(timeline_input('messages')) }} as _input,
     nullif({{ timeline_literal(cursor.cursor) }}, '')::timestamptz as _cursor,
     {{ timeline_literal(stamp) }} as _stamp,
-    {{ timeline_literal(chats_upper) }} as _chats_seen
+    {{ timeline_literal(chats_upper) }} as _chats_seen,
+    m.reactions_from as _reactions_from
 from current_messages m
 {% if previous %}
 -- One index probe per message: a plain join was planned as a read of them all.
@@ -337,7 +355,8 @@ select
     t._input,
     nullif({{ timeline_literal(cursor.cursor) }}, '')::timestamptz,
     {{ timeline_literal(stamp) }},
-    {{ timeline_literal(chats_upper) }}
+    {{ timeline_literal(chats_upper) }},
+    '{}'::text[]
 from picked p
 cross join lateral (
     select * from {{ this }} o where o.guid = p.guid and not o.deleted limit 1
