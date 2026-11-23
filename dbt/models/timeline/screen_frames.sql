@@ -16,6 +16,7 @@
         {'sql': "{{ timeline_raw_indexes('screenmemory', {'frames': ['_dlt_load_id', 'ts', 'image_path'], 'app_usage': ['_dlt_load_id', 'ts'], 'media_objects': ['_dlt_load_id', 'key'], '_dlt_loads': ['load_id', 'inserted_at']}) }}", 'transaction': false},
         "{{ timeline_remove_foreign(['screen']) }}",
         "{{ timeline_add_media_columns() }}",
+        "{{ timeline_media_pending_index('image_path') }}",
     ],
     post_hook=["{{ timeline_exact_acl(true) }}", "{{ timeline_schema_usage() }}"],
 ) }}
@@ -38,10 +39,11 @@
 -- What the worker recorded of each frame's screenshot comes from media_objects in
 -- the same dataset, when it exists (timeline_media_columns; no record is unknown).
 -- Its loads are listed in the same _dlt_loads, so an incremental build also reads
--- again the frames whose record a newly completed load wrote. A table built
--- before these columns reads every frame once.
+-- again the frames whose record a newly completed load wrote. A table holding
+-- rows built before these columns reads every frame once (timeline_media_pending:
+-- by its rows, not its columns, so a failed first attempt is not forgotten).
 {% set replaced = timeline_replaced(['screen']) | length > 0 %}
-{% set cursor = timeline_load_cursor('screenmemory', replaced or not timeline_has_media_columns()) %}
+{% set cursor = timeline_load_cursor('screenmemory', replaced or timeline_media_pending()) %}
 {% set stamp = timeline_new_stamp() %}
 {% set previous = is_incremental() and not replaced %}
 {% set consumed = timeline_consumed([('timeline_screen', 'true'), ('days', "source = 'screen'")]) %}

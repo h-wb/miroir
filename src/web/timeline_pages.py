@@ -42,7 +42,8 @@ from src.web.timeline import NO_STORE, USE_POST, _day, _plain, search_fields
 Page = Callable[..., HTMLResponse]
 # What a tile says where there is no image to show (the index's media codes).
 MEDIA_LABELS = {
-    MEDIA_UNKNOWN: "Not stored yet",
+    # No record of the file in the timeline yet: it may be stored all the same.
+    MEDIA_UNKNOWN: "Image state not known yet",
     MEDIA_THUMBNAILS: "Screenshot",
     MEDIA_NO_THUMBNAILS: "No thumbnail could be made",
     MEDIA_WITHHELD: "Withheld",

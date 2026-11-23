@@ -1010,8 +1010,10 @@ lanes and scrubber from the API above, and the rest of each page works without i
   it shows the 360-pixel thumbnail, at most ten a second, and only of the frame
   under the cursor; when it rests (a quarter second) it shows the 1280-pixel one,
   loads the frame's text and preloads the two thumbnails on each side.
-- What the image area says instead of an image: **Not stored yet** (no record of
-  the file: it may still be queued or not derived), **No thumbnail could be
+- What the image area says instead of an image: **Image state not known yet**
+  (the timeline has no record of the file: it may still be queued or not
+  derived, or the timeline has not read the worker's records since; the file
+  may well be stored), **No thumbnail could be
   made** (stored; "Open the original" may still show it), **Withheld** (never
   uploaded; no text either), **The image could not be loaded** (a record whose
   file is gone).
@@ -1086,6 +1088,18 @@ load, say) is still read. A load that never completes is never read.
   every model that recounts them has read it, so a build that fails part way
   loses none.
 - The result is what a first build over the same rows gives.
+- Tables built before the media columns, or whose upgrade did not finish, read
+  every frame and session again once: the rule is that a row still has no
+  `media_withheld` (the current models always write one for frames, sessions
+  and screen events), not that a column is missing. So an upgrade whose first
+  build failed is done by the next one.
+- Each model builds in one transaction: a build that fails leaves its tables as
+  they were. New rows are staged in an unlogged table of the timeline's schema,
+  not in a temporary table, so large reads do not depend on `temp_buffers`
+  (PostgreSQL 18 failed there with "no empty local buffer available").
+- Built and tested on PostgreSQL 17 and 18. A rebuild from scratch (the
+  analysis page's "Rebuild from scratch", or the CLI and API option) builds new
+  tables and swaps them in.
 
 `timeline_screen` and `timeline_browser` are the two sources' own models and are
 not meant to be read.

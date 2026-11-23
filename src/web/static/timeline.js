@@ -131,7 +131,8 @@ class DayView {
     if (imageFor(code, resting) === null) {
       this.small.want(null);
       this.large.want(null);
-      this.#tile(this.labels[code] || "", code);
+      // Never a blank: a code the page has no label for still says something.
+      this.#tile(this.labels[code] || "Image state not known yet", code);
     } else if (resting) {
       this.large.want(index);
     } else {

@@ -46,6 +46,8 @@ UNLISTED = "com.example.unlisted-app"
 LINKS = "timeline_links"  # a miroir of its own: other raw datasets
 MOVES = "timeline_moves"
 MEDIA = "timeline_media"
+ATOMIC = "timeline_atomic"
+BUFFERS = "timeline_buffers"
 
 
 def raw_configuration(analyses, miroir_id="timeline_tests"):
@@ -1033,9 +1035,176 @@ class TimelineModelTests(TimelineBuildFixture):
         self.query(f"alter table {schema}.events drop column media_withheld")
         self.build(plan)
         self.assertEqual(self.snapshot(schema), self.snapshot(fresh))
+        # Production's state after an upgrade whose first build failed: the
+        # columns present but empty in screen_frames, missing downstream. The
+        # decision follows the rows, so one build fills every frame and session.
+        self.query(
+            f"update {schema}.screen_frames set media_status = null, "
+            "thumbnail_w360 = null, thumbnail_w1280 = null, media_withheld = null"
+        )
+        for table in ("timeline_screen", "events"):
+            self.query(
+                f"alter table {schema}.{table} drop column media_status, "
+                "drop column thumbnail_w360, drop column thumbnail_w1280, "
+                "drop column media_withheld"
+            )
+        self.build(plan)
+        self.assertEqual(self.media(schema), expected)
+        self.assertEqual(self.snapshot(schema), self.snapshot(fresh))
+        self.assertEqual(
+            self.query(
+                f"select count(*) from {schema}.screen_frames "
+                "where media_withheld is null"
+            ),
+            [(0,)],
+        )
+        # Once read, the check is answered by an empty partial index.
+        self.assertTrue(
+            {
+                "screen_frames_media_pending",
+                "timeline_screen_media_pending",
+                "events_media_pending",
+            }
+            <= {
+                row[0]
+                for row in self.query(
+                    f"select indexname from pg_indexes where schemaname = '{schema}'"
+                )
+            }
+        )
         self.assertIn(
             ("miroir_media_objects_key",),
             self.query(
                 f"select indexname from pg_indexes where schemaname = '{dataset}'"
             ),
+        )
+
+    def raw_frames(self, miroir, count, words):
+        """`count` frames of about 33 * `words` characters of text that does not
+        compress, each with an app row and a stored record, in one completed
+        load written straight into the raw tables."""
+        dataset = miroir.connections[0].binding.dataset_name
+        load = f"1900000000.{count:06d}"
+        self.query(
+            f"""
+            insert into {dataset}.frames (image_path, ts, captured_at, text, withheld,
+                masked, _dlt_load_id, _dlt_id)
+            select 'bulk/' || g || '.jpeg', {MIDNIGHT} + g * 5,
+                to_timestamp({MIDNIGHT} + g * 5),
+                (select string_agg(md5(g::text || ':' || i::text), ' ')
+                 from generate_series(1, {words}) i),
+                null, 0, '{load}', 'bulk-frame-' || g
+            from generate_series(1, {count}) g;
+            insert into {dataset}.app_usage (ts, bundle_id, observed_at, _dlt_load_id,
+                _dlt_id)
+            select {MIDNIGHT} + g * 5, 'com.example.app' || (g / 200 % 6),
+                to_timestamp({MIDNIGHT} + g * 5), '{load}', 'bulk-usage-' || g
+            from generate_series(1, {count}) g;
+            insert into {dataset}.media_objects (connection_id, kind, key, size,
+                content_type, stored_at, thumbnail_w360, thumbnail_w1280,
+                thumbnail_status, derived_at, derive_version, _dlt_load_id, _dlt_id)
+            select 'screen', 'screenshots', 'bulk/' || g || '.jpeg', 1000,
+                'image/jpeg', now(), true, true, 'made', now(), {DERIVE_VERSION},
+                '{load}', 'bulk-media-' || g
+            from generate_series(1, {count}) g;
+            insert into {dataset}._dlt_loads (load_id, schema_name, status, inserted_at)
+            values ('{load}', 'screenmemory', 0, now());
+            """
+        )
+
+    def drop_media_columns(self, schema, tables):
+        for table in tables:
+            self.query(
+                f"alter table {schema}.{table} drop column media_status, "
+                "drop column thumbnail_w360, drop column thumbnail_w1280, "
+                "drop column media_withheld"
+            )
+
+    def test_a_failed_build_changes_nothing_and_its_upgrade_is_done_later(self):
+        both = {"screen": "screen", "browser": "browser"}
+        miroir = configuration([timeline("timeline", both, READER)], ATOMIC)
+        schema = self.schema(miroir, "timeline")
+        self.send(
+            miroir, "screen", screen_batch(*screen(0, SAFARI), *screen(10, SAFARI))
+        )
+        self.media_record(miroir, 0)
+        self.build(analysis_plan(miroir.analyses[0]))
+        kept = (
+            "select image_path, captured_at, bundle_id, text, withheld, masked, "
+            "connection, previous_captured_at, _input, _cursor, _stamp "
+            f"from {schema}.screen_frames order by 1"
+        )
+        before = self.query(kept)
+        self.drop_media_columns(
+            schema, ("screen_frames", "timeline_screen", "events", "timeline_browser")
+        )
+        # A build that fails at its end (a reader role that does not exist): the
+        # model's pre-hooks, staging and upsert all roll back with it.
+        broken = configuration([timeline("timeline", both, "timeline_missing")], ATOMIC)
+        with self.assertRaises(RuntimeError):
+            self.build(analysis_plan(broken.analyses[0]))
+        columns = {
+            row[0]
+            for row in self.query(
+                "select column_name from information_schema.columns "
+                f"where table_schema = '{schema}' and table_name = 'screen_frames'"
+            )
+        }
+        self.assertNotIn("media_status", columns)
+        self.assertEqual(self.query(kept), before)
+        self.assertEqual(
+            self.query(
+                "select tablename from pg_tables "
+                f"where schemaname = '{schema}' and tablename like '%dbt_tmp%'"
+            ),
+            [],
+        )
+        # The next build does the upgrade it could not.
+        self.build(analysis_plan(miroir.analyses[0]))
+        self.assertEqual(
+            self.query(
+                f"select image_path, media_status, media_withheld from {schema}"
+                ".screen_frames order by 1"
+            ),
+            [(path(0), "made", False), (path(10), None, False)],
+        )
+
+    def test_reading_everything_needs_no_temporary_buffers(self):
+        # PostgreSQL 18 failed with "no empty local buffer available" where a
+        # build staged many rows in a temporary table; 8,000 frames of about
+        # 3 KB did it with the smallest temp_buffers. The timeline stages in an
+        # unlogged table instead, on 17 as on 18.
+        self.query("alter database postgres set temp_buffers = 100")
+        self.addCleanup(self.query, "alter database postgres reset temp_buffers")
+        miroir = configuration([timeline("timeline", {"screen": "screen"})], BUFFERS)
+        schema = self.schema(miroir, "timeline")
+        plan = analysis_plan(miroir.analyses[0])
+        self.send(miroir, "screen", screen_batch(*screen(0, SAFARI)))
+        self.media_record(miroir, 0)
+        self.raw_frames(miroir, 8000, 90)
+        self.build(plan)  # an incremental read of many new frames
+        self.drop_media_columns(
+            schema, ("screen_frames", "timeline_screen", "events", "timeline_browser")
+        )
+        self.build(plan)  # an upgrade: every frame and session again
+        self.assertEqual(
+            self.query(
+                f"select count(*), count(media_status), count(media_withheld) "
+                f"from {schema}.screen_frames"
+            ),
+            [(8001, 8001, 8001)],
+        )
+        self.assertEqual(
+            self.query(
+                f"select count(*) = count(media_withheld) from {schema}.events"
+                " where source = 'screen'"
+            ),
+            [(True,)],
+        )
+        self.assertEqual(
+            self.query(
+                "select tablename from pg_tables "
+                f"where schemaname = '{schema}' and tablename like '%dbt_tmp%'"
+            ),
+            [],
         )

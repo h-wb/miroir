@@ -1118,7 +1118,9 @@ class TimelinePageTests(TimelineApiFixture):
             f'<img class="thumb" src="/media/screen/screenshots/{path(0)}?size=360"',
             found.text,
         )
-        self.assertIn('<span class="tile tile-0">Not stored yet</span>', found.text)
+        self.assertIn(
+            '<span class="tile tile-0">Image state not known yet</span>', found.text
+        )
         self.assertIn(
             f'href="/timeline/2026-11-20?frame={quote(path(0), safe="")}"', found.text
         )
