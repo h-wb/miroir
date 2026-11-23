@@ -13,7 +13,7 @@
         {'columns': ['conversation_id', 'sent_at', 'guid']},
         {'columns': ['conversation_id', 'sender_handle']},
         {'columns': ['sender_handle', 'sender_written']},
-        {'columns': ["(to_tsvector('simple', \"text\"))"], 'type': 'gin'},
+        {'columns': ['(' ~ timeline_search_vector('"text"') ~ ')'], 'type': 'gin'},
     ],
     grants=timeline_grants(),
     pre_hook=[
@@ -27,6 +27,7 @@
         "{{ timeline_messages_plan() }}",
         "{{ timeline_remove_foreign(['messages']) }}",
         "{{ timeline_messages_retime() }}",
+        "{{ timeline_search_index('text') }}",
     ],
     post_hook="{{ timeline_exact_acl(true) }}",
 ) }}
@@ -51,7 +52,8 @@
 --   deleted: a guid this table held as a message whose row is now something
 --     else. It has no conversation, time or text, so no conversation or search
 --     query meets it; events drops it and days' post-hook removes it.
--- Search queries must use the indexed expression to_tsvector('simple', text).
+-- Search queries must use the indexed expression, timeline_search_vector('text'):
+-- the first 100,000 characters.
 --
 -- Only rows of loads dlt lists as complete are read (timeline_load_cursor). An
 -- incremental build recomputes the messages that rows of the loads completed

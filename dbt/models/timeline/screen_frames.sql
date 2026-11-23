@@ -9,7 +9,7 @@
         {'columns': ['captured_at']},
         {'columns': ['_stamp']},
         {'columns': ['_cursor']},
-        {'columns': ["(to_tsvector('simple', \"text\"))"], 'type': 'gin'},
+        {'columns': ['(' ~ timeline_search_vector('"text"') ~ ')'], 'type': 'gin'},
     ],
     grants=timeline_grants(),
     pre_hook=[
@@ -17,6 +17,7 @@
         "{{ timeline_remove_foreign(['screen']) }}",
         "{{ timeline_add_media_columns() }}",
         "{{ timeline_media_pending_index('image_path') }}",
+        "{{ timeline_search_index('text') }}",
     ],
     post_hook=[
         "{{ timeline_media_settle('withheld is not null') }}",
@@ -30,7 +31,7 @@
 -- One row per frame: its second, its app and its text. The app is the app usage
 -- row of the same second (the first by name if there are several); a frame
 -- without one has no app. A withheld frame keeps no text, whatever its row says.
--- Search queries must use the indexed expression to_tsvector('simple', text).
+-- Search queries must use the indexed expression, timeline_search_vector('text').
 --
 -- Only rows of loads dlt lists as complete are read (timeline_load_cursor). An
 -- incremental build reads the frames of the loads completed since its cursor and

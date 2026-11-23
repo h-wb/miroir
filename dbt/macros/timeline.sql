@@ -412,3 +412,39 @@
     set local enable_nestloop = off
     {%- endif -%}
 {%- endmacro %}
+
+{# What text search indexes: the first 100,000 characters of a frame's or a
+   message's text (src/core/timeline.py SEARCH_CHARACTERS, the same number). A
+   tsvector holds at most 1 MB of words, and one longer text would fail every
+   build; 100,000 characters are at most 400 KB. The text is stored whole; words
+   after that are not found by search. Queries must use this expression to use
+   the index. #}
+{% macro timeline_search_vector(column) -%}
+    to_tsvector('simple', left({{ column }}, 100000))
+{%- endmacro %}
+
+{# Pre-hook: an existing table indexed on the whole text (before the bound)
+   gets the bounded index instead, once. #}
+{% macro timeline_search_index(column) -%}
+    {%- if is_incremental() -%}
+    do $index$
+    declare old regclass;
+    begin
+        for old in
+            select i.indexrelid::regclass from pg_index i
+            where i.indrelid = '{{ this }}'::regclass
+                and pg_get_indexdef(i.indexrelid) like '%to_tsvector%'
+                and pg_get_indexdef(i.indexrelid) not like '%left%'
+        loop
+            execute format('drop index %s', old);
+        end loop;
+        if not exists (
+            select 1 from pg_index i where i.indrelid = '{{ this }}'::regclass
+                and pg_get_indexdef(i.indexrelid) like '%to_tsvector%left%'
+        ) then
+            execute $create$create index on {{ this }} using gin (({{ timeline_search_vector(column) }}))$create$;
+        end if;
+    end
+    $index$
+    {%- endif -%}
+{%- endmacro %}

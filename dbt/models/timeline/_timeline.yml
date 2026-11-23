@@ -8,7 +8,8 @@ models:
       One row per ScreenMemory frame: captured_at (its second), bundle_id (the app
       usage row of that second, or null), text (masked on the collector; null when
       withheld) and its media key, image_path. The only place screen text is indexed:
-      search with to_tsvector('simple', text). Incremental on image_path.
+      search with to_tsvector('simple', left(text, 100000)), the first 100,000
+      characters. Incremental on image_path.
       media_status, thumbnail_w360 and thumbnail_w1280 are what the worker recorded
       of the screenshot (media_objects): null means no record, which is unknown,
       not absent.

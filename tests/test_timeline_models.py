@@ -564,7 +564,8 @@ class TimelineModelTests(TimelineBuildFixture):
         self.assertEqual(
             self.query(
                 f"select image_path from {schema}.screen_frames where "
-                "to_tsvector('simple', text) @@ websearch_to_tsquery('simple', 'resent')"
+                "to_tsvector('simple', left(text, 100000)) "
+                "@@ websearch_to_tsquery('simple', 'resent')"
             ),
             [(path(-60),)],
         )

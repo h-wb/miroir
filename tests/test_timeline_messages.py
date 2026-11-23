@@ -25,6 +25,7 @@ from src.core.artifacts import submit_artifact
 from src.core.config import parse_miroir
 from src.core.derive import DERIVE_VERSION, _Writer
 from src.core.runner import import_artifact
+from src.core.timeline import SEARCH_CHARACTERS, search_vector
 from tests.test_messages_models import (
     ALEX,
     BOOK,
@@ -49,9 +50,11 @@ from tests.test_timeline_models import (
     SAFARI,
     TimelineBuildFixture,
     browser_batch,
+    frame,
     place,
     screen,
     screen_batch,
+    usage,
     visit,
 )
 
@@ -524,7 +527,7 @@ class TimelineMessagesTests(TimelineMessagesFixture):
         )
         search = (
             f"select guid, conversation_id, sent_at from {schema}.messages "
-            "where to_tsvector('simple', text) @@ websearch_to_tsquery('simple', '{q}')"
+            f"where {search_vector('text')} @@ websearch_to_tsquery('simple', '{{q}}')"
         )
         self.assertEqual(
             self.query(search.format(q="chapter")),
@@ -811,6 +814,64 @@ class TimelineMessagesTests(TimelineMessagesFixture):
         self.build(replace(analysis_plan(utc.analyses[0]), full_refresh=True))
         self.assertEqual(self.keys(schema), ids)
         self.assertEqual(self.snapshot(schema), snapshot)
+
+    def test_a_very_long_text_is_stored_whole_and_searched_at_its_start(self):
+        # 1.36 MB of distinct words, under the batches' 2 MB line: whole, it
+        # is more than a tsvector holds and failed every build after it.
+        words = " ".join(f"t{n:06x}" for n in range(170_000))
+        text = "needle " + words + " beyond"
+        others = (("s", "screenmemory"),)
+        inputs = {"screen": "s", "messages": "m"}
+        miroir = self.configure([timeline("t", inputs, READER)], others=others)
+        schema = self.schema(miroir, "t")
+        self.send(miroir, "s", screen_batch(frame(0, text=text), usage(0, SAFARI)))
+        alex = DIRECT[0]
+        self.deliver(
+            miroir,
+            [*chat(alex, ALEX, ALEX), *message("x1", 0, alex, handle=ALEX, text=text)],
+        )
+        for table in ("screen_frames", "messages"):
+            with self.subTest(table=table):
+                self.assertEqual(
+                    self.query(f"select length(text) from {schema}.{table}"),
+                    [(len(text),)],
+                )
+                found = (
+                    f"select count(*) from {schema}.{table} where "
+                    f"{search_vector('text')} @@ websearch_to_tsquery('simple', '{{}}')"
+                )
+                self.assertEqual(self.query(found.format("needle")), [(1,)])
+                self.assertEqual(self.query(found.format("beyond")), [(0,)])
+                plan = self.query(
+                    "set enable_seqscan = off; explain " + found.format("needle")
+                )
+                self.assertTrue(
+                    any("Bitmap Index Scan" in line for (line,) in plan), plan
+                )
+        self.assertGreater(len(text), SEARCH_CHARACTERS)
+        self.assertEqual(
+            self.query(f"select count(*) from {schema}.events where source = 'screen'"),
+            [(1,)],
+        )
+
+    def test_a_screen_table_indexed_on_the_whole_text_gets_the_bounded_index(self):
+        others = (("s", "screenmemory"),)
+        miroir = self.configure([timeline("t", {"screen": "s"})], others=others)
+        schema = self.schema(miroir, "t")
+        self.send(miroir, "s", screen_batch(*screen(0, SAFARI)))
+        indexes = (
+            f"select indexdef from pg_indexes where schemaname = '{schema}' "
+            "and tablename = 'screen_frames' and indexdef like '%to_tsvector%'"
+        )
+        (bounded,) = self.query(indexes)
+        # As tables built before the bound are indexed.
+        self.query(
+            f"drop index {schema}.{bounded[0].split()[2]}; create index "
+            f"on {schema}.screen_frames using gin (to_tsvector('simple', text))"
+        )
+        self.send(miroir, "s", screen_batch(*screen(10, SAFARI)))
+        (after,) = self.query(indexes)
+        self.assertIn('"left"(text, 100000)', after[0])
 
     def test_a_build_that_fails_at_its_end_changes_nothing(self):
         # The raw-index hook runs outside the model's transaction and opens it
