@@ -130,6 +130,23 @@ class TimelineMessagesFixture(TimelineBuildFixture):
         path = write_batch(Path(mkdtemp(dir=self.root)) / "batch.jsonl.gz", records)
         self.send(miroir, connection_id, path.read_bytes())
 
+    def load(self, miroir, records):
+        """Load a batch without building, as several loads before one build."""
+        path = write_batch(Path(mkdtemp(dir=self.root)) / "batch.jsonl.gz", records)
+        connection = next(c for c in miroir.connections if c.config.id == "m")
+        artifact, _ = submit_artifact(
+            miroir, connection, path, store=self.store, root=self.root / "artifacts"
+        )
+        outcome = import_artifact(
+            miroir,
+            "m",
+            artifact["id"],
+            store=self.store,
+            origin="local",
+            **{**self.execution, "transform": lambda plan: None},
+        )
+        self.assertEqual(outcome.ingestion, "succeeded")
+
     def relation(self, miroir, analysis_id, name):
         analysis = next(a for a in miroir.analyses if a.id == analysis_id)
         plan = analysis_plan(analysis)
@@ -795,6 +812,32 @@ class TimelineMessagesTests(TimelineMessagesFixture):
         self.assertEqual(self.keys(schema), ids)
         self.assertEqual(self.snapshot(schema), snapshot)
 
+    def test_a_build_that_fails_at_its_end_changes_nothing(self):
+        # The raw-index hook runs outside the model's transaction and opens it
+        # again (decision 040, the media upgrade): a build that fails in a
+        # post-hook keeps none of its changes, and the next build makes them.
+        miroir = self.configure([timeline("t", reader_role=READER)])
+        schema = self.schema(miroir, "t")
+        records = [
+            *chat(DIRECT[0], ALEX, ALEX),
+            *message("x1", 0, DIRECT[0], handle=ALEX, text="before"),
+        ]
+        self.deliver(miroir, records)
+        snapshot = self.snapshot(schema)
+        edit = message(
+            "x1", 0, DIRECT[0], handle=ALEX, text="after", date_edited=apple(at(1))
+        )
+        self.load(miroir, [*edit, *message("x2", 5, DIRECT[0], me=True, handle=ALEX)])
+        failing = self.configure([timeline("t", reader_role="no_such_reader")])
+        with self.assertRaises(RuntimeError):
+            self.build(analysis_plan(failing.analyses[0]))
+        self.assertEqual(self.snapshot(schema), snapshot)
+        self.build(analysis_plan(miroir.analyses[0]))
+        self.assertEqual(
+            self.query(f"select guid, text from {schema}.messages order by guid"),
+            [("x1", "after"), ("x2", "hi")],
+        )
+
     def test_the_reader_reads_the_outputs_and_nothing_else(self):
         miroir = self.configure(
             [timeline("t", reader_role=READER), messages_package("p")]
@@ -922,7 +965,8 @@ def synthetic_chat(c):
 
 
 def synthetic(count, chats=320, seed=7):
-    """`count` messages in `chats` conversations with long text, one reaction in
+    """`count` messages in `chats` conversations, a quarter of them about 4 KB of
+    text (long enough to be stored out of line), one reaction in
     ten, one attachment in twenty-five, delivered as several batches."""
     rng = random.Random(seed)
     start = datetime(2025, 1, 1, tzinfo=timezone.utc)
@@ -938,7 +982,7 @@ def synthetic(count, chats=320, seed=7):
         c = int(rng.paretovariate(1.2)) % chats
         number, guid, group = synthetic_chat(c)
         moment = start + timedelta(seconds=n * 170 + rng.randint(0, 60))
-        text = " ".join(rng.choices(WORDS, k=rng.choice((5, 20, 80, 400))))
+        text = " ".join(rng.choices(WORDS, k=rng.choice((5, 20, 80, 700))))
         me = rng.random() < 0.45
         sent = message(
             f"m{n}", 0, guid, me=me, handle=None if me and group else number, text=text
@@ -964,23 +1008,6 @@ def synthetic(count, chats=320, seed=7):
 
 
 class TimelineMessagesLargeTests(TimelineMessagesFixture):
-    def load(self, miroir, records):
-        """Load a batch without building, as several loads before one build."""
-        path = write_batch(Path(mkdtemp(dir=self.root)) / "batch.jsonl.gz", records)
-        connection = next(c for c in miroir.connections if c.config.id == "m")
-        artifact, _ = submit_artifact(
-            miroir, connection, path, store=self.store, root=self.root / "artifacts"
-        )
-        outcome = import_artifact(
-            miroir,
-            "m",
-            artifact["id"],
-            store=self.store,
-            origin="local",
-            **{**self.execution, "transform": lambda plan: None},
-        )
-        self.assertEqual(outcome.ingestion, "succeeded")
-
     def test_a_large_history_builds_and_then_builds_incrementally(self):
         """Tens of thousands of messages with long text (MIROIR_TIMELINE_MESSAGES,
         default 20,000): the first build reads them all; a later build reads one

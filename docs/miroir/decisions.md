@@ -2723,16 +2723,38 @@ replaced, a contact renamed, a message moved and one that stops being a message,
 a load completing late, a new timezone) that the tables equal a rebuild from
 scratch, and that a rebuild from scratch keeps the ids.
 
-**The models' transaction** (a fix to phase 1a). The pre-hook that creates raw
-indexes ended with `commit`, meant to end its checks' transaction before the
-model's own began. dbt's connection still counted that transaction as open and
-began none, so on `screen_frames` and `timeline_browser` the other hooks, the
-statement and the post-hooks ran each in its own transaction, against what their
-comments say (the exact privileges in the same transaction as the rows). The hook
-now ends with `commit; begin`, and they share one transaction again. Found when
-`messages`' `set local` had no effect.
+**Staging and the transaction**, as the amendment *The media upgrade on the
+warehouse* sets them for every timeline model: `messages`,
+`timeline_message_chats`, `events` and `days` stage their new rows in an unlogged
+table of the schema, not dbt's temporary table, and `messages` runs in the
+transaction the raw-index hook opens again. Without the first, reading 8,000
+messages of about 4 KB again into the existing tables failed on PostgreSQL 18.1
+with the smallest `temp_buffers` ("no empty local buffer available"). Without the
+second, a build that failed in a post-hook kept the messages it had written; a test
+now checks that it keeps none. The same `begin` was what made `messages`' `set
+local` below take effect.
 
-**Size, and PostgreSQL 18.** MEASURED
+**Reading everything** *(conservative: cost)*. When `messages` reads every
+message (a first build, a replaced input, more loads than one statement lists),
+it turns nested loops off for its statement (`set local enable_nestloop = off`).
+The planner cannot tell how many raw rows are messages (a CASE over two columns
+of a table that may not be analysed yet), took one, and repeated each message's
+attachment aggregate once per message: 63 s for 20,000 messages, 3 s with hash
+joins. Incremental builds keep their index probes.
+
+**Size, and PostgreSQL 18.** Measured on synthetic histories in 320 conversations
+(one message in ten with a reaction, one in twenty-five with an attachment, a
+quarter of them about 4 KB of text) on one development machine:
+- 180,000 messages (production's size), PostgreSQL 18.1, before #51's staging was
+  merged in: first build 34 s
+  (`messages` 20 s, `events` 6 s, `conversations` 1.9 s); a build after one new
+  message 4.9 s, of which `messages` 1.4 s and `conversations` and `people`
+  0.1 s each, the rest dbt's own start and the other models; a build with nothing
+  new 4.3 s; reading all of them again into the existing tables (a replaced
+  input) 124 s, once.
+- 20,000 messages: first build 7 to 9 s, a build after one message 2.7 to 4.3 s,
+  on PostgreSQL 17.11 and 18.1, the second with the smallest `temp_buffers`.
+The models' tests ran on both versions.
 
 Left for the routes and pages: which conversations to list and how (by
 `last_message_at`, indexed); the month scrubber's counts per conversation (from

@@ -2826,9 +2826,11 @@ yet.
   indexes; chats, handles and contacts are read whole and change only what
   differs; a former message is removed after `events` and `days` have read it; a
   new timezone retimes in place.
-- Fix to phase 1a: the raw-index pre-hook's `commit` left every later statement
-  of the model in its own transaction (dbt did not begin a new one). It now ends
-  with `begin`.
+- Merged `fix/timeline-media-upgrade` (#51, not yet on `main`): the message
+  models stage in its unlogged table and run in the transaction its raw-index
+  hook opens. This branch had found the same missing `begin`; #51's version is
+  kept. Without the staging, reading 8,000 messages of about 4 KB again failed
+  on PostgreSQL 18.1 with the smallest `temp_buffers`.
 - A first build of `messages` turns nested loops off: the planner took the raw
   messages to be one row and repeated the attachment aggregate per message (63 s
   for 20,000 messages, 3 s after).
@@ -2843,7 +2845,15 @@ message, a message that stops being one, a late load, a new timezone) and after
 every step compares the tables with a rebuild from scratch, ids mapped to keys;
 checks the reader reads exactly the seven outputs; replaces and unlinks the
 input; builds all three inputs; and builds a synthetic history of long messages
-(`MIROIR_TIMELINE_MESSAGES`, 20,000 by default). LARGE_RESULTS
+(`MIROIR_TIMELINE_MESSAGES`, 20,000 by default) with the smallest
+`temp_buffers`; a build that fails in a post-hook leaves the tables as they were
+(the test fails without #51's `begin`).
+
+The models' tests (`test_timeline_messages`, `test_timeline_models`,
+`test_messages_models`) ran on PostgreSQL 17.11 and 18.1. At production's size
+(180,000 messages, 18.1, before #51 was merged in): first build 34 s, a build after one new message 4.9 s,
+nothing new 4.3 s, reading everything again 124 s. At 20,000: first build 7 to
+9 s, one message 2.7 to 4.3 s, on both versions.
 
 Not done here: routes and pages, attachment thumbnails, `subject` and group
 events in the tables, `messages` in the server's list of sources.
