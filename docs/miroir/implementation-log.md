@@ -2851,9 +2851,9 @@ input; builds all three inputs; and builds a synthetic history of long messages
 
 The models' tests (`test_timeline_messages`, `test_timeline_models`,
 `test_messages_models`) ran on PostgreSQL 17.11 and 18.1. At production's size
-(180,000 messages, 18.1, before #51 was merged in): first build 34 s, a build after one new message 4.9 s,
-nothing new 4.3 s, reading everything again 124 s. At 20,000: first build 7 to
-9 s, one message 2.7 to 4.3 s, on both versions.
+(180,000 messages, 18.1, before #51 was merged in): first build 34 s, a build
+after one new message 4.9 s, nothing new 4.3 s, reading everything again 124 s.
+At 20,000: first build 7 to 9 s, one message 2.7 to 4.3 s, on both versions.
 
 Not done here: routes and pages, attachment thumbnails, `subject` and group
 events in the tables, `messages` in the server's list of sources.
