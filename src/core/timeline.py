@@ -495,9 +495,16 @@ class TimelineReader:
                 sa.text(
                     f"SELECT day, source, events, frames FROM {self.source.table('days')}"
                     " WHERE day >= :start AND day <= :end AND timezone = :tz"
-                    " ORDER BY day, source"
+                    " AND source = ANY(:sources) ORDER BY day, source"
                 ),
-                {"start": start, "end": end, "tz": self.source.timezone},
+                # Only the sources the server shows: the package counts others
+                # (messages) before any page does.
+                {
+                    "start": start,
+                    "end": end,
+                    "tz": self.source.timezone,
+                    "sources": list(SOURCES),
+                },
             ).all()
         days: dict[str, dict[str, Any]] = {}
         for day, source, events, frames in rows:

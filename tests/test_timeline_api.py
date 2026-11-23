@@ -10,6 +10,7 @@ import gzip
 import html
 import json
 import re
+import tempfile
 import threading
 import time
 from contextlib import closing
@@ -46,6 +47,7 @@ from src.core.timeline import (
 )
 from src.web.app import STATIC_DIR, create_app
 from src.web.timeline_pages import MEDIA_LABELS
+from tests import test_messages_models as apple_messages
 from tests.fakes import FakeObjectStore
 from tests.test_timeline_models import (
     MIDNIGHT,
@@ -1324,3 +1326,55 @@ class TimelinePageTests(TimelineApiFixture):
         self.assertEqual(
             (anonymous.status_code, anonymous.headers["location"]), (303, "/login")
         )
+
+
+class TimelineWithMessagesTests(TimelineApiFixture):
+    """Linking messages changes nothing the existing pages and routes show until
+    the message pages exist (decision 040, phase 2a)."""
+
+    def answers(self, client):
+        answers = {}
+        for route in (
+            *ROUTES,
+            "/api/timeline/days?from=2026-11-01&to=2026-11-30",
+        ):
+            response = call(client, route, headers=BEARER)
+            answers[str(route)] = (response.status_code, response.text)
+        home = client.get("/timeline", headers=BEARER, follow_redirects=False)
+        answers["/timeline"] = (home.status_code, home.headers.get("location"))
+        for day in ("2026-11-20", "2026-11-22"):
+            page = client.get(f"/timeline/{day}", headers=BEARER)
+            answers[day] = (page.status_code, page.text)
+        return answers
+
+    def test_messages_change_no_page_or_route_of_screen_and_browser(self):
+        before = self.answers(self.client())
+        raw = json.loads(json.dumps(self.raw))
+        raw["connections"].append(
+            {"id": "messages", "integration": "apple_messages", "settings": {}}
+        )
+        raw["analyses"][0]["inputs"]["messages"] = "messages"
+        miroir = parse_miroir(json.dumps(raw))
+        number = "+15555550101"
+        guid = "iMessage;-;" + number
+        records = list(apple_messages.chat(guid, number, number))
+        for name, day in (("x1", 20), ("x2", 22)):
+            sent = apple_messages.message(
+                name, 0, guid, handle=number, text="invoice from a message"
+            )
+            sent[0]["date"] = apple_messages.apple(
+                datetime(2026, 11, day, 15, tzinfo=timezone.utc)
+            )
+            records += sent
+        batch = apple_messages.write_batch(
+            Path(tempfile.mkdtemp(dir=self.root)) / "b.jsonl.gz", records
+        )
+        self.send(miroir, "messages", batch.read_bytes())
+        self.assertEqual(
+            self.query(
+                f"select count(*) from {self.schema(miroir, 'timeline')}.days "
+                "where source = 'messages'"
+            ),
+            [(2,)],
+        )
+        self.assertEqual(self.answers(self.client(raw)), before)
