@@ -136,6 +136,7 @@ class BoundaryTests(unittest.TestCase):
             "src.web.app",
             "src.web.connections",
             "src.web.timeline",
+            "src.web.timeline_pages",
             "src.core.service",
             "src.core.runner",
             "src.core.media",

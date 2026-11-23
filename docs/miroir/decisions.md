@@ -2370,6 +2370,27 @@ Left for later: deleting the stored file and its thumbnails when a frame becomes
 withheld (the worker would have to learn of it from the rows, which the server
 cannot write to).
 
+*Second look (2026-11-22)*, fixed with the pages (part 2):
+- *Only analyses that can answer are asked.* The media route asks the timeline
+  analyses reading that connection that have a reader role, and skips one whose
+  tables are not built or that cannot answer (time limit, warehouse error). One
+  answer is enough; withheld in any that answers is withheld. Only when none can
+  answer does it fail closed, with 504 if any reached the time limit and 503
+  otherwise. A second, unbuilt or unread, analysis on the same connection no
+  longer hides every screenshot.
+- *Control characters.* A NUL reached psycopg2 as a `ValueError` (500). The
+  media route checks the key with `valid_key` before the lookup (404); the
+  timeline routes refuse control characters in `q`, `app` and a frame's key, and
+  a cursor carrying a NUL (400).
+- *A lookup connection of its own.* The media route's lookups use a pool of one
+  connection, no overflow, a 2-second wait for it and a 1-second statement limit;
+  the queries keep their four. Five of the reader role's six connections, so one
+  is left for a health check or an operator. A lookup takes about 0.3 ms, so one
+  connection serves a page of thumbnails; a test holds the queries' four
+  connections with slow statements and an image still answers in under a second.
+  A short pool wait on the shared pool was not chosen: a busy pool would then
+  refuse images instead of serving them.
+
 *Review (2026-11-22).* An independent review of pull request #49 found one high
 and two low defects and two missing tests; all are fixed as above, each with a
 test from its reproduction:
@@ -2382,6 +2403,142 @@ test from its reproduction:
 5. The reader reading raw `media_objects`: tested; it cannot. The test of a
    table lacking only some media columns found that `events` did not read its
    rows again; it now does.
+
+### 040 amendment — The Day view and search pages (phase 1c, part 2)
+
+Status: proposed with the pages' pull request, 2026-11-22. What the first version
+of the pages had to decide that the plan left open; *(conservative)* marks the
+choices that touched security, privacy or cost. How to use them is in the README
+(*The timeline's pages*).
+
+**Pages and routes.** `/timeline` opens the latest day with data in the last 400
+days (or today); `/timeline/{day}` is the Day view, `?frame=<key>` opens it at a
+frame (a frame of another day redirects to its own); `/timeline/search` searches.
+The plan's separate scrubber page (`/timeline/screen/{day}`) is the Day view
+itself: the scrubber, the image and the frame's text sit above the lanes, so one
+page holds what the first version needs. No JSON route was added: the pages use
+the five of part 1. The month calendar, the day's counts, the frame named in the
+address and the search results are rendered on the server, so they work without
+JavaScript and are tested as templates; the lanes and the scrubber are drawn in
+the browser from the day's index and its visits.
+
+**Scripts.** Two plain ES modules under `/static/`: `timeline-core.js` (the logic,
+no page: time to frame, key steps, lane geometry, which image size, the loader,
+colours) and `timeline.js` (the page). No framework, no build step.
+`timeline-core.js` is tested with Node's own test runner (`tests/js/`, run by
+`tests/test_timeline_js.py`, skipped where no `node` is installed; GitHub's runners
+have one). No package is installed for it.
+
+**The scrubber.** A native range input over the day's seconds (23 to 25 hours),
+so a finger, a mouse and assistive technology all work on it, and it is placed on
+the same time axis as the lanes. A position shows the last frame at or before it.
+Keys are taken over so that an arrow is a frame, Shift and an arrow a minute,
+Page Up and Down an hour. While it moves it shows the 360-pixel thumbnail; a
+quarter second without moving is a rest, which shows the 1280-pixel one, loads
+the frame's details and preloads the two thumbnails on each side, once each.
+The plan's original on pause was not taken: 1280 pixels fill the view, and the
+original is one link away ("Open the original"), for a stored file with or
+without thumbnails *(conservative: bytes)*.
+
+**Requests while dragging.** One loader per size, each running one load at a
+time, the latest frame asked for next: frames dragged past are never requested.
+Small loads also start at least 100 ms apart, so a fast network does not fetch
+every frame either; a large load or a details request for a frame left is
+cancelled. Measured in Chromium on 1,500 synthetic frames: a drag of five seconds
+over 193 frames made 39 thumbnail requests (four of them preloads), one large
+image and one details request; the handler took at most 3.3 ms a move. Without
+the spacing, a local server answered fast enough for 170 requests.
+
+**Lanes.** Canvas, one per source: Screen coloured by app in runs (a run ends at
+the next frame or after five minutes), Browser one mark per visit, up to 2,000
+visits a day (four pages of the events route). The cursor is a positioned
+element. The visits within fifteen minutes of the frame are listed as text; only
+`http` and `https` addresses become links, with `rel="noreferrer noopener"`.
+
+**Colours.** The API's app colours are used only if they are `#rrggbb`, and set
+through the CSSOM (the policy refuses style attributes, not the CSSOM). Text on
+them is black or white, whichever has the higher WCAG contrast.
+
+**Search.** Rendered on the server; "Older results" swaps in the next page with
+htmx (an ordinary link without it). Moments are listed in the route's order:
+newest window first, then apps by name within a window.
+
+**What the browser keeps** *(conservative)*. No service worker, no IndexedDB, no
+local storage. htmx 2 writes the current address to session storage on every
+page it is loaded on, which no setting stops; on the search page that address
+holds the search's words. So:
+- htmx's history is off (`historyEnabled: false`, `historyCacheSize: 0`): it
+  keeps no snapshot of a page;
+- logging out sends `Clear-Site-Data: "cache", "storage"` (was `"cache"`), and the
+  logout form empties both storages before it is sent, for browsers that ignore
+  the header;
+- a page restored from the back-forward cache reloads, so after logging out Back
+  shows the login, not the day. Checked in Chromium.
+
+**Layout.** Up to 760 pixels wide, one column: image, the frame's text, lanes,
+slider, calendar; lanes (2.4 rem) and slider (2.75 rem) are taller for a finger,
+and a lane lets the page scroll vertically (`touch-action: pan-y`) while a
+horizontal drag scrubs. Checked at 390 pixels with touch emulated: no horizontal
+scrolling. A visible focus ring on everything focusable. `[hidden]` always hides,
+whatever a class sets.
+
+**The header** links the timeline once a reader connection and a timeline
+analysis exist (phase 0 left it out until there was something to see).
+
+Left for the conversations phase and after: the conversation view and message
+search; zooming and panning the image (the plan's tap to zoom); a copy button for
+a frame's text (it is selectable); merged events of other sources around the
+cursor; checking that Safari honours `Clear-Site-Data`.
+
+*Review of the pages (2026-11-22).* An independent review of pull request #50
+found one blocking point, widened on purpose, and three more:
+
+- *Search words are never in an address* *(conservative)*. This revises part 1's
+  `GET /api/timeline/search`. What the owner searched for is text from their own
+  screen; in an address it reached the server's access log, the log of the
+  gateway in front of it (outside this repository, its pod logs readable by
+  tooling that must never see private data) and the browser's history, which
+  `Clear-Site-Data` does not clear. A log filter alone would have left the
+  gateway and the history. So:
+  - the page's search form is sent with POST, and "Older results" posts the
+    words, filters and next-page token as hidden fields of a small form, with
+    htmx (`hx-post` to the bare path, `hx-push-url="false"`) or without it;
+    `GET /timeline/search` shows the empty form;
+  - the JSON route is `POST /api/timeline/search` with a JSON object (at most
+    8 KB): the API's answers are JSON and its clients send JSON; a form body
+    would have been a second shape for one route. Every field is checked as
+    before; `limit` must be a number, an unknown field is refused;
+  - `q` in an address is refused with 400 "Search with POST" on both, a `GET` of
+    the JSON route always, and a POST with parameters in its address too, so
+    nothing quietly goes back to sending words where logs keep them. The words
+    are not echoed in the refusal. The other JSON routes stay GET: their
+    parameters are days, times, keys and cursors;
+  - answers stay `private, no-store`. No anti-forgery token was added: the
+    session cookie is `SameSite=Strict`, cross-origin posts are refused by the
+    login check (`Origin`), and a search changes nothing;
+  - htmx's history is off and no search uses `hx-push-url`; the address htmx
+    notes in session storage is now the bare `/timeline/search`, and it is
+    cleared at logout anyway;
+  - the page's title no longer carries the words: browsers keep titles in their
+    history beside the addresses (found while checking in the browser);
+  - a results page replaces its history entry with an ordinary one for the same
+    bare address (`history.replaceState`), so Back from a moment shows the empty
+    form instead of the browser's "send the form again?" page; without
+    JavaScript, Back offers to send it again, which the browser asks first.
+  Checked in Chromium on the synthetic day (search, older results, a moment,
+  Back, logout): the address bar, the navigation entries, the titles, session
+  storage and the server's access log held no search word.
+- *The access log keeps no query string*, on every path: a filter on uvicorn's
+  access logger keeps the path and drops what follows `?`. Logger filters survive
+  uvicorn's logging configuration, which only replaces handlers; a test starts a
+  real uvicorn server after the app, as `serve` does, and reads its access lines.
+- *An expired login during an htmx request* loaded the login page into the
+  results. A request with `HX-Request` that needs the login now answers 401 with
+  `HX-Redirect: /login`, which htmx follows as a full page load.
+- *Connections per process*: up to five as the reader (four for queries, one for
+  image lookups). During a rolling update two processes hold them, so the role's
+  limit (six, defined in the home-ops repository) covers one process at full
+  use, not two. Recorded in the README's notes; no limit is changed here.
 
 ## 041 — A messages analysis: conversations by identifier, no text
 

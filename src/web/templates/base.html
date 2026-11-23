@@ -8,7 +8,7 @@
 {# Styles and scripts come from /static only: the content security policy
    refuses inline ones. htmx, where a page loads it, runs without eval and
    injects no styles. #}
-<meta name="htmx-config" content='{"allowEval":false,"allowScriptTags":false,"includeIndicatorStyles":false,"selfRequestsOnly":true}'>
+<meta name="htmx-config" content='{"allowEval":false,"allowScriptTags":false,"includeIndicatorStyles":false,"selfRequestsOnly":true,"historyEnabled":false,"historyCacheSize":0}'>
 <link rel="stylesheet" href="/static/miroir.css">
 <script src="/static/miroir.js" defer></script>
 {% block head %}{% endblock %}
@@ -19,7 +19,8 @@
   {% if not anonymous %}
   <a href="/">Connections</a>
   <a href="/config">Configuration</a>
-  <form method="post" action="/logout"><button>Log out</button></form>
+  {% if timeline_link %}<a href="/timeline">Timeline</a>{% endif %}
+  <form method="post" action="/logout" data-logout><button>Log out</button></form>
   {% endif %}
 </header>
 {% if notice %}<p class="notice">{{ notice }}</p>{% endif %}

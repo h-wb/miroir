@@ -310,7 +310,7 @@ class WebMediaBytesTests(WebMediaTests):
         self.client.post("/login", data={"token": ADMIN})
         response = self.client.post("/logout")
         self.assertEqual(response.status_code, 303)
-        self.assertEqual(response.headers["clear-site-data"], '"cache"')
+        self.assertEqual(response.headers["clear-site-data"], '"cache", "storage"')
 
     def test_paths_cannot_reach_another_connection_kind_or_derived_file(self):
         self.objects.add(OBJECT, b"<html><script>x</script>")

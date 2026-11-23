@@ -64,8 +64,16 @@ def timeline_database_url() -> str | None:
     )
 
 
+# The installation's reader role allows 6 connections: 4 for the routes' queries
+# and 1 for the media route's lookups, so an image never waits behind searches.
+LOOKUP_TIMEOUT_MS = 1000
+LOOKUP_POOL_TIMEOUT_SECONDS = 2
+
+
 class TimelineDatabase:
-    """A small pool of read-only, time-limited sessions on the warehouse."""
+    """Small pools of read-only, time-limited sessions on the warehouse: one for
+    the timeline's queries, one connection of its own for the media route's
+    lookups (decision 040)."""
 
     def __init__(
         self, url: str, statement_timeout_ms: int = STATEMENT_TIMEOUT_MS
@@ -78,23 +86,16 @@ class TimelineDatabase:
             ) from None
         if parsed.drivername not in ("postgresql", "postgresql+psycopg2"):
             raise ConfigurationError("The timeline database must be PostgreSQL")
-        self.engine = sa.create_engine(
-            parsed.set(drivername="postgresql+psycopg2"),
-            hide_parameters=True,
-            pool_size=2,
-            max_overflow=2,
-            pool_timeout=CONNECT_TIMEOUT_SECONDS,
-            pool_pre_ping=True,
-            pool_recycle=300,
-            connect_args={
-                "connect_timeout": CONNECT_TIMEOUT_SECONDS,
-                "application_name": "miroir-timeline",
-                # Replaces any `options` the URL carries, so it cannot lift these.
-                "options": (
-                    f"-c statement_timeout={int(statement_timeout_ms)}"
-                    " -c default_transaction_read_only=on"
-                ),
-            },
+        url_parsed = parsed.set(drivername="postgresql+psycopg2")
+        self.engine = _engine(
+            url_parsed, 2, 2, CONNECT_TIMEOUT_SECONDS, statement_timeout_ms
+        )
+        self.lookup_engine = _engine(
+            url_parsed,
+            1,
+            0,
+            LOOKUP_POOL_TIMEOUT_SECONDS,
+            min(LOOKUP_TIMEOUT_MS, statement_timeout_ms),
         )
 
     def health(self) -> dict[str, Any]:
@@ -115,6 +116,30 @@ class TimelineDatabase:
 
     def close(self) -> None:
         self.engine.dispose()
+        self.lookup_engine.dispose()
+
+
+def _engine(
+    url: Any, size: int, overflow: int, wait: float, timeout_ms: int
+) -> sa.Engine:
+    return sa.create_engine(
+        url,
+        hide_parameters=True,
+        pool_size=size,
+        max_overflow=overflow,
+        pool_timeout=wait,
+        pool_pre_ping=True,
+        pool_recycle=300,
+        connect_args={
+            "connect_timeout": CONNECT_TIMEOUT_SECONDS,
+            "application_name": "miroir-timeline",
+            # Replaces any `options` the URL carries, so it cannot lift these.
+            "options": (
+                f"-c statement_timeout={int(timeout_ms)}"
+                " -c default_transaction_read_only=on"
+            ),
+        },
+    )
 
 
 def status(
@@ -235,24 +260,46 @@ def media_withheld(
     """Whether a file belongs to a withheld frame, for the media route.
 
     None when no timeline analysis reads this connection's screenshots: there is
-    nothing to ask. Otherwise every such analysis is asked; a key none of them
-    knows (no frame yet) is not withheld. Fails closed: a timeline that cannot
-    answer raises as its routes do, so the file is never served unchecked.
+    nothing to ask. Otherwise the analyses that can answer are asked: those with
+    a reader role whose tables are built. One answer is enough; withheld in any
+    that answers is withheld; a key none knows (no frame yet) is not. Fails
+    closed: when none can answer, it raises as the timeline routes do, so the
+    file is never served unchecked.
     """
     if kind != SCREENSHOTS:
         return None
-    sources = [
-        _source(a, ())
+    analyses = [
+        a
         for a in miroir.analyses
         if a.package.id == PACKAGE
         and SCREEN_ROLE in a.inputs
         and a.inputs[SCREEN_ROLE].config.id == connection_id
     ]
-    if not sources:
+    if not analyses:
         return None
     if database is None:
         raise TimelineUnavailable(NOT_CONFIGURED)
-    return any(TimelineReader(database, s).withheld(key) for s in sources)
+    readable = [
+        _source(a, ())
+        for a in analyses
+        if analysis_plan(a).variables.get("timeline_reader_role")
+    ]
+    answered = False
+    refusal: TimelineUnavailable | TimelineTimeout = TimelineUnavailable(NOT_BUILT)
+    for source in readable:
+        try:
+            if TimelineReader(database, source).withheld(key):
+                return True
+        except TimelineTimeout as error:
+            refusal = error
+        except TimelineUnavailable as error:
+            if not isinstance(refusal, TimelineTimeout):
+                refusal = error
+        else:
+            answered = True
+    if not answered:
+        raise refusal
+    return False
 
 
 # ---- Reading --------------------------------------------------------------------
@@ -376,6 +423,8 @@ def read_cursor(value: str, shape: tuple[type, ...]) -> list[Any]:
         )
     ):
         raise OperationError("Invalid paging cursor")
+    if any(isinstance(v, str) and "\x00" in v for v in values):
+        raise OperationError("Invalid paging cursor")
     return values
 
 
@@ -408,9 +457,10 @@ class TimelineReader:
         self.source = source
 
     @contextmanager
-    def _session(self) -> Iterator[Any]:
+    def _session(self, lookup: bool = False) -> Iterator[Any]:
+        engine = self.database.lookup_engine if lookup else self.database.engine
         try:
-            with self.database.engine.connect() as db:
+            with engine.connect() as db:
                 yield db
         except DBAPIError as error:
             code = getattr(error.orig, "pgcode", None)
@@ -497,8 +547,9 @@ class TimelineReader:
         }
 
     def withheld(self, key: str) -> bool:
-        """Whether the frame with this media key is withheld; False if unknown."""
-        with self._session() as db:
+        """Whether the frame with this media key is withheld; False if unknown.
+        Through the lookup connection, so it never waits behind searches."""
+        with self._session(lookup=True) as db:
             found = db.execute(
                 sa.text(
                     "SELECT withheld IS NOT NULL"

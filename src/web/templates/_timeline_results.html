@@ -1,0 +1,27 @@
+{% import "_timeline.html" as t %}
+{% for item in results %}
+{% if kind == "screen" %}
+<article class="moment">
+  <a class="moment-image" href="{{ item.open }}">{{ t.media(item.code, labels, item.thumbnail, "Screenshot at " ~ item.clock) }}</a>
+  <div class="moment-text">
+    <p><a href="{{ item.open }}"><time datetime="{{ item.at }}">{{ item.day }} {{ item.clock }}</time></a>
+      {{ t.app_chip(item.app) }}
+      <span class="muted">{{ item.matches }} frame{{ "" if item.matches == 1 else "s" }}{% if item.matches > 1 %}, until {{ item.until_clock }}{% endif %}</span></p>
+    <p class="snippet">{{ t.snippet(item.snippet) }}</p>
+  </div>
+</article>
+{% else %}
+<article class="visit">
+  <p><a href="{{ item.open }}"><time datetime="{{ item.at }}">{{ item.day }} {{ item.clock }}</time></a>
+    <span class="muted">{{ item.site or "" }}</span></p>
+  <p class="snippet">{{ t.snippet(item.snippet) }}</p>
+  {% if item.link %}<p class="muted url"><a href="{{ item.link }}" rel="noreferrer noopener" target="_blank">{{ item.url }}</a></p>{% elif item.url %}<p class="muted url">{{ item.url }}</p>{% endif %}
+</article>
+{% endif %}
+{% endfor %}
+{# The next page: the words, filters and cursor go in the POST body, with htmx
+   or without it; never in an address, and htmx pushes no URL for it. #}
+{% if more %}<form class="more" method="post" action="/timeline/search" hx-post="/timeline/search" hx-target="this" hx-swap="outerHTML" hx-push-url="false">
+{% for name, value in more.items() %}<input type="hidden" name="{{ name }}" value="{{ value }}">
+{% endfor %}<button class="button-link">Older results</button>
+</form>{% endif %}

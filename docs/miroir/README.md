@@ -855,6 +855,18 @@ The server sets both on every session it opens anyway, whatever the role or the
 URL say, so one slow search cannot hold a connection and a mistaken grant cannot
 lead to a write.
 
+**Connections.** Each server process holds up to five connections as the reader:
+four for the timeline's queries and one for the media route's image lookups.
+During a rolling update two processes run at once, so the role's connection
+limit must allow at least ten (the installation's role allows six, set in the
+home-ops repository: enough for one process, not two at full use).
+
+**No search words in addresses.** Searches are sent with POST, the words in the
+body, on the page and in the API; a search address with `q` is refused (400).
+The server's access log also drops the query string of every request it logs (the
+path stays), as a second line of defence. Proxies in front of the server log what
+they receive; with POST, that is no longer the words.
+
 | Route | What |
 |---|---|
 | `GET /timeline` | For a logged-in administrator: whether the timeline is configured and its database reachable and read-only |
@@ -883,7 +895,7 @@ twice, is refused.
 | `GET /api/timeline/screen/{day}` | none | A day's frames as columns, below |
 | `GET /api/timeline/frames/{key}` | none (`key` is the frame's media key, slashes included) | One frame, below; 404 if unknown |
 | `GET /api/timeline/events` | `from`, `to`: a day or a time with offset (`to` as a day includes it); `source`: `screen`, `browser` or both, comma-separated (default both); `limit` 1–500 (200); `after`: the `next` of the previous page | `{events: [...], next}`, events that started in `[from, to)`, oldest first |
-| `GET /api/timeline/search` | `q`: 1–200 characters, web search syntax (`"a phrase"`, `-word`, `or`), with at least one word to look for in every part (`-word` alone, or `a or -b`, is refused with 400); `kind`: `screen` (default) or `browser`; `app`: a bundle identifier (screen only); `from`, `to`: days, inclusive, optional; `limit` 1–50 (20); `before`: the `next` of the previous page | Moments or visits, newest first, below |
+| `POST /api/timeline/search` | A JSON object in the body (`Content-Type: application/json`, else 415; at most 8 KB; each field once), never parameters in the address (a `GET`, or `q` in the address, answers 400 "Search with POST"). Fields, `null` for absent: `q`: 1–200 characters, web search syntax (`"a phrase"`, `-word`, `or`), with at least one word to look for in every part (`-word` alone, or `a or -b`, is refused with 400); `kind`: `screen` (default) or `browser`; `app`: a bundle identifier (screen only); `from`, `to`: days, inclusive, optional; `limit` a number 1–50 (20); `before`: the `next` of the previous page; any other field is refused | Moments or visits, newest first, below |
 
 The screen index of a day, made small for about 3,000 frames (about 110 KB, 15 KB
 compressed):
@@ -958,12 +970,73 @@ decodes an image.
 For a connection that a timeline analysis reads as its `screen` input, the route
 first asks the timeline about a screenshot's key, at every size and for the plain
 redirect: a withheld frame's file answers 404 (it may have been stored before a
-newer rule withheld the frame). A key with no frame yet is served. If the timeline
-cannot answer (no reader configured, tables not built, warehouse down, the time
-limit), the route refuses with the timeline's own error (503 or 504) rather than
-serve the file. Connections no timeline analysis reads are not affected. The file
-itself stays in the bucket: it is hidden, not deleted. Logging out sends `Clear-Site-Data: "cache"`, so the browser
-drops the screenshots it kept.
+newer rule withheld the frame). A key with no frame yet is served. Only the
+analyses that can answer are asked (a `reader_role` set and tables built); one
+answer is enough, and a frame withheld in any of them stays hidden. If none can
+answer (no reader configured, tables not built, warehouse down, the time limit),
+the route refuses with the timeline's own error (503 or 504) rather than serve the
+file. The lookup has a warehouse connection of its own, so images do not wait
+behind slow searches. A key with a control character is 404 before any lookup.
+Connections no timeline analysis reads are not affected. The file itself stays in
+the bucket: it is hidden, not deleted. Logging out sends `Clear-Site-Data: "cache",
+"storage"`, so the browser drops the screenshots it kept and anything a page left
+in its storage.
+
+#### The timeline's pages
+
+With a timeline configured, the header links **Timeline**. Every page needs the
+login and is `Cache-Control: private, no-store`; JavaScript fills the Day view's
+lanes and scrubber from the API above, and the rest of each page works without it.
+
+- `/timeline` opens the latest day with screen frames or browser visits in the
+  last 400 days, or today. Without a reader connection or a timeline analysis it
+  shows why (503), as does every timeline page; tables not built yet, or the
+  warehouse down, say so too (503), and a query past the time limit 504.
+- `/timeline/{day}` (for example `/timeline/2026-11-20`) is the **Day view**:
+  - a month calendar beside it, each day shaded by its frames plus visits (none,
+    tens, hundreds, thousands), and links to the days before and after;
+  - the frame shown, with its time, app (on the app's colour), state and its
+    masked text, selectable as text, and "Open the original" when its file is
+    stored;
+  - two lanes on the day's time axis (23 to 25 hours long): **Screen**, coloured
+    by app, and **Browser**, one mark per visit; the legend names the apps;
+  - the browser visits within fifteen minutes of the frame shown;
+  - a day with nothing recorded says so and loads no scrubber.
+- `?frame=<key>` opens the day at that frame (search results link this way; a
+  frame of another day opens on its own day). The address follows the scrubber.
+- **Scrubbing**: drag the slider, or drag or tap a lane, with a mouse or a finger.
+  Keys on the slider or a lane: arrows a frame, Shift and an arrow a minute, Page
+  Up and Page Down an hour, Home and End the first and last frame. While moving
+  it shows the 360-pixel thumbnail, at most ten a second, and only of the frame
+  under the cursor; when it rests (a quarter second) it shows the 1280-pixel one,
+  loads the frame's text and preloads the two thumbnails on each side.
+- What the image area says instead of an image: **Not stored yet** (no record of
+  the file: it may still be queued or not derived), **No thumbnail could be
+  made** (stored; "Open the original" may still show it), **Withheld** (never
+  uploaded; no text either), **The image could not be loaded** (a record whose
+  file is gone).
+- `/timeline/search` is the search form. It is sent with POST, so the words are
+  never in the address bar, the browser's history or a log; an address with
+  `?q=` is refused (400) and shows the empty form. It searches screen text
+  (moments: one app, one five-minute window, newest window first, apps in name
+  order within one) or, with **Browser visits**, page titles and addresses.
+  Filters: an app's bundle identifier (screen only) and a date range. Each moment
+  opens the Day view at its first match (`?frame=<key>`: a file name, not text);
+  "Older results" posts the words, filters and next-page token again, in place
+  with htmx or as a page without it. A search with no word to look for (`-word`
+  alone, `a or -b`) says so (400).
+- A request made by htmx after the login expired loads the login page instead of
+  being swapped into the page (`HX-Redirect`).
+- On a phone (up to 760 pixels wide) everything is one column: the image, then
+  the frame's text, then the lanes, the slider and the calendar; lanes and slider
+  are taller for a finger.
+
+Data is always shown as text: titles, snippets and screen text are never read as
+markup, and only `http` and `https` addresses become links (`rel="noreferrer"`).
+The pages keep nothing in the browser beyond its HTTP cache: no service worker,
+no IndexedDB; htmx's history is off, the address it still notes in session
+storage is cleared at logout, and a page restored from the back-forward cache
+after logging out reloads (and asks for the login).
 
 ### The timeline package
 

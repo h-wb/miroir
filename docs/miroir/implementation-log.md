@@ -2703,3 +2703,76 @@ An independent review found one high and two low defects and two missing tests
 
 Validation: 405 tests, one skipped (the benchmark, on request), with ruff, format,
 mypy and the collector's strict mypy clean.
+
+## 2026-11-22 — Timeline phase 1c, part 2: the Day view and search pages
+
+What (decision 040, amendment "The Day view and search pages", and its "Second
+look" notes):
+
+- **Leftovers of #49.** The media route asks only the timeline analyses that can
+  answer and fails closed only when none can; control characters are refused
+  before the warehouse (404 on `/media`, 400 on the API); the media route's
+  lookups have a connection of their own (five of the reader role's six).
+- **Pages** (`src/web/timeline_pages.py`, templates `timeline_day.html`,
+  `timeline_search.html`, `_timeline_results.html`, `_timeline.html`):
+  `/timeline` opens the latest day, `/timeline/{day}` the Day view with a month
+  calendar, the frame named in the address and the day's counts rendered on the
+  server, `/timeline/search` the moments and visits with "Older results" by htmx.
+- **Scripts**: `static/timeline-core.js` (logic, tested by `node --test`) and
+  `static/timeline.js` (lanes on canvas, the scrubber, the frame's details, the
+  visits near the cursor). One loader per image size, latest frame first, small
+  images 100 ms apart, large images and details cancelled when left.
+- **Leaving nothing behind**: htmx history off; logout sends `Clear-Site-Data:
+  "cache", "storage"` and empties the page's storages; a page restored from the
+  back-forward cache reloads.
+- The header links the timeline when one is configured.
+
+Validation: route and template tests for every page state (no reader, no
+analysis, not built, an empty day, a day with frames, each media code, withheld,
+a frame of another day, an unknown frame, search with results, with none,
+refused, the next page as a fragment, data escaped); the review's reproductions
+for the leftovers; `tests/js/timeline_core.test.mjs` (12 tests). Looked at in
+Chromium (Chrome DevTools) on a synthetic day of 876 frames, with solid-colour
+WebP thumbnails made by a separate script and served from a fake bucket: desktop
+and 390 pixels with touch emulated, keyboard steps, a touch drag on a lane, a
+five-second drag over 193 frames (39 thumbnail requests, one large, one details
+request), every tile, search with paging, the refused search, logout and Back.
+No content security policy violation was reported, and nothing was left in
+storage after logging out.
+
+The server suite is green: 416 tests, one skipped (the benchmark, on request), with
+ruff, format, mypy and the collector's strict mypy clean.
+
+## 2026-11-22 — Review of pull request #50: search words leave addresses
+
+- Search is POST everywhere: the page's form and its "Older results" (hidden
+  fields, `hx-post` to the bare path), and `POST /api/timeline/search` with a
+  JSON body. `q` in an address answers 400 "Search with POST" on both; a GET of
+  the JSON route always does. This revises #49's search route (decision 040,
+  amendment, *Review of the pages*).
+- uvicorn's access lines keep the path and drop the query string, on every path.
+- An htmx request that needs the login gets `HX-Redirect: /login`.
+- The README says each process holds up to five reader connections, so the
+  role's limit must cover two processes during a rolling update.
+
+Validation: tests for the POST search (page, fragment, JSON), the refusals of
+`q` in an address without echoing it, the hidden fields and attributes of
+"Older results", `HX-Redirect`, and a real uvicorn server's access lines
+(the test fails with the filter disabled). Looked at again in Chromium on the
+synthetic day: search, older results, Back, logout.
+
+The server suite is green: 420 tests, one skipped (the benchmark, on request), with
+ruff, format, mypy and the collector's strict mypy clean.
+
+## 2026-11-22 — Second look at pull request #50: search hardening
+
+- `POST /api/timeline/search` answers 415 unless the body is declared
+  `application/json` (a charset is fine), and 400 for a repeated field.
+- The page's form is read with small limits (no files, 10 fields, 8 KB a part);
+  a form over them, or words over 200 characters, is refused without writing
+  the value back into the form.
+- The JSON router was included twice; a test now walks every route (included
+  routers are kept as wrappers here) and finds no path and method twice.
+
+Validation: 423 tests, one skipped (the benchmark, on request), with ruff,
+format, mypy and the collector's strict mypy clean.
