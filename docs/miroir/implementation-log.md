@@ -2776,3 +2776,49 @@ ruff, format, mypy and the collector's strict mypy clean.
 
 Validation: 423 tests, one skipped (the benchmark, on request), with ruff,
 format, mypy and the collector's strict mypy clean.
+
+## 2026-11-23 — Timeline phase 2a: the data for conversations
+
+What: the `timeline` package reads Apple Messages as a third optional input,
+`messages`, and builds what a conversation view, a message search and a Messages
+lane will read (decision 040, amendment *Conversations data*). No route or page
+yet.
+
+- Decision 041's rules became macros in `dbt/macros/messages.sql`, called by the
+  messages package's staging models (unchanged output) and by the timeline.
+- New readable tables: `conversations` (opaque `conversation_id`, name, group,
+  participants, first and last times, count), `messages` (text as delivered,
+  sender, time, local day, service, edited, unsent, audio, the message it replies
+  to, standing reactions and ordered attachments as JSON, with the worker's
+  record of each file when `media_objects` exists) and `people` (names). New
+  internal tables: `timeline_secret` (the analysis's random key, kept by a
+  rebuild from scratch) and `timeline_message_chats` (chat to conversation).
+- A message is one event of source `messages` (title its text, group its
+  conversation id, empty search vector) and counts in `days`.
+- Incremental like the screen: only completed loads; a message sent again
+  replaces its row; reactions, links, attachments, media records and chats whose
+  conversation changed reach the messages they touch, found through new raw
+  indexes; chats, handles and contacts are read whole and change only what
+  differs; a former message is removed after `events` and `days` have read it; a
+  new timezone retimes in place.
+- Fix to phase 1a: the raw-index pre-hook's `commit` left every later statement
+  of the model in its own transaction (dbt did not begin a new one). It now ends
+  with `begin`.
+- A first build of `messages` turns nested loops off: the planner took the raw
+  messages to be one row and repeated the attachment aggregate per message (63 s
+  for 20,000 messages, 3 s after).
+
+Validation: `tests/test_timeline_messages.py` builds both packages on the
+messages package's fixture and compares them; checks text, reactions,
+attachments, ids, events, days and the search index; runs a sequence of
+incremental builds (edit, unsend, reactions changed and removed, messages before
+their chat, a chat sent again, a chat becoming a group, late attachment metadata
+and links, media records written and replaced, a renamed contact, a moved
+message, a message that stops being one, a late load, a new timezone) and after
+every step compares the tables with a rebuild from scratch, ids mapped to keys;
+checks the reader reads exactly the seven outputs; replaces and unlinks the
+input; builds all three inputs; and builds a synthetic history of long messages
+(`MIROIR_TIMELINE_MESSAGES`, 20,000 by default). LARGE_RESULTS
+
+Not done here: routes and pages, attachment thumbnails, `subject` and group
+events in the tables, `messages` in the server's list of sources.
