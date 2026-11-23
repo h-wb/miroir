@@ -24,6 +24,7 @@
             'attachments': ['_dlt_load_id', 'guid', 'media_key'],
             'media_objects': ['_dlt_load_id', 'key'],
             '_dlt_loads': ['load_id', 'inserted_at']}) }}", 'transaction': false},
+        "{{ timeline_messages_plan() }}",
         "{{ timeline_remove_foreign(['messages']) }}",
         "{{ timeline_messages_retime() }}",
     ],

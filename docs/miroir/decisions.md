@@ -2540,6 +2540,152 @@ found one blocking point, widened on purpose, and three more:
   limit (six, defined in the home-ops repository) covers one process at full
   use, not two. Recorded in the README's notes; no limit is changed here.
 
+### 040 amendment — Conversations data (phase 2a)
+
+Status: proposed with the phase 2a pull request, 2026-11-23. What giving the
+timeline its Apple Messages data had to decide that the plan left open. It adds
+tables only: no route reads them yet, and the pages come in a later slice.
+*(conservative)* marks the choices that touched privacy, correctness or cost.
+The tables are listed in the README (*The timeline package*).
+
+**A third input, `messages`.** The `timeline` package reads an `apple_messages`
+connection as the optional role `messages`. Any non-empty subset of `screen`,
+`browser` and `messages` builds; every model builds, empty, for an input that is
+not linked.
+
+**One rule for both packages** *(conservative)*. Decision 041's rules move into
+macros (`dbt/macros/messages.sql`) that the messages package's staging models and
+the timeline's models both call: a person (`messages_address`), a chat's
+identifier, whether it is a group, its conversation key, a contact's name, what a
+row is (message, reaction, removal, event), a reaction's kind and target, a time
+that is no time, edited and unsent, an attachment's type and link previews, and
+which reactions stand. The messages package's tables are unchanged by the move,
+and a test builds both packages on the same rows and compares conversations,
+messages, senders, reactions, attachments, participants and names.
+
+**The opaque conversation id** *(conservative)*. Every route will name a
+conversation by `conversation_id`: 32 hex characters, the first 128 bits of
+SHA-256 over a random key of the analysis and the conversation key. The key
+(`timeline_secret`, one row, 244 random bits from two `gen_random_uuid()`) is made
+at the first build and readable by the owner alone; a plain hash of the key was
+rejected because direct conversation keys are phone numbers, few enough to try
+every one, and the schema's name is no secret. The conversation key itself is in
+no table the reader can read: `conversations` and `messages` hold only the id.
+- Unchanged by ordinary incremental builds, by a rebuild from scratch
+  (`timeline_secret` is `full_refresh=false`, so `--full-refresh` keeps it), by a
+  replaced or unlinked input, a new timezone or a changed reader role.
+- Changed by a new key: dropping `timeline_secret` or the analysis's schema, or a
+  new analysis (another analysis id or Miroir id is another schema). Every id
+  changes then, and links to conversations stop working.
+- Changed for one conversation when its key changes: a change of decision 041's
+  rule, or a chat that becomes a group (an unstyled chat that lists a second
+  handle) or stops being one. Its messages follow it to the new id.
+A random id stored per conversation was the alternative; it would have been lost
+at every rebuild from scratch, or needed a table that a rebuild may not touch
+holding every conversation key, which this keeps to a single random value.
+
+**The tables.** Three the reader can read, `conversations`, `messages` and
+`people`; two it cannot, `timeline_secret` and `timeline_message_chats` (one row
+per Apple chat with its conversation key). A message's reactions and attachments
+are ordered JSON arrays on its row rather than tables of their own: a page of a
+conversation is then one indexed range, a reaction or a file record rewrites the
+one message it belongs to, and the result has one key to merge on.
+- *Text* is kept as the collector delivered it, masked on the device; nothing is
+  masked or unmasked here, and the U+FFFC that stands for each attachment stays.
+  `text_unreadable` marks an archive the collector could not read. The messages
+  package still holds no text (041).
+- *Attachments*, in order of creation time, then transfer name, then guid: the
+  database's own order (its row numbers) is not sent, and the U+FFFC in the text
+  cannot be matched to a file without the archive. Link previews are left out as
+  in 041. Each carries what the worker recorded in `media_objects` (this
+  connection's rows of kind `attachments`): `media_status`, `thumbnail_w360`,
+  `thumbnail_w1280`, all null without a record or without the table, which means
+  unknown, as for screenshots. No `media_objects` exists for Messages yet.
+- *Reactions*, those that stand under 041's rule, oldest first, each with its
+  kind, sender, part and time. A changed tapback, a removal and a removal that
+  follows a change end in the same state as in the messages package.
+- *Search*: a GIN index on `to_tsvector('simple', text)` of `messages`; a result
+  has its `guid`, `conversation_id` and `sent_at`, enough to open the
+  conversation at it.
+
+**What `events` holds for a message.** One row per dated message: `title` is its
+text, `body` null, `group_key` its `conversation_id`, the media columns its first
+attachment's, and `payload` the guid, conversation, whether it is mine, the
+sender, the service, the numbers of attachments and reactions, edited, unsent,
+audio and the message it replies to. The title is the text because the title is
+what a list of events shows as each line. Who sent it and in which conversation
+are not written as names, because names change: the lane resolves them through
+`people` and `conversations`. Its `search` is empty *(conservative: cost)*: message
+text is searched in `messages`, and the browser's search through the shared index
+would otherwise step over every message. An undated message is not on the time
+axis and has no event. `days` counts messages per local day like any source.
+
+**How names resolve.** `people` is the one small table of names: a person
+(`messages_address`), the address book's name (decision 038's matching), the
+handle as Messages writes it, and the name to show. A message's sender is shown
+as that name, else as the message writes the handle (`sender_written`), as in
+041. A conversation's `display_name` is its group's title, else its people's
+names (four, then "+N"), else "Group"; for a direct conversation, its person's
+name, else the handle as written. `people` and `conversations` are rebuilt every
+build, so a renamed contact renames old messages and conversations at the next
+build and no message row is rewritten. Two differences from 041, which picks the
+title and the identifier from the chat with the latest message: the timeline takes
+them from the chat loaded last, because it keeps no per-chat message times, and
+writes a person one way across all conversations (041 per conversation).
+
+**What makes a message be read again.** Rows of loads `_dlt_loads` lists as
+complete, from the loads completed since the model's cursor, as for the screen:
+- a message row (new, or sent again after an edit, an unsend or from another Mac):
+  its row is replaced;
+- a reaction or removal: its target;
+- a link to a chat, an attachment's metadata, a link to an attachment, a media
+  record: the messages they belong to;
+- a chat whose conversation changed: all its messages. Chats and their handles are
+  snapshots of a few hundred rows, so each build reads them whole and
+  `timeline_message_chats` writes only the chats that changed, with a new stamp
+  only when their conversation did. A chat sent again unchanged, or with a new
+  title, reads no message. Contacts never make a message be read.
+Each is found through an index on the raw tables (load ID, guid, chat, attachment,
+media key, and the reaction's target expression), created by the build as for the
+screen. A guid sent again as something other than a message is kept as a deleted
+row until `events` and `days` have read it; `days`' last post-hook removes it. A
+message that moves keeps its old times in `previous_sent_at` until `days` has read
+it. After a new timezone a pre-hook gives every message the new local day in
+place, through an index on its `timezone` column, instead of reading all again.
+A test checks after every step of a sequence (an edit, an unsend, reactions
+changed and removed, messages before their chat, a chat sent again, a chat that
+becomes a group, attachment metadata and links late, media records written and
+replaced, a contact renamed, a message moved and one that stops being a message,
+a load completing late, a new timezone) that the tables equal a rebuild from
+scratch, and that a rebuild from scratch keeps the ids.
+
+**The models' transaction** (a fix to phase 1a). The pre-hook that creates raw
+indexes ended with `commit`, meant to end its checks' transaction before the
+model's own began. dbt's connection still counted that transaction as open and
+began none, so on `screen_frames` and `timeline_browser` the other hooks, the
+statement and the post-hooks ran each in its own transaction, against what their
+comments say (the exact privileges in the same transaction as the rows). The hook
+now ends with `commit; begin`, and they share one transaction again. Found when
+`messages`' `set local` had no effect.
+
+**Size, and PostgreSQL 18.** MEASURED
+
+Left for the routes and pages: which conversations to list and how (by
+`last_message_at`, indexed); the month scrubber's counts per conversation (from
+`messages` by `(conversation_id, sent_at)`, not a table); `subject`, group events
+(renames, people added), stickers' own files, the emoji of an emoji reaction,
+edit history and read times, none of which the tables hold; the source name
+`messages` in the server's list of sources; and thumbnails for attachments, which
+the worker does not make yet.
+
+Consequences:
+- The reader role can read message text. It is the server's own role (040).
+- Links to a conversation last as long as `timeline_secret`; dropping it, or the
+  schema, breaks them.
+- `conversations` and `people` are rebuilt in full every build. They read the
+  chats and contacts whole and scan `messages`' indexes, which grow with the
+  history (measured above).
+
 ## 041 — A messages analysis: conversations by identifier, no text
 
 Status: accepted, 2026-11-22. Builds on 022, 038 and 040. Revised the same day

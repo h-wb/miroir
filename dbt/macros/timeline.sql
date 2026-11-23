@@ -210,8 +210,11 @@
         {%- endfor -%}
     {%- endif -%}
     {#- Each index commits on its own. The checks opened a transaction, which the
-        last commit ends before the model's own begins. -#}
-    {{- statements | join(';\ncommit;\n') ~ ';\ncommit' if statements else 'commit' -}}
+        last commit ends; the begin opens the one the model's other hooks, its
+        statement and its post-hooks then share. dbt does not open it itself: its
+        connection still counts the checks' transaction as open, so without the
+        begin they would each commit on their own. -#}
+    {{- statements | join(';\ncommit;\n') ~ ';\ncommit;\nbegin' if statements else 'commit;\nbegin' -}}
 {%- endmacro %}
 
 {# How far every model that reads this one's previous positions has read it:
@@ -350,5 +353,19 @@
     {%- set tz = timeline_literal(var('timezone')) -%}
     update {{ this }} set day = {{ timeline_local_day('sent_at') }}, timezone = {{ tz }}
     where timezone < {{ tz }} or timezone > {{ tz }}
+    {%- endif -%}
+{%- endmacro %}
+
+{# Pre-hook of messages, before any other in its transaction: when this build
+   reads every message (a first build, a replaced input, too many loads), join by
+   hash. The planner cannot estimate how many raw rows are messages (a CASE over
+   two columns of a table that may not be analysed yet) and otherwise takes one,
+   then repeats each per-message aggregate once per message. An incremental
+   build keeps its index probes. #}
+{% macro timeline_messages_plan() -%}
+    {%- if not is_incremental()
+        or timeline_replaced(['messages']) | length > 0
+        or timeline_load_cursor('apple_messages', false).rebuild -%}
+    set local enable_nestloop = off
     {%- endif -%}
 {%- endmacro %}

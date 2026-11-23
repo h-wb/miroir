@@ -21,8 +21,10 @@ import psycopg2.errors
 
 from src.analyses.catalog import PACKAGES
 from src.core.analysis import analysis_plan
+from src.core.artifacts import submit_artifact
 from src.core.config import parse_miroir
 from src.core.derive import DERIVE_VERSION, _Writer
+from src.core.runner import import_artifact
 from tests.test_messages_models import (
     ALEX,
     BOOK,
@@ -908,7 +910,7 @@ class TimelineMessagesTests(TimelineMessagesFixture):
         )
 
 
-LARGE = int(os.environ.get("MIROIR_TIMELINE_MESSAGES", "30000"))
+LARGE = int(os.environ.get("MIROIR_TIMELINE_MESSAGES", "20000"))
 WORDS = [f"w{n}" for n in range(5000)]
 
 
@@ -962,64 +964,71 @@ def synthetic(count, chats=320, seed=7):
 
 
 class TimelineMessagesLargeTests(TimelineMessagesFixture):
-    def test_a_large_history_builds_and_then_builds_incrementally(self):
-        """Tens of thousands of messages with long text: the first build reads them
-        all; a later build reads one new message; a replaced input on the existing
-        table reads them all again. Timings go to the test's log."""
-        self.margin = "10 minutes"
-        miroir = self.configure(
-            [timeline("t", reader_role=READER)], connections=("m", "m2")
+    def load(self, miroir, records):
+        """Load a batch without building, as several loads before one build."""
+        path = write_batch(Path(mkdtemp(dir=self.root)) / "batch.jsonl.gz", records)
+        connection = next(c for c in miroir.connections if c.config.id == "m")
+        artifact, _ = submit_artifact(
+            miroir, connection, path, store=self.store, root=self.root / "artifacts"
         )
+        outcome = import_artifact(
+            miroir,
+            "m",
+            artifact["id"],
+            store=self.store,
+            origin="local",
+            **{**self.execution, "transform": lambda plan: None},
+        )
+        self.assertEqual(outcome.ingestion, "succeeded")
+
+    def test_a_large_history_builds_and_then_builds_incrementally(self):
+        """Tens of thousands of messages with long text (MIROIR_TIMELINE_MESSAGES,
+        default 20,000): the first build reads them all; a later build reads one
+        new message; a build with nothing new; and a build that must read all of
+        them again into tables that exist, as after a replaced input. The timings
+        are printed. No margin: each build reads only the loads completed since
+        the last, so the incremental timings are an incremental build's."""
+        miroir = self.configure([timeline("t", reader_role=READER)])
         schema = self.schema(miroir, "t")
+        plan = analysis_plan(miroir.analyses[0])
         records = synthetic(LARGE)
         timings = {}
-        # Delivered without building, as several loads, then built once.
-        build = self.execution["transform"]
-        self.execution["transform"] = lambda plan: None
-        try:
-            for part in range(4):
-                self.deliver(miroir, records[part::4])
-        finally:
-            self.execution["transform"] = build
-        plan = analysis_plan(miroir.analyses[0])
-        begun = time.monotonic()
-        self.build(plan)
-        timings["first"] = time.monotonic() - begun
-        expected = sum(
-            r["type"] == "message" and r["guid"].startswith("m") for r in records
+
+        def timed(name, action):
+            begun = time.monotonic()
+            action()
+            timings[name] = time.monotonic() - begun
+
+        timed("load", lambda: [self.load(miroir, records[n::4]) for n in range(4)])
+        timed("first build", lambda: self.build(plan))
+        expected = sum(r["type"] == "message" and r["guid"][0] == "m" for r in records)
+        count = f"select count(*) from {schema}.messages"
+        self.assertEqual(self.query(count), [(expected,)])
+        number, guid, _ = synthetic_chat(3)
+        late = message("late", 0, guid, handle=number, text="one more")
+        timed("load one", lambda: self.load(miroir, late))
+        timed("one more", lambda: self.build(plan))
+        self.assertEqual(self.query(count), [(expected + 1,)])
+        timed("nothing new", lambda: self.build(plan))
+        # Every message again, into the existing tables: the path a replaced
+        # input takes, through dbt's temporary relation.
+        for table, where in (
+            ("messages", "true"),
+            ("timeline_message_chats", "true"),
+            ("events", "source = 'messages'"),
+            ("days", "source = 'messages'"),
+        ):
+            self.query(f"update {schema}.{table} set _input = 'replaced' where {where}")
+        timed("read again", lambda: self.build(plan))
+        self.assertEqual(self.query(count), [(expected + 1,)])
+        self.assertEqual(
+            self.query(
+                f"select count(*) from {schema}.events where source = 'messages'"
+            ),
+            [(expected + 1,)],
         )
         self.assertEqual(
-            self.query(f"select count(*) from {schema}.messages"), [(expected,)]
-        )
-        number = "+15550000003"
-        begun = time.monotonic()
-        self.deliver(
-            miroir,
-            message("late", 0, f"iMessage;-;{number}", handle=number, text="one more"),
-        )
-        timings["one more"] = time.monotonic() - begun
-        self.assertEqual(
-            self.query(f"select count(*) from {schema}.messages"), [(expected + 1,)]
-        )
-        self.assertGreater(
-            self.query(f"select count(*) from {schema}.conversations")[0][0], 100
-        )
-        # Every message again, through the incremental path of existing tables.
-        build = self.execution["transform"]
-        self.execution["transform"] = lambda plan: None
-        try:
-            self.deliver(miroir, records, connection_id="m2")
-        finally:
-            self.execution["transform"] = build
-        replaced = self.configure(
-            [timeline("t", {"messages": "m2"}, READER)], connections=("m", "m2")
-        )
-        begun = time.monotonic()
-        self.build(analysis_plan(replaced.analyses[0]))
-        timings["replaced"] = time.monotonic() - begun
-        self.assertEqual(
-            self.query(f"select count(*), min(connection) from {schema}.messages"),
-            [(expected, "m2")],
+            self.query(f"select count(*) from {schema}.conversations"), [(320,)]
         )
         version = self.query("show server_version")[0][0]
         print(

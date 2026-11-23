@@ -667,7 +667,10 @@ last times and from reply times.
   `messages_received`, `conversations_active`, `attachments`, `reactions`.
 
 The models are built only for an analysis. Each build is a full one, about four
-seconds for 200,000 messages.
+seconds for 200,000 messages. The rules above (who a person is, what a
+conversation, a message and a standing reaction are) are macros in
+`dbt/macros/messages.sql` that the timeline's message tables use too, so a
+conversation is the same in both; the timeline's are the tables with text.
 
 ### Media: files that rows point at
 
@@ -1041,12 +1044,13 @@ after logging out reloads (and asks for the login).
 ### The timeline package
 
 The `timeline` analysis package builds the tables the timeline reads. Its inputs
-are `screen` (a ScreenMemory connection) and `browser` (a browser history
-connection), both optional; link one or both:
+are `screen` (a ScreenMemory connection), `browser` (a browser history
+connection) and `messages` (an Apple Messages connection), all optional; link
+any of them:
 
 ```json
 {"id": "timeline", "package": "timeline",
- "inputs": {"screen": "screen", "browser": "browser"},
+ "inputs": {"screen": "screen", "browser": "browser", "messages": "messages"},
  "timezone": "America/Toronto",
  "parameters": {"reader_role": "miroir_timeline"}}
 ```
@@ -1059,6 +1063,9 @@ It writes these relations to `miroir_<analysis>_<identity>_timeline`:
 | `events` | One row per event, the same columns for every source: `source`, `connection`, `event_id`, `started_at`, `ended_at`, `kind`, `title`, `body`, `media_kind`, `media_key`, `media_status`, `thumbnail_w360`, `thumbnail_w1280`, `group_key`, `payload`, `search`. The screen gives one row per app session (`kind` `app_session`, `group_key` the bundle, `media_key` the first frame), not one per frame; the browser one per visit (`group_key` the site). `search` weights the title over the body, `simple` configuration. |
 | `days` | Per local day, in the analysis's timezone, and source: `events` that started that day and, for the screen, `frames`. |
 | `apps` | Bundle identifier to `name` and `colour`, for a list of common apps and every app seen. Others are named from their identifier, with a palette colour. |
+| `conversations` | One row per conversation (one person or one group, whatever Apple chats it has): `conversation_id` (opaque, below), `display_name`, `is_group`, `title` (a group's own), `participants` (`people.handle` values, never me), `participant_count`, `first_message_at`, `last_message_at` (both without undated messages), `message_count`. |
+| `messages` | One row per message (no reactions or group events): `guid`, `conversation_id` (null when it is in no known chat), `sent_at` (null when undated), `day` (local, in `timezone`), `is_from_me`, `sender_handle` (a `people.handle`, null for mine), `sender_written` (the handle as this message writes it), `service`, `text` (as the collector delivered it, masked on the device), `text_unreadable`, `is_edited`, `is_unsent`, `edited_at`, `is_audio`, `reply_to_guid`, `attachments` and `reactions` (JSON arrays, below), `deleted`. Search with `to_tsvector('simple', text)`, the indexed expression. |
+| `people` | One row per person other than me: `handle` (the person: an address in lower case, a number's digits), `name` (the address book's, or null), `written` (as Messages writes the handle), `display_name`. |
 
 An app session is a run of frames of one app with no pause over five minutes.
 Frames without an app neither start nor end one. Redirects, reloads, embeds and
@@ -1085,10 +1092,49 @@ load, say) is still read. A load that never completes is never read.
   Places reuses the IDs of cleared visits. The old times stay on the row until
   every model that recounts them has read it, so a build that fails part way
   loses none.
+- A message sent again (an edit, an unsend, another Mac) replaces its row. A
+  reaction, a link to a chat, an attachment's metadata or link, or a media record
+  reaches its message at the next build; so does a chat whose conversation
+  changed, for all its messages. Chats, their handles and contacts are small and
+  read whole each build: a chat sent again unchanged, or a new title or name,
+  reads no message. A new timezone changes every message's `day` in place.
 - The result is what a first build over the same rows gives.
 
 `timeline_screen` and `timeline_browser` are the two sources' own models and are
 not meant to be read.
+
+**Messages.** A conversation is decision 041's: the chat's own identifier, one
+person whatever the service or the macOS version, and the rules are the macros
+the messages package uses too (`dbt/macros/messages.sql`), so the two packages
+agree. Routes name a conversation only by `conversation_id`: 32 hex characters, a
+keyed hash of the conversation key with a random key of the analysis
+(`timeline_secret`, which only the owner can read). A direct conversation's key is
+a phone number or an address; it is in no table the reader can read.
+- The id stays the same across builds and across a rebuild from scratch, and
+  when the input is replaced or unlinked. It changes when `timeline_secret` or
+  the schema is dropped, for a new analysis, and for one conversation whose key
+  changes (a chat that becomes a group).
+- A message's `attachments` are in order (creation time, then transfer name,
+  then guid), without link previews, each with `guid`, `media_key`, `kind`
+  (image, video, audio, document, other), `mime_type`, `bytes`,
+  `transfer_name`, and what the worker recorded of its file in `media_objects`:
+  `media_status`, `thumbnail_w360`, `thumbnail_w1280`, null when there is no
+  record, which means unknown.
+- Its `reactions` are those that stand, oldest first: `kind` (love, like,
+  dislike, laugh, emphasis, question, emoji, sticker), `from_me`, `sender`, `part`,
+  `at` (UTC). A removed or changed tapback ends as in the messages package.
+- Names resolve through `people`: show a sender as `people.name`, else as the
+  message's `sender_written`. A renamed contact renames old messages and
+  conversations at the next build; no message row is rewritten.
+- In `events`, a dated message is one event of source `messages`: `title` its
+  text, `group_key` its `conversation_id`, the media columns its first
+  attachment's, and `payload` with `guid`, `conversation`, `from_me`, `sender`,
+  `service`, `attachments` and `reactions` (counts), `edited`, `unsent`, `audio`
+  and `reply_to`. Its `search` is empty: message text is searched in `messages`.
+- A row with `deleted` true is a guid sent again as something other than a
+  message. It has no conversation, time or text, and is gone after the build.
+`timeline_message_chats` (one row per Apple chat with its conversation) is the
+models' own and not meant to be read.
 
 **Unlinking or replacing an input.** Every row records the connection and raw
 dataset it came from. When the analysis no longer links that input, or links
@@ -1105,7 +1151,8 @@ keep what they were built with.
 
 **Raw-table indexes.** Builds create indexes on the raw tables they look rows up
 by when those are missing: load, second and image path for frames; page for
-visits; load ID and completion time in dlt's list of loads.
+visits; load, guid, chat, attachment, media key and a reaction's target for
+messages; load ID and completion time in dlt's list of loads.
 - Each index is built once, outside the model's transaction, and committed at
   once. Writes to that raw table wait while it is built, so the first build over
   a large table holds loads for that long.
@@ -1120,10 +1167,12 @@ except `days` (one row per day and source) and dlt's own small bookkeeping
 tables.
 
 **Read access.** `reader_role` names the role the server reads the timeline with
-(the installation uses `miroir_timeline`). Each build leaves the four relations
+(the installation uses `miroir_timeline`). Each build leaves the seven relations
 readable by the owner and that role only, with `SELECT`, and grants `USAGE` on
-their schema, so nothing has to be granted by hand. The two source models are
-left readable by the owner alone.
+their schema, so nothing has to be granted by hand. The models' own tables
+(`timeline_screen`, `timeline_browser`, `timeline_message_chats`,
+`timeline_secret`) are left readable by the owner alone. `messages` holds message
+text, so the role can read it.
 - The role must exist before the build that names it, or the build fails.
 - With `reader_role` empty, nothing is granted, and the next build takes back the
   `SELECT` an earlier build gave. It leaves the schema's `USAGE`.
