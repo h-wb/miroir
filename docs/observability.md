@@ -2,7 +2,8 @@
 area: "[[Homelab]]"
 categories:
   - "[[Resources]]"
-summary: Delivery, import, and collector signals help distinguish a quiet source from a failed or absent one.
+reviewed: 2026-11-24
+summary: The three signals Miroir keeps per connection to tell a quiet source from a broken or absent one, its metrics, and example alert rules.
 topics:
   - "[[Warehouse]]"
   - "[[Device collector]]"
@@ -74,6 +75,9 @@ Connections without reports appear only in the first.
 | `miroir_collector_last_count` | Each count of the last report; labels `part` (`rows` or `media`) and `name` (`frames`, `missing`, or one level down such as `masked.token`) |
 
 ## Example alert rules
+
+The rules the installation runs are in
+[home-ops](https://github.com/h-wb/home-ops/blob/main/kubernetes/apps/main/automation/miroir/README.md#monitoring).
 
 ```yaml
 groups:

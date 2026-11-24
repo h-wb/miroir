@@ -2,7 +2,8 @@
 area: "[[Homelab]]"
 categories:
   - "[[Resources]]"
-summary: This reference explains which parts of the code own ingestion, media, execution, and delivery and which dependencies they may use.
+reviewed: 2026-11-24
+summary: Which part of the code does what, who may import whom, the two ways data gets in, and where a new thing goes.
 topics:
   - "[[Warehouse]]"
   - "[[Device collector]]"
@@ -74,7 +75,7 @@ that exist only on a device. The collector is therefore not a fourth transport. 
 is a client of one that already exists. After each run it also reports, with the
 same token, what happened on the device (fixed words and counts, never data), so
 Miroir can tell a quiet source from a broken one ([observability](observability.md),
-decision 039).
+decision 039). How each transport behaves: [Connections and runs](miroir/runs.md#how-data-arrives).
 
 ## Media
 
@@ -85,7 +86,8 @@ core signs upload and view links against an object store it reaches through the
 `ObjectStore` protocol; the S3 implementation is an adapter. A device uploads
 with the links and never holds a storage credential. The worker reads the
 originals of confirmed files, writes their thumbnails beside them and records
-each file in the warehouse's `media_objects` (decision 040).
+each file in the warehouse's `media_objects` (decision 040). In full:
+[Media](miroir/media.md).
 
 ## Where a new thing goes
 

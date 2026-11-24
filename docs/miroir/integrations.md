@@ -2,7 +2,8 @@
 area: "[[Homelab]]"
 categories:
   - "[[Resources]]"
-summary: This guide shows how to write, register, and test a native dlt integration without breaking ingestion state or compatibility.
+reviewed: 2026-11-24
+summary: How to write, register and test a connector, a dlt source with a small Miroir definition, without breaking its stored state.
 topics:
   - "[[Warehouse]]"
 created: 2026-11-11T22:18
@@ -103,6 +104,21 @@ A `FileFormat` declares validation, parser version, typed per-import options, an
 an opener over one retained artifact. Upload, receiving URL, and watched folder
 are core transports, not connector implementations. Bump the parser version when
 a change alters rows or values produced by an artifact.
+
+## Media kinds
+
+A connector whose rows point at files declares a `MediaKind`: its name, the
+resource and column holding each file's key, the allowed extensions, a size
+limit, and the extensions the worker makes thumbnails of (none means the kind
+is not derived). Core does the rest: [Media](media.md).
+
+## Sources on a device
+
+A source that exists only on a device is two halves: a module in
+`collector/miroir_collector/sources/` that writes batches, and a file format on
+a connector that reads them, with a batch format and version of its own.
+`tests/test_collector_contract.py` feeds a collected batch to the connector. How
+the collector side is written: [the collector](../../collector/README.md#adding-a-source).
 
 ## Compatibility and tests
 

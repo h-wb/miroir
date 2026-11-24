@@ -2,7 +2,8 @@
 area: "[[Homelab]]"
 categories:
   - "[[Resources]]"
-summary: This guide explains how to install, configure, run, and test the collector and interpret its reports.
+reviewed: 2026-11-24
+summary: How to install, configure, run and test miroir-collector, what it reports after each run, and how a source is added.
 topics:
   - "[[Device collector]]"
   - "[[Warehouse]]"
@@ -15,8 +16,11 @@ A small program for a personal machine. It reads sources that exist only
 there, withholds secrets, and delivers what is new to a Miroir connection's
 receiving URL. It needs Python 3.12 or later and three libraries (urllib3,
 pydantic and the Kingfisher secret scanner), and imports no server code.
-Design: decisions 030, 031, 035, 036 and 039 in
-[`docs/miroir/decisions.md`](../docs/miroir/decisions.md).
+Why it is built this way: decisions 030 to 039 in
+[`docs/miroir/decisions.md`](../docs/miroir/decisions.md). How it fits with the
+other systems: the handbook's
+[Device collector](https://github.com/h-wb/handbook/blob/main/Systems/Device%20collector.md).
+What Miroir does with what it sends: [Connections and runs](../docs/miroir/runs.md).
 
 ## Run it
 
@@ -43,7 +47,7 @@ carries on from its saved state.
 ## Commands
 
 ```bash
-miroir-collector run     --config collector.json [--source ID] [--max-batches N]
+miroir-collector run     --config collector.json [--source ID] [--max-batches N] [--max-media-files N]
 miroir-collector collect --config collector.json --source ID --out DIR
 miroir-collector resend  --config collector.json --source ID --from DATE [--to DATE]
                      [--media | --out DIR] [--max-batches N]
@@ -114,12 +118,18 @@ and entry IDs to resume from the same state.
 
 `receive_url` must be `https`. The token is the connection's receive-only
 delivery token, read from the named environment variable; it can deliver to its
-own connection and nothing else.
+own connection and nothing else. Give each machine and source a connection of its own, and
+its token from the connection's **Settings → Data delivery**. Each delivery
+requests an import, so start a long history by hand with a larger
+`--max-batches`.
 
-Both sources accept an optional `since`: use `YYYY-MM-DD` for local
+Every source accepts an optional `since`, where it starts when it has no saved
+position: use `YYYY-MM-DD` for local
 midnight or `YYYY-MM-DDTHH:MM:SS` with `Z` or a UTC offset for an exact instant.
-Omit it to start at the beginning. Zen origins and bookmarks are not filtered
-by `since` and are not included in a resend.
+Omit it to start at the beginning. Starting recent and resending older months
+later gets a connection live quickly. Zen origins and bookmarks are not filtered
+by `since` and are not included in a resend. Each source's other options are on
+its page, linked under [Sources](#sources).
 
 ## Masking
 

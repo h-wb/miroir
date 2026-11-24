@@ -20,7 +20,7 @@ collector (decision 038).
 - **Code**: connector [`src/integrations/apple_messages/`](../../src/integrations/apple_messages/),
   source [`collector/miroir_collector/sources/apple_messages.py`](../../collector/miroir_collector/sources/apple_messages.py)
 - **dbt and dashboards**: the `messages` analysis package (decision 041,
-  [its tables](../miroir/README.md#the-messages-package)); dashboard Messages (34)
+  [its tables](../miroir/analyses.md#the-messages-package)); dashboard Messages (34)
 
 ## Where the data comes from
 
