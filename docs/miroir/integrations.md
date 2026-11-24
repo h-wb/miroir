@@ -50,6 +50,9 @@ Resource keys, write disposition, cursor handling, and table hints live in dlt
 code, not Miroir's metadata. Keep extraction close to upstream records; reporting
 transformations belong in analysis packages.
 
+Open HTTP sessions with dlt's `Client` from `dlt.sources.helpers.requests`, as
+every bundled fetch does: it retries 429 and 5xx answers and times out.
+
 Use `IntegrationError` from `src/integrations/errors.py` for safe, classified
 credential-rejection, rate-limit, and unexpected-response diagnostics. The runner
 recognizes these even when dlt wraps them. Never include tokens, request URLs, or

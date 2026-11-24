@@ -36,7 +36,9 @@ several; otherwise the first is used. It always imports with the format's
 default options (for Health, `role=ongoing`). The answer holds `artifact_id`,
 `new` and `operation_id`, or `already_imported` for a file already loaded with
 the current parser and options. 200 or 201 acknowledges receipt and the request,
-not the import's outcome. Bodies are capped at 512 MiB.
+not the import's outcome. Bodies are capped at 512 MiB. When Prefect cannot be
+reached or refuses the request, the answer is 503 (`OrchestratorUnavailable`),
+so a sender retries; sending the same file again is always safe.
 
 A delivery token is made on the connection's **Settings → Data delivery**,
 shown once and stored as a hash; viewing or retrying setup never replaces an
