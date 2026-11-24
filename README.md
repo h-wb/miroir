@@ -2,76 +2,56 @@
 area: "[[Homelab]]"
 categories:
   - "[[Resources]]"
-summary: This guide shows where the warehouse and collector code live and how to set up the checkout.
+reviewed: 2026-11-24
+summary: What this repo holds, how to set up a checkout, and where its pages are.
 topics:
   - "[[Warehouse]]"
   - "[[Device collector]]"
 created: 2025-10-06T20:46
 ---
 
-# Pipelines
+# pipelines
 
-Personal data warehouse: Miroir connections mirror the services I use into
-Postgres with [dlt](https://dlthub.com/), dbt models on top, Metabase dashboards,
-all run as Prefect flow runs in the homelab ([h-wb/home-ops](https://github.com/h-wb/home-ops)).
+Miroir, a personal data warehouse: connections mirror the services and devices I
+use into Postgres with [dlt](https://dlthub.com/), analyses build dbt models on
+top for Metabase and a timeline, and Prefect runs every load. The
+`miroir-collector` program, in `collector/`, feeds it from a device. How it fits
+with the rest: the handbook's
+[Warehouse](https://github.com/h-wb/handbook/blob/main/Systems/Warehouse.md).
+It is deployed from
+[home-ops](https://github.com/h-wb/home-ops/blob/main/kubernetes/apps/main/automation/miroir/README.md).
 
-**Documentation: [`docs/`](docs/README.md)** — architecture, conventions, one page
-per source ([ListenBrainz](docs/sources/listenbrainz.md), [GitHub](docs/sources/github.md),
-[Apple Health](docs/sources/apple-health.md), [Bike Share](docs/sources/bikeshare.md),
-[browser history](docs/sources/browser-history.md)) and an [operations runbook](docs/operations.md).
+Documentation: [docs/](docs/README.md). Rules for agents: [AGENTS.md](AGENTS.md).
 
 ## Layout
 
 ```
-src/core/        Miroir: configuration, operations, runner, services
-src/integrations/ one connector package per service (settings, checks, dlt sources)
-src/web, src/cli  the interface and CLI over the same services
-src/pipelines/   miroir.py (the sync-connection flow) and transform.py (an analysis's dbt build)
-dbt/             staging views + model groups (music, health, biking, github, browser, crossovers)
-fnox.toml        secret references (Proton Pass `Automation General`)
-mise.toml        tools, shared config, task secret grants; mise.local.toml: machine overrides
-docs/            documentation
+src/core/          Miroir: configuration, metadata store, runner, services, media, timeline
+src/integrations/  one connector package per source
+src/analyses/      the catalog of analysis packages
+src/web, src/cli   the interface, HTTP API and CLI over the same services
+src/adapters/      Prefect and S3
+src/pipelines/     the flow entry points Prefect runs
+collector/         miroir-collector, its own package
+dbt/               staging views and one model group per package
+docs/              documentation
 ```
 
-## Setup
+## Set up a checkout
 
 ```bash
-mise install      # uv, fnox, pass-cli
+mise install                # uv, fnox, pass-cli
 mise exec -- uv sync --dev
-mise run pass:login  # macOS Keychain, or the pod's PROTON_PASS_TOKEN
-mise secrets ls     # inspect names and task grants without fetching values
+mise run dev                # the interface on http://127.0.0.1:8765, local state only
 ```
 
-Paseo clones this repo during pod bootstrap. New worktrees run
-`mise install && mise exec -- uv sync --dev` automatically via `paseo.json`.
-Run `mise run pass:login` once per host before using tasks that need secrets;
-worktrees share the repo's scoped session. Setup does not fetch secrets or run pipelines.
-There is no repo `prod` mise environment: a project `.miserc.toml` would replace
-the machine's environment list and disable its pod/Paseo layers. Shared defaults
-live in `mise.toml`; put machine-specific overrides under `[env]` in gitignored
-`mise.local.toml`. If you have `mise.prod.local.toml`, rename it to `mise.local.toml`.
-The data paths default to the Prefect worker's mounts; override them for local imports.
+Paseo runs the first two in a new worktree (`paseo.json`) and offers `dev` and
+`infra` as service scripts. `mise run dev` needs no secret.
 
-## Common tasks
-
-```bash
-mise run dev                                      # local Miroir UI, no Proton access
-mise run dev:infra                                # UI against the existing installation (see prerequisites)
-mise run miroir:deploy                            # apply Miroir deployments from miroir.json
-uv run ruff check src/
-```
-
-Secret values are never committed here. Every credential lives in the Proton
-Pass `Automation General` vault. The Miroir installation references remain a
-provisioning prerequisite; see the development runbook. Operator copies remain
-until access uses BWS/CNPG directly. References are in `fnox.toml`. Details in
-[docs/README.md](docs/README.md#secrets-and-config).
-
-Tasks receive only their declared fnox secrets; they are not exported to the shell.
-For an ad-hoc command, use `mise x --secrets KEY -- <command>`.
-
-Paseo exposes `dev` and `infra` as service scripts with assigned ports. Local
-development keeps its state under `.miroir/dev/`; the infrastructure script
-requires the installation config, shared artifacts, and item grants. See
-[development launchers](docs/miroir/README.md#development-launchers) for setup and
-the distinction between running the UI checkout and executing deployed flows.
+Tasks that reach the installation (`dev:infra`, `miroir:deploy`,
+`miroir:refresh`, `prefect`) need a Proton Pass session: `mise run pass:login`
+once per host. Each task receives only the fnox secrets its `secrets = [...]`
+grant lists; nothing enters the shell. `mise secrets ls` shows names and grants
+without fetching values; an ad-hoc command uses `mise x --secrets KEY -- <command>`.
+Shared defaults are in `mise.toml`; machine overrides go in the gitignored
+`mise.local.toml`. More: [development](docs/miroir/README.md#develop-it).
