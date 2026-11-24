@@ -2,7 +2,8 @@
 area: "[[Homelab]]"
 categories:
   - "[[Resources]]"
-summary: This reference explains what the Apple Messages collector sends or withholds and how the server merges messages and attachment metadata.
+reviewed: 2026-11-24
+summary: What the collector reads from Apple Messages on the Mac, what it sends, masks or never sends, and how Miroir merges messages, contacts and attachments.
 topics:
   - "[[Messages]]"
   - "[[Device collector]]"
@@ -15,12 +16,13 @@ created: 2026-11-21T11:39
 Message history (iMessage, SMS and RCS), collected on the Mac by the Miroir
 collector (decision 038).
 
-- **Status**: the connection `messages`, sent hourly by the collector since
-  2026-11-21, with attachments as media
+- **Connection**: integration `apple_messages`; the installation's is
+  `messages`, sent by the collector, with attachments as media
 - **Code**: connector [`src/integrations/apple_messages/`](../../src/integrations/apple_messages/),
   source [`collector/miroir_collector/sources/apple_messages.py`](../../collector/miroir_collector/sources/apple_messages.py)
-- **dbt and dashboards**: the `messages` analysis package (decision 041,
-  [its tables](../miroir/analyses.md#the-messages-package)); dashboard Messages (34)
+- **Package**: `messages` (decision 041,
+  [its tables](../miroir/analyses.md#the-messages-package)); dashboard Messages
+  (not checked here)
 
 ## Where the data comes from
 

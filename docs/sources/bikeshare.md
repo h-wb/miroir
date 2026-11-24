@@ -2,44 +2,49 @@
 area: "[[Homelab]]"
 categories:
   - "[[Resources]]"
-summary: The Bike Share connector loads trips and related rows for analysis.
+reviewed: 2026-11-24
+summary: How the Bike Share connector fetches every rental from the mobile app's API, and what it loads.
 topics:
   - "[[Bike rides]]"
   - "[[Warehouse]]"
 created: 2026-09-24T22:01
 ---
 
-# Bike Share Toronto
+# Bike Share
 
-Every Bike Share Toronto rental (stations, times, bike type).
+Every bike share rental: stations, times, bike type.
 
-- **Schedule**: Miroir connection `bikeshare`, daily 00:00 UTC
-- **Code**: connector [`src/integrations/bikeshare/`](../../src/integrations/bikeshare/) (legacy flow retired 2026-11-11)
-- **Raw schema**: `bikeshare_data.trips` (+ `trips__start_location`, `trips__end_location`)
-- **dbt**: `staging.stg_bikeshare__trips` → `biking.{biking_rides, stations, routes}`, `crossovers.rides`
-- **Dashboards**: Biking (3), Rides (26)
+- **Connection**: integration `bikeshare`, fetched on the connection's schedule;
+  the installation's is `bikeshare`, bound to `bikeshare_data`
+- **Code**: [`src/integrations/bikeshare/`](../../src/integrations/bikeshare/)
+- **Raw tables**: `trips`, with dlt's child tables `trips__start_location` and
+  `trips__end_location`
+- **Packages**: `biking` (`rides`, `stations`, `routes`), `crossovers` (`rides`)
+- **Dashboards**: Biking, Rides (not checked here)
 
 ## Where the data comes from
 
-The Bike Share mobile app's own API (`layer.bicyclesharing.net/mobile/v1/tor`,
-`rental/closed`), called with the member id and auth token the app uses, and the
-app's request headers. There's no public API for rental history.
+The operator's mobile app API (`layer.bicyclesharing.net/mobile/v1/…`,
+`rental/closed`), called with the member ID and authorization token the app uses
+and the app's request headers. There is no public API for rental history.
 
 ## Extraction
 
-One resource, `trips`: `rental/closed` for the member, incremental on `sd`
-(rental start), key `rentalId`. The first run asks for 500 rentals per page,
-later runs 50 (only the newest matter).
+One resource, `trips`: `rental/closed` for the member, incremental on `sd` (the
+rental's start), key `rentalId`. The first run asks for 500 rentals per page,
+later runs 50, since only the newest matter.
 
-## Secrets and config
+## Settings and credentials
 
-`BIKESHARE__MEMBER_ID`, `BIKESHARE__AUTHORIZATION_TOKEN` (Proton Pass
-`dlt/bikeshare`), both taken from the mobile app's traffic.
+Credentials `member_id` and `authorization_token`, both taken from the mobile
+app's traffic, in Miroir's store or as fnox references
+(`BIKESHARE__MEMBER_ID`, `BIKESHARE__AUTHORIZATION_TOKEN` in `fnox.toml`).
+Setting `verify_tls`, on by default; the app's endpoint has needed it off.
 
 ## Quirks
 
-- TLS verification is disabled for this host (the app's endpoint), and the
-  request mimics the app's `User-Agent`.
-- If the app token rotates or expires, runs fail with 401/403: capture a new one.
-- Bike Share only estimates distance; `biking_rides` computes straight-line
-  distance and speed from station coordinates.
+- The request mimics the app's `User-Agent`.
+- When the app's token rotates or expires, runs fail with 401 or 403 and the
+  connection shows `rejected`: capture a new one.
+- The service only estimates distance; `rides` computes straight-line distance
+  and speed from station coordinates, a lower bound on the real speed.

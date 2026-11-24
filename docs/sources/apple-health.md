@@ -2,7 +2,8 @@
 area: "[[Homelab]]"
 categories:
   - "[[Resources]]"
-summary: The Apple Health connector imports Health Auto Export files and maps them to warehouse tables.
+reviewed: 2026-11-24
+summary: How Health Auto Export files reach their connection, which tables they load, and how historical and ongoing exports are kept apart.
 topics:
   - "[[Health data]]"
   - "[[Warehouse]]"
@@ -11,48 +12,49 @@ created: 2026-09-24T22:01
 
 # Apple Health
 
-Health metrics (steps, heart rate, energy, sleep, body…), workouts, state of mind
-and medications from the iPhone / Apple Watch.
+Health metrics (steps, heart rate, energy, sleep, body), workouts, state of mind
+and medications from the phone and the watch.
 
-- **Schedule**: Miroir connection `health`, on each export, through the connection's receiving URL
-- **Code**: connector [`src/integrations/apple_health/`](../../src/integrations/apple_health/) (legacy flow retired 2026-11-11)
-- **Raw schema**: `apple_health_data.{metrics, workouts, state_of_mind, medications}`
-- **dbt**: `staging.stg_health__{metrics, sleep, workouts}` → `health.{daily_summary, workout_summary}`, `crossovers.*`
-- **Dashboards**: Health (24), Music & Heart (25), Correlations (28), Year in review (29)
+- **Connection**: integration `apple_health`; the installation's is `health`,
+  fed on each export through its receiving URL
+- **Code**: [`src/integrations/apple_health/`](../../src/integrations/apple_health/)
+- **Raw tables**: `metrics`, `workouts`, `state_of_mind`, `medications`
+- **Packages**: `health` (`daily_summary`, `workout_summary`), `crossovers`
+- **Dashboards**: Health, and the crossovers (not checked here)
 
 ## Where the data comes from
 
-The iOS app **Health Auto Export** POSTs each JSON export to the `health`
-connection's receiving URL (`POST /api/connections/health/receive`, with its
-connection-scoped delivery token). Miroir stores the file as an artifact and
-imports it (decisions 017, 021). Until 2026-11-11 an n8n workflow wrote the
-exports to the NAS for a legacy flow; that path is retired and archived.
+The phone app Health Auto Export posts each JSON export to the connection's
+receiving URL, with the connection's delivery token
+([how to set it up](../miroir/runs.md#the-receiving-url)). Miroir stores the file
+as an artifact and imports it (decisions 017, 021). A file can also be uploaded
+in the interface or left in a watched folder. Only Health Auto Export's JSON is
+read; Apple's own XML export is not.
 
 ## Extraction
 
-Each received file is imported once by content (identical bytes are not imported
-again). Its `data` object splits into:
+Each file is imported once by content. Its `data` object splits into:
 
 | Table | Key |
-|---|---|
-| `metrics` (one row per metric data point; `metric_name`, `units`) | `(metric_name, date, source)`; missing `source` becomes `"unknown"` |
+| --- | --- |
+| `metrics` (one row per data point; `metric_name`, `units`) | `(metric_name, date, source)`; a missing `source` becomes `"unknown"` |
 | `workouts` | `id` |
-| `state_of_mind` | `id` |
+| `state_of_mind` (from `stateOfMind`) | `id` |
 | `medications` | `(displayText, start)` |
 
-**Historical vs ongoing.** Each import has a `role`: `historical` files (the
-one-off bulk export) only contribute rows dated before the connection's cutoff
-(2026-06-04); `ongoing` files, the default for received exports, only contribute
-rows from the cutoff on. That stops the bulk export and the automatic exports
-from overlapping.
+Each import has a `role`. `historical` files (a one-off bulk export) contribute
+only rows dated before the connection's `cutoff` setting; `ongoing` files, the
+default and what the receiving URL always uses, only rows from the cutoff on. The
+bulk export and the automatic ones therefore never overlap.
 
-## Secrets and config
+## Settings and credentials
 
-The delivery token is managed on the connection's setup page; the cutoff is a
-connection setting. No other secrets.
+`cutoff`, a date. No source credential; the delivery token is managed on the
+connection's **Settings → Data delivery**.
 
 ## Quirks
 
-- Exports between 2026-06-07 and 2026-09-22 never arrived: the old n8n path
-  silently blocked its writes (`N8N_RESTRICT_FILE_ACCESS_TO` splits on `;`).
-- Filenames only need to be unique: the merge keys dedupe overlapping exports.
+- Exports between 2026-06-07 and 2026-09-22 never arrived: the n8n path used
+  before Miroir silently blocked its writes (decision 009). That gap stays.
+- File names only need to be unique: the merge keys dedupe overlapping exports.
+- Energy and distance units are assumed, not read from the export.

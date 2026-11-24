@@ -2,7 +2,8 @@
 area: "[[Homelab]]"
 categories:
   - "[[Resources]]"
-summary: This reference explains how ScreenMemory text, app usage, and screenshots are collected, masked, and represented in the warehouse.
+reviewed: 2026-11-24
+summary: How the collector reads ScreenMemory's text, app usage and screenshots on the Mac, what it masks or withholds, and what Miroir loads.
 topics:
   - "[[Screen activity]]"
   - "[[Device collector]]"
@@ -15,15 +16,15 @@ created: 2026-11-20T09:57
 What was on the Mac's screen: one row per screenshot with its recognised text, and
 which app was in front. Collected on the Mac by the Miroir collector (decision 030).
 
-- **Status**: the connection `screen_macbook`, sent hourly by the collector since
-  2026-11-20, with screenshots as media
+- **Connection**: integration `screenmemory`; the installation's is
+  `screen_macbook`, sent by the collector, with screenshots as media
 - **Code**: connector [`src/integrations/screenmemory/`](../../src/integrations/screenmemory/),
   source [`collector/miroir_collector/sources/screenmemory.py`](../../collector/miroir_collector/sources/screenmemory.py)
 - **Tables**: `frames`, `app_usage`, in the connection's dataset
 - **dbt**: the screen lane of the `timeline` analysis (`screen_frames`, `events`,
   `days`, `apps`; decision 040). Thumbnails and `media_objects` come from the
   derive run
-- **Dashboard**: none; the timeline interface reads it
+- **Dashboard**: none; the [timeline](../miroir/timeline.md) reads it
 
 ## Where the data comes from
 
@@ -41,6 +42,17 @@ ScreenMemory documents none of this, so a new version can change it. The collect
 checks the tables and columns it needs and fails with a fixed message if they are
 gone.
 
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `data_dir` | required | ScreenMemory's data folder |
+| `since` | none | Where it starts without a saved position |
+| `settle_seconds` | 300 | Send a row only once it is this old |
+| `max_rows` | 20000 | Rows per table per batch (1 to 200,000) |
+| `drop_bundle_ids` | none | More apps whose frames are withheld whole |
+| `drop_markers` | none | More text markers that withhold a frame whole |
+| `media` | false | Upload screenshots |
+| `media_dir` | `<data_dir>/screenshots` | Where the screenshots are |
+
 ## What the collector sends
 
 A gzip JSON Lines file per batch (`screenmemory_batch`, version 1): a header, `frame`
@@ -48,8 +60,8 @@ and `app_usage` records, and a trailer with the record counts and what was withh
 The connector rejects a file whose trailer is missing or whose counts do not match,
 so a truncated file never loads.
 
-Rows are sent once they are older than `settle_seconds` (default 300), newer than
-the cursor, at most `max_rows` per table per batch. A long history therefore goes
+Rows are sent once they are older than `settle_seconds`, newer than the cursor,
+at most `max_rows` per table per batch. A long history therefore goes
 out as several batches, each its own import.
 
 ## What never leaves the Mac
@@ -61,7 +73,7 @@ output.
 - **Whole frames withheld** (the row is kept with `text` null and a reason in
   `withheld`): the front app is a password manager (`excluded_app`), or the text
   contains a password-manager address such as a web vault or the browser's own
-  password page (`marker`). Both lists can be extended in the collector's configuration.
+  password page (`marker`). `drop_bundle_ids` and `drop_markers` extend the two lists.
 - **Spans masked** as `[masked:<rule>]`, counted per frame in `masked`. The
   collector's own rules, in this order:
   - `private_key`: private key blocks;
