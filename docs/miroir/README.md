@@ -21,6 +21,14 @@ the handbook's [Warehouse](https://github.com/h-wb/handbook/blob/main/Systems/Wa
 How it is deployed:
 [home-ops](https://github.com/h-wb/home-ops/blob/main/kubernetes/apps/main/automation/miroir/README.md).
 
+It is meant for one person who wants their data in a database they own: API
+sources and exported files are equal citizens, original files are kept, and
+loads, models and dashboards hang off one configuration and one status page.
+This installation is its first user; a hosted service and a large catalogue of
+connectors are not goals for now. What is left to build is on the board, and
+the road across systems is the handbook's
+[The road](https://github.com/h-wb/handbook/blob/main/Plans/The%20road.md).
+
 | Page | What it holds |
 | --- | --- |
 | [Configuration](configuration.md) | `miroir.json`, the environment, credentials |
@@ -88,6 +96,10 @@ flowchart LR
   copies neither and never claims exactly-once.
 - Identities persist. Connection IDs, bindings, resource and table names, keys
   and dlt state keys change only through an explicit migration.
+- Backfill (fetch and merge a range), replay (parse a kept file again), rebuild
+  (run the models again) and destructive replacement are different requests.
+  Merge-only replay cannot remove what an older parser produced, and nothing
+  restores data a source has already expired.
 - Capabilities are declared, not assumed: a connector says which inputs,
   resources and media it has. Destructive work (a rebuild from scratch, removing
   data) is always an explicit request.
