@@ -68,7 +68,7 @@ its files are found present.
 For a kind that names extensions to make thumbnails of, so far only
 `screenshots`, the worker makes two WebP copies of each stored image, 360 and
 1280 pixels wide, and records every stored file of the kind in the warehouse
-(decision 040). A kind that names none, such as `attachments` today, is not
+(decision 040). A kind that names none, such as `attachments` today (HOMEL-6), is not
 derived: no thumbnails and no records.
 
 - **Names.** `prefix / connection / screenshots.w360 / <key>.webp` and

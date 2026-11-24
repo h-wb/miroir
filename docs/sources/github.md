@@ -66,7 +66,7 @@ bundled repo, `export_pull_requests`, `export_issues`, `export_issue_comments`,
 `export_releases`, `export_bots`) by the legacy flow, retired by decision 025.
 The tables stay and the models still read them, as optional inputs: per record
 type they union export and API on the web URL, the API row winning and the export
-filling fields the API lacks. No code loads an export today; a GitHub archive
+filling fields the API lacks. No code loads an export today (HOMEL-109); a GitHub archive
 file format would (decision 021).
 
 ## What "mine" means
