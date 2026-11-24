@@ -1967,8 +1967,8 @@ Consequences:
 
 ### 040 amendment — Thumbnails and stored media (phase 1b)
 
-Status: proposed with the phase 1b pull request, 2026-11-22, revised after its
-review the same day. What building thumbnails and `media_objects` had to decide
+Status: accepted, 2026-11-22 (proposed with the phase 1b pull request and
+revised after its review the same day). What building thumbnails and `media_objects` had to decide
 that the plan above left open. Where a choice touched security, cost or the
 shared scheduling, the more conservative one was taken; those are marked
 *(conservative)*.

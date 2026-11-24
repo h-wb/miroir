@@ -15,16 +15,21 @@ created: 2026-09-24T22:01
 Browsing history from Zen (Firefox-based) on the MacBook, from 2025-01-07 on,
 including how long each page was in view and how much I typed on it.
 
-- **Status**: the legacy load retired on 2026-11-11; its `browser_history_data` dataset and models were dropped on 2026-11-22 (decision 042). Miroir accepts snapshots and incremental collector batches.
-- **Code**: connector [`src/integrations/browser_history/`](../../src/integrations/browser_history/); source [`collector/miroir_collector/sources/zen_history.py`](../../collector/miroir_collector/sources/zen_history.py)
-- **Raw schema**: a Miroir connection uses its own dataset, not `browser_history_data`.
-- **dbt**: the `browser` model group includes `visits` and `domains_daily`; the `timeline` analysis can also use browser history.
-- **Historical dashboard reference**: Browser (31) showed an overview of visits and time in view, plus a weekday and hour breakdown.
+- **Status**: the connection `browser_macbook`, sent hourly by the Miroir collector's `zen_history` source since 2026-11-21 (incremental batches, decision 032). The legacy load was retired on 2026-11-11, and `browser_history_data` with the models built from it was dropped on 2026-11-22 (decision 042)
+- **Code**: connector [`src/integrations/browser_history/`](../../src/integrations/browser_history/) (two formats: a full snapshot, and incremental batches from the collector); source [`collector/miroir_collector/sources/zen_history.py`](../../collector/miroir_collector/sources/zen_history.py)
+- **Raw schema**: `zen_*` tables in the connection's own dataset
+- **dbt**: the `browser` analysis (`visits`, `domains_daily`), and the browser lane of the `timeline` analysis
+- **Dashboard**: Browser (31): Overview (pages, hours in view, top sites, how I got there) / When (weekday × hour heatmap, hour and weekday charts, recent visits); Date, Group by and Site filters
 
 ## Where the data comes from
 
 Zen keeps history in `places.sqlite` in its profile, locked while the browser
-runs. The retired load used a mise task in the dotfiles to snapshot it:
+runs. The collector reads a temporary copy of the database and its WAL, masks
+addresses and titles, and sends only what is new.
+
+Before the collector, a mise task in the dotfiles made a full snapshot instead.
+The task and its file are removed; the snapshot format is still accepted by
+upload or a watched folder. How it worked:
 
 - **[`conf.d/zen-history.personal.toml`](https://github.com/h-wb/dotfiles/blob/main/conf.d/zen-history.personal.toml)**
   (MacBook only, `personal` env): task `mise run zen-history-snapshot` copies the

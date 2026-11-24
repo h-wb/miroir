@@ -15,12 +15,15 @@ created: 2026-11-20T09:57
 What was on the Mac's screen: one row per screenshot with its recognised text, and
 which app was in front. Collected on the Mac by the Miroir collector (decision 030).
 
-- **Status**: the collector can send incremental batches to a Miroir connection.
+- **Status**: the connection `screen_macbook`, sent hourly by the collector since
+  2026-11-20, with screenshots as media
 - **Code**: connector [`src/integrations/screenmemory/`](../../src/integrations/screenmemory/),
   source [`collector/miroir_collector/sources/screenmemory.py`](../../collector/miroir_collector/sources/screenmemory.py)
 - **Tables**: `frames`, `app_usage`, in the connection's dataset
-- **dbt**: the [timeline analysis](../miroir/README.md#the-timeline-package) builds ScreenMemory session and app models.
-- **Dashboard**: none yet
+- **dbt**: the screen lane of the `timeline` analysis (`screen_frames`, `events`,
+  `days`, `apps`; decision 040). Thumbnails and `media_objects` come from the
+  derive run
+- **Dashboard**: none; the timeline interface reads it
 
 ## Where the data comes from
 

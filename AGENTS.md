@@ -31,7 +31,7 @@ Miroir (decision 014); history keeps its own words.
   A strict content security policy: no inline styles or scripts in templates.
   `connections.py` owns guided setup and connection settings; activity/ingestion
   routes stay in `app.py`. Integration delivery metadata drives the forms.
-- `src/cli/` — `pipelines-mirroir`, one CLI over the same service.
+- `src/cli/` — `pipelines-miroir`, one CLI over the same service.
 - `src/adapters/prefect.py` — **the orchestrator seam** (decision 013): three
   verbs — `plan`/`apply` (deployments from config, drift reporting), `submit`
   (request → flow run, idempotent on the operation ID), `observe` (close
@@ -68,7 +68,7 @@ Miroir (decision 014); history keeps its own words.
 - `src/analyses/catalog.py` — analysis packages (typed input roles, dbt selector,
   outputs, parameters, version); top-level config analyses link connections to
   those roles. Integrations recommend a default package by ID (decision 022).
-- `tests/` — unittest; no pytest. 163 tests, ~160s, include four against a real
+- `tests/` — unittest; no pytest. About 370 tests, ~10 min, include four against a real
   temporary Prefect API (`prefect_test_harness`), CLI subprocess tests, and seven
   disposable Postgres/dbt scenarios (set `MIROIR_TEST_POSTGRES_BIN` to the bin
   directory of an installed Postgres, or put `initdb`/`pg_ctl` on PATH; in this
@@ -102,7 +102,7 @@ builds, which run the pinned image, not `main`. Secrets for mise tasks come from
   push with `--no-verify` from this pod — the pre-push hook fails on sandbox
   registry auth for unrelated apps):
   - `automation/miroir/` — the CNPG cluster `postgres-miroir` (cnpg/initdb
-    component) and the server HelmRelease (`pipelines-mirroir serve`, route
+    component) and the server HelmRelease (`pipelines-miroir serve`, route
     `miroir.<SECRET_DOMAIN>` behind envoy-internal).
   - `automation/prefect/app/` — the Prefect server + process worker
     (`local-pool`, flows from other repositories; this repo no longer deploys
@@ -134,9 +134,10 @@ builds, which run the pinned image, not `main`. Secrets for mise tasks come from
    kubeconfig: `kubernetes/clusters/main/kubeconfig` in home-ops; `kubectl`
    works read-only, `flux` reconcile and pod deletion are allowed).
 4. Verify server/worker readiness, a flow run using the same image, and an empty
-   deployments plan. Schema 6 was deployed with decision 022; schema 5 runtimes
-   cannot run against it. Drain Miroir runs and preserve configuration plus a
-   matching metadata recovery point before another incompatible migration.
+   deployments plan. The metadata schema is at version 8 (decision 040, phase
+   1b); an older runtime cannot run against a newer schema. Drain Miroir runs and
+   preserve configuration plus a matching metadata recovery point before another
+   incompatible migration.
 
 ## Working conventions
 
@@ -158,20 +159,19 @@ builds, which run the pinned image, not `main`. Secrets for mise tasks come from
   Health run on Miroir, bound to their original raw schemas. Operator leftovers:
   drop the unused `ws_8_personal_listenbrainz` and `ws_8_personal_health`
   schemas.
-- Browser history: redo as a Miroir connection with a watched folder at
-  `/miroir/data/browser` (the same Nextcloud-synced snapshot file the legacy
-  flow loaded). `browser_history_data` was dropped on 2026-11-22, so the new
-  connection starts from its own dataset.
+- Browser history runs as the connection `browser_macbook`, sent by the
+  collector (2026-11-21); `browser_history_data` was dropped on 2026-11-22.
 - Dashboards read the Miroir analysis outputs and `run_dbt` is removed
-  (decision 042). Operator leftover: delete or pause the `run_dbt` deployment
-  in Prefect if it is still there.
+  (decision 042); its Prefect deployment is deleted.
+- Timeline (decision 040): data models, thumbnails and the read-only role are
+  deployed; the API, image serving and pages are not built yet.
 - Cloud blockers (decision-adjacent, from the OSS+hosted analysis):
   per-tenant key separation, artifact storage abstraction (NFS paths are
   absolute on purpose today — they must resolve identically everywhere),
   multi-tenant metadata partitioning, accounts/OIDC.
 - Cosmetic: generated dataset bindings still use the `ws_` prefix (pre-rename
-  abbreviation). Every live connection now has an explicit binding, so renaming
-  it only affects new connections.
+  abbreviation). The device connections (`screen_macbook`, `browser_macbook`,
+  `messages`) use generated names, so renaming it now means moving their data.
 - Audit leftovers (2026-11-11 log entry): GitHub date windows can miss late
   pushes/merges; browser rows keyed by profile-local SQLite IDs; Health units
   assumed, not read.
