@@ -4,6 +4,7 @@ categories:
   - "[[Resources]]"
 summary: This reference explains how ListenBrainz rows are imported, deduplicated, and interpreted alongside older listening history.
 topics:
+  - "[[Music listening]]"
   - "[[Warehouse]]"
 created: 2026-09-24T22:01
 ---

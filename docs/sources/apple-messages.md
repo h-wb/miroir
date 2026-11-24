@@ -4,7 +4,8 @@ categories:
   - "[[Resources]]"
 summary: This reference explains what the Apple Messages collector sends or withholds and how the server merges messages and attachment metadata.
 topics:
-  - "[[Collector]]"
+  - "[[Messages]]"
+  - "[[Device collector]]"
   - "[[Warehouse]]"
 created: 2026-11-21T11:39
 ---

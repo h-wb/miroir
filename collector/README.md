@@ -4,7 +4,7 @@ categories:
   - "[[Resources]]"
 summary: This guide explains how to install, configure, run, and test the collector and interpret its reports.
 topics:
-  - "[[Collector]]"
+  - "[[Device collector]]"
   - "[[Warehouse]]"
 created: 2026-11-20T14:36
 ---

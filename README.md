@@ -5,7 +5,7 @@ categories:
 summary: This guide shows where the warehouse and collector code live and how to set up the checkout.
 topics:
   - "[[Warehouse]]"
-  - "[[Collector]]"
+  - "[[Device collector]]"
 created: 2025-10-06T20:46
 ---
 

@@ -5,7 +5,7 @@ categories:
 summary: This log records why the warehouse and collector adopted their interfaces and operating model and how those decisions changed.
 topics:
   - "[[Warehouse]]"
-  - "[[Collector]]"
+  - "[[Device collector]]"
 created: 2026-10-28T22:08
 ---
 

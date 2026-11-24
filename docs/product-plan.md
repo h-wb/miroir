@@ -5,7 +5,7 @@ categories:
 summary: This plan records the goals, milestones, and acceptance criteria for the warehouse migration and later features.
 topics:
   - "[[Warehouse]]"
-  - "[[Collector]]"
+  - "[[Device collector]]"
 created: 2026-10-28T22:08
 ---
 

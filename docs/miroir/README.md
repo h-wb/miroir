@@ -5,7 +5,7 @@ categories:
 summary: This guide shows how to run Miroir locally and use its connection, analysis, media, and timeline interfaces.
 topics:
   - "[[Warehouse]]"
-  - "[[Collector]]"
+  - "[[Device collector]]"
 created: 2026-10-28T22:08
 ---
 

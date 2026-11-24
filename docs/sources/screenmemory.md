@@ -4,7 +4,8 @@ categories:
   - "[[Resources]]"
 summary: This reference explains how ScreenMemory text, app usage, and screenshots are collected, masked, and represented in the warehouse.
 topics:
-  - "[[Collector]]"
+  - "[[Screen activity]]"
+  - "[[Device collector]]"
   - "[[Warehouse]]"
 created: 2026-11-20T09:57
 ---

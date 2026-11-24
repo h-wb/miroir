@@ -4,7 +4,8 @@ categories:
   - "[[Resources]]"
 summary: This reference explains how the browser history connector handles state and masking for snapshots and incremental batches.
 topics:
-  - "[[Collector]]"
+  - "[[Browser history]]"
+  - "[[Device collector]]"
   - "[[Warehouse]]"
 created: 2026-09-24T22:01
 ---

@@ -5,7 +5,7 @@ categories:
 summary: This reference explains which parts of the code own ingestion, media, execution, and delivery and which dependencies they may use.
 topics:
   - "[[Warehouse]]"
-  - "[[Collector]]"
+  - "[[Device collector]]"
 created: 2026-11-20T14:36
 ---
 

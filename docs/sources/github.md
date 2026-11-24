@@ -4,6 +4,7 @@ categories:
   - "[[Resources]]"
 summary: This reference explains what the GitHub connector extracts and how its models join API rows to historical exports.
 topics:
+  - "[[Code activity]]"
   - "[[Warehouse]]"
 created: 2026-09-24T22:01
 ---

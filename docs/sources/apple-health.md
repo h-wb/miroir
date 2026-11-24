@@ -4,6 +4,7 @@ categories:
   - "[[Resources]]"
 summary: The Apple Health connector imports Health Auto Export files and maps them to warehouse tables.
 topics:
+  - "[[Health data]]"
   - "[[Warehouse]]"
 created: 2026-09-24T22:01
 ---

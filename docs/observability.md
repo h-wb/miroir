@@ -5,7 +5,7 @@ categories:
 summary: Delivery, import, and collector signals help distinguish a quiet source from a failed or absent one.
 topics:
   - "[[Warehouse]]"
-  - "[[Collector]]"
+  - "[[Device collector]]"
 created: 2026-11-21T11:51
 ---
 

@@ -4,6 +4,7 @@ categories:
   - "[[Resources]]"
 summary: The Bike Share connector loads trips and related rows for analysis.
 topics:
+  - "[[Bike rides]]"
   - "[[Warehouse]]"
 created: 2026-09-24T22:01
 ---

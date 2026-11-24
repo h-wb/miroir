@@ -5,7 +5,7 @@ categories:
 summary: This log records what was built and verified at each stage of the warehouse and collector implementation.
 topics:
   - "[[Warehouse]]"
-  - "[[Collector]]"
+  - "[[Device collector]]"
 created: 2026-10-28T22:08
 ---
 

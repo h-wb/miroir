@@ -5,7 +5,7 @@ categories:
 summary: This index points to warehouse architecture, source contracts, and instructions for adding sources.
 topics:
   - "[[Warehouse]]"
-  - "[[Collector]]"
+  - "[[Device collector]]"
 created: 2026-09-24T22:01
 ---
 
