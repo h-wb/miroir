@@ -1,14 +1,24 @@
+---
+area: "[[Homelab]]"
+categories:
+  - "[[Resources]]"
+summary: This reference explains how ScreenMemory text, app usage, and screenshots are collected, masked, and represented in the warehouse.
+topics:
+  - "[[Collector]]"
+  - "[[Warehouse]]"
+created: 2026-11-20T09:57
+---
+
 # ScreenMemory
 
 What was on the Mac's screen: one row per screenshot with its recognised text, and
 which app was in front. Collected on the Mac by the Miroir collector (decision 030).
 
-- **Status**: connector and source built 2026-11-20; not deployed, no connection
-  configured yet
+- **Status**: the collector can send incremental batches to a Miroir connection.
 - **Code**: connector [`src/integrations/screenmemory/`](../../src/integrations/screenmemory/),
   source [`collector/miroir_collector/sources/screenmemory.py`](../../collector/miroir_collector/sources/screenmemory.py)
 - **Tables**: `frames`, `app_usage`, in the connection's dataset
-- **dbt**: none yet
+- **dbt**: the [timeline analysis](../miroir/README.md#the-timeline-package) builds ScreenMemory session and app models.
 - **Dashboard**: none yet
 
 ## Where the data comes from
@@ -124,8 +134,8 @@ its app on the exact timestamp.
 
 ## Not covered yet
 
-- No dbt models: sessions, hours per app and a cleaned text for summaries are the
-  next step.
+- No cleaned text for summaries yet. Sessions and time per app are in the
+  `timeline` analysis.
 - Screenshots are uploaded only when the source's `media` option is true, and
   only for frames after the media cursor. An existing archive is brought in by
   copying the `screenshots/` folder into the bucket under

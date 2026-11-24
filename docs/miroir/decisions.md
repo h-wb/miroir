@@ -1,3 +1,14 @@
+---
+area: "[[Homelab]]"
+categories:
+  - "[[Decisions]]"
+summary: This log records why the warehouse and collector adopted their interfaces and operating model and how those decisions changed.
+topics:
+  - "[[Warehouse]]"
+  - "[[Collector]]"
+created: 2026-10-28T22:08
+---
+
 # Workspace design decisions
 
 ## 001 — Versioned JSON configuration with strict typed validation

@@ -1,3 +1,13 @@
+---
+area: "[[Homelab]]"
+categories:
+  - "[[Resources]]"
+summary: This reference explains what the GitHub connector extracts and how its models join API rows to historical exports.
+topics:
+  - "[[Warehouse]]"
+created: 2026-09-24T22:01
+---
+
 # GitHub
 
 My GitHub footprint: everything in the repos I own (any author, bots included)

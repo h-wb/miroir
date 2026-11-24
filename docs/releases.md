@@ -1,3 +1,14 @@
+---
+area: "[[Homelab]]"
+categories:
+  - "[[Resources]]"
+summary: This guide explains how versioned collector tags are produced and how compatibility with the server is managed.
+topics:
+  - "[[Collector]]"
+  - "[[Warehouse]]"
+created: 2026-11-21T11:52
+---
+
 # Releases
 
 Only the collector is released. It is a program installed on personal machines,

@@ -1,3 +1,13 @@
+---
+area: "[[Homelab]]"
+categories:
+  - "[[Resources]]"
+summary: This guide shows how to write, register, and test a native dlt integration without breaking ingestion state or compatibility.
+topics:
+  - "[[Warehouse]]"
+created: 2026-11-11T22:18
+---
+
 # Writing an integration
 
 An integration is an ordinary dlt source plus a small Miroir definition. It does

@@ -152,7 +152,7 @@ builds, which run the pinned image, not `main`. Secrets for mise tasks come from
   (`/app/.venv/bin/python -m src.cli` / `-m prefect`) — a node once refused
   PATH lookups of console scripts despite a correct image.
 
-## Known remaining work (2026-11-11)
+## Known remaining work (2026-11-22)
 
 - Legacy loads are retired (decision 025): GitHub, ListenBrainz, Bike Share and
   Health run on Miroir, bound to their original raw schemas. Operator leftovers:

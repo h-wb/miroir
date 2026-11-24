@@ -1,18 +1,29 @@
+---
+area: "[[Homelab]]"
+categories:
+  - "[[Resources]]"
+summary: This reference explains how the browser history connector handles state and masking for snapshots and incremental batches.
+topics:
+  - "[[Collector]]"
+  - "[[Warehouse]]"
+created: 2026-09-24T22:01
+---
+
 # Browser history
 
 Browsing history from Zen (Firefox-based) on the MacBook, from 2025-01-07 on,
 including how long each page was in view and how much I typed on it.
 
-- **Status**: legacy load retired 2026-11-11; `browser_history_data` and the models built from it were dropped on 2026-11-22 (decision 042). To be redone as a Miroir connection with a watched folder at `/miroir/data/browser` (the same synced NAS folder the legacy flow read)
-- **Code**: connector [`src/integrations/browser_history/`](../../src/integrations/browser_history/) (two formats: a full snapshot, and incremental batches from the collector); source [`collector/miroir_collector/sources/zen_history.py`](../../collector/miroir_collector/sources/zen_history.py), built 2026-11-20, not deployed
-- **Raw schema**: `browser_history_data.zen_*` (dropped; a new connection gets its own dataset)
-- **dbt**: `staging.stg_browser__{visits, page_interactions}` → `browser.{visits, domains_daily}`
-- **Dashboard**: Browser (31): Overview (pages, hours in view, top sites, how I got there) / When (weekday × hour heatmap, hour and weekday charts, recent visits); Date, Group by and Site filters
+- **Status**: the legacy load retired on 2026-11-11; its `browser_history_data` dataset and models were dropped on 2026-11-22 (decision 042). Miroir accepts snapshots and incremental collector batches.
+- **Code**: connector [`src/integrations/browser_history/`](../../src/integrations/browser_history/); source [`collector/miroir_collector/sources/zen_history.py`](../../collector/miroir_collector/sources/zen_history.py)
+- **Raw schema**: a Miroir connection uses its own dataset, not `browser_history_data`.
+- **dbt**: the `browser` model group includes `visits` and `domains_daily`; the `timeline` analysis can also use browser history.
+- **Historical dashboard reference**: Browser (31) showed an overview of visits and time in view, plus a weekday and hour breakdown.
 
 ## Where the data comes from
 
 Zen keeps history in `places.sqlite` in its profile, locked while the browser
-runs. A mise task in the dotfiles snapshots it:
+runs. The retired load used a mise task in the dotfiles to snapshot it:
 
 - **[`conf.d/zen-history.personal.toml`](https://github.com/h-wb/dotfiles/blob/main/conf.d/zen-history.personal.toml)**
   (MacBook only, `personal` env): task `mise run zen-history-snapshot` copies the

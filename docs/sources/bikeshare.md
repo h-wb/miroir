@@ -1,3 +1,13 @@
+---
+area: "[[Homelab]]"
+categories:
+  - "[[Resources]]"
+summary: The Bike Share connector loads trips and related rows for analysis.
+topics:
+  - "[[Warehouse]]"
+created: 2026-09-24T22:01
+---
+
 # Bike Share Toronto
 
 Every Bike Share Toronto rental (stations, times, bike type).

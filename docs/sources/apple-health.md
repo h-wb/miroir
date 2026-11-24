@@ -1,3 +1,13 @@
+---
+area: "[[Homelab]]"
+categories:
+  - "[[Resources]]"
+summary: The Apple Health connector imports Health Auto Export files and maps them to warehouse tables.
+topics:
+  - "[[Warehouse]]"
+created: 2026-09-24T22:01
+---
+
 # Apple Health
 
 Health metrics (steps, heart rate, energy, sleep, body…), workouts, state of mind

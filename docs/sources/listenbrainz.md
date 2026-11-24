@@ -1,3 +1,13 @@
+---
+area: "[[Homelab]]"
+categories:
+  - "[[Resources]]"
+summary: This reference explains how ListenBrainz rows are imported, deduplicated, and interpreted alongside older listening history.
+topics:
+  - "[[Warehouse]]"
+created: 2026-09-24T22:01
+---
+
 # ListenBrainz
 
 Every listen, from 2019-06 on. ListenBrainz is the hub: other players scrobble

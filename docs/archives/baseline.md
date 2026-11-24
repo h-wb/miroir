@@ -1,3 +1,14 @@
+---
+area: "[[Homelab]]"
+categories:
+  - "[[Resources]]"
+summary: This snapshot records the original data loads, data identities, and runtime constraints before the Miroir cutover.
+superseded_by: "[Miroir development](../miroir/README.md)"
+topics:
+  - "[[Warehouse]]"
+created: 2026-10-28T22:08
+---
+
 # Initial baseline
 
 Recorded 2026-10-28 on the workspace implementation branch, based on main commit

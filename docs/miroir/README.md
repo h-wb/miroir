@@ -1,12 +1,22 @@
+---
+area: "[[Homelab]]"
+categories:
+  - "[[Resources]]"
+summary: This guide shows how to run Miroir locally and use its connection, analysis, media, and timeline interfaces.
+topics:
+  - "[[Warehouse]]"
+  - "[[Collector]]"
+created: 2026-10-28T22:08
+---
+
 # Miroir development
 
 Miroir provides a web interface, HTTP API, and CLI over shared connection,
-artifact, and execution services. The server and isolated Prefect Kubernetes
-runtime are deployed; ListenBrainz has completed an end-to-end sync. Legacy
-flows continue alongside Miroir until each source is explicitly cut over.
+artifact, and execution services. The legacy per-source flows are retired;
+GitHub, ListenBrainz, Bike Share, and Apple Health load through Miroir (decision 025).
 
 - [Roadmap](../product-plan.md)
-- [Baseline and migration constraints](baseline.md)
+- [Archived baseline and migration constraints](../archives/baseline.md)
 - [Design decisions](decisions.md)
 - [Writing an integration](integrations.md)
 - [Implementation log and next steps](implementation-log.md)
@@ -257,9 +267,9 @@ On the cluster this is deployed (decisions 012, 015): the image
 matching the server; `PIPELINES_CODE_REVISION` baked in), a Kubernetes work pool
 `miroir-k8s` gives each flow run its own Job with the NFS data export mounted
 at `/miroir/data` (configuration and artifacts live under
-`/miroir/data/miroir/`), and a dedicated worker runs it. Nothing secret lives
-in Prefect, and no database password is copied anywhere: the miroir-k8s base
-job template in home-ops injects the warehouse credentials from the
+`/miroir/data/miroir/`), and a dedicated worker runs it. Jobs get database
+credentials from Kubernetes Secrets, not from operator copies. The `miroir-k8s`
+base job template in home-ops injects the warehouse credentials from the
 CNPG-generated `postgres-metabase-app` secret, and the metadata credentials from
 the `postgres-miroir-app` secret of Miroir's own CNPG cluster — the miroir
 composes its metadata URL from the
@@ -312,14 +322,8 @@ the localhost-only default when the proxy runs in another pod.
 On the cluster the server is deployed (home-ops `automation/miroir`): the
 `miroir` service at `https://miroir.<domain>` behind envoy-internal, on the
 same image as the flow runs, with the metadata store in postgres-miroir and
-artifacts/configuration on the NFS export. It waits for the `miroir-secret`
-Secret — place it by hand until the Bitwarden `miroir` item exists:
-
-```bash
-kubectl -n automation create secret generic miroir-secret \
-  --from-literal=MIROIR_SECRET_KEY="$(uv run --locked pipelines-miroir generate-key)" \
-  --from-literal=MIROIR_API_TOKEN="$(openssl rand -hex 24)"
-```
+artifacts/configuration on the NFS export. An ExternalSecret provisions
+`miroir-secret` from the Bitwarden `miroir` item.
 
 The overview lists connections and analyses separately. Connections own source
 settings, credentials, delivery, ingestion, and schedules. Analyses link connections
@@ -556,8 +560,8 @@ Add each through a documented schema change when its operation is implemented.
 
 Some sources exist only on a personal machine. The collector in `collector/` (the
 `miroir-collector` package, decisions 030, 031 and 035) reads them there and posts
-what is new to a connection's receiving URL. It installs on its own, with two
-small libraries and none of the server's; [its README](../../collector/README.md)
+what is new to a connection's receiving URL. It installs on its own with three
+dependencies and none of the server's; [its README](../../collector/README.md)
 covers installing it.
 
 ```bash
@@ -839,8 +843,8 @@ connection with screenshots.
 
 ### Timeline: reading the warehouse
 
-The timeline (decision 040) is a page of the server that reads the warehouse. So
-far it has a status page and a JSON API for the pages to come. It is off until
+The timeline (decision 040) reads the warehouse and provides Day and Search
+views and a JSON API. It is off until
 the server's environment names a read-only connection and the configuration has
 an analysis of the `timeline` package (below):
 

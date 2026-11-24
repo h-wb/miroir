@@ -1,3 +1,14 @@
+---
+area: "[[Homelab]]"
+categories:
+  - "[[Resources]]"
+summary: This reference explains which parts of the code own ingestion, media, execution, and delivery and which dependencies they may use.
+topics:
+  - "[[Warehouse]]"
+  - "[[Collector]]"
+created: 2026-11-20T14:36
+---
+
 # Architecture: parts and responsibilities
 
 Each part of Miroir has one job. The import rules below are enforced by

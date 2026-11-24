@@ -1,3 +1,14 @@
+---
+area: "[[Homelab]]"
+categories:
+  - "[[Resources]]"
+summary: This index points to warehouse architecture, source contracts, and instructions for adding sources.
+topics:
+  - "[[Warehouse]]"
+  - "[[Collector]]"
+created: 2026-09-24T22:01
+---
+
 # Pipelines documentation
 
 Personal data warehouse: every service I use, mirrored into one Postgres so it
@@ -31,8 +42,8 @@ How the collector is versioned and released: [releases](releases.md).
 
 ## Sources
 
-Since 2026-11-11 every source loads through a Miroir connection bound to its
-original raw schema (decision 021); the legacy per-source flows are retired.
+On 2026-11-11, the four sources listed first below moved to Miroir connections
+bound to their original raw schemas, and the legacy per-source flows were retired (decision 025).
 
 | Source | Data | Miroir connection, schedule (UTC) | Raw schema | dbt | Dashboards |
 |---|---|---|---|---|---|
@@ -40,9 +51,9 @@ original raw schema (decision 021); the legacy per-source flows are retired.
 | [GitHub](sources/github.md) | commits, PRs, issues, comments, releases, stars, events, contribution calendar | `github`, daily 01:00 | `github_data` | `github` | GitHub (30) |
 | [Apple Health](sources/apple-health.md) | metrics, workouts, state of mind, medications | `health`, on each export (receiving URL) | `apple_health_data` | `health`, `crossovers` | Health (24), crossovers |
 | [Bike Share Toronto](sources/bikeshare.md) | every rental | `bikeshare`, daily 00:00 | `bikeshare_data` | `biking`, `crossovers` | Biking (3), Rides (26) |
-| [Browser history](sources/browser-history.md) | Zen (Firefox) visits, time on page, typing | retired 2026-11-11, to be redone in Miroir (watched folder, or the collector's `zen_history` source, built 2026-11-20) | `browser_history_data` (dropped 2026-11-22) | `browser` | Browser (31) |
-| [ScreenMemory](sources/screenmemory.md) | screen text per screenshot, front app | built 2026-11-20, not deployed; sent by the Miroir collector | the connection's dataset | – | – |
-| [Apple Messages](sources/apple-messages.md) | iMessage, SMS and RCS rows | built, not deployed; sent by the Miroir collector | the connection's dataset | `messages` | – |
+| [Browser history](sources/browser-history.md) | Zen (Firefox) visits, time on page, typing | legacy load retired; supports snapshots and `zen_history` collector batches | the connection's dataset | `browser`, `timeline` | Browser (31, historical reference) |
+| [ScreenMemory](sources/screenmemory.md) | screen text per screenshot, front app | supported by the Miroir collector | the connection's dataset | `timeline` | timeline interface |
+| [Apple Messages](sources/apple-messages.md) | iMessage, SMS and RCS rows | supported by the Miroir collector | the connection's dataset | `messages` | – |
 | Dawarich | location history | in progress, not deployed | `dawarich_data` | – | – |
 
 Crossover dashboards (collection "Crossovers"): Music & Heart (25), Rides (26),
@@ -60,8 +71,8 @@ analysis builds each group into its own `miroir_<analysis>_…_<group>` schema.
 - **Prefect**'s process worker (`local-pool`) runs flows from other repositories;
   this repository no longer deploys to it (decision 042).
 - **Warehouse**: CNPG cluster `postgres-metabase` (automation namespace), database
-  `metabase`. Only reachable in-cluster; `kubectl port-forward` drops under bulk
-  loads, so one-off loads run on the worker (see [operations](operations.md)).
+  `metabase`. Only reachable in-cluster; deliver one-off files through a Miroir
+  connection by upload or receiving URL (see [operations](operations.md)).
 - **File drops**: Miroir flow runs mount the NAS share `Documents/data` at
   `/miroir/data`. The same folder is `Hugo/Documents/data` in Nextcloud, so
   anything synced there from a laptop

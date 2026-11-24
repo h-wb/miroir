@@ -1,8 +1,19 @@
+---
+area: "[[Homelab]]"
+categories:
+  - "[[Plans]]"
+summary: This plan records the goals, milestones, and acceptance criteria for the warehouse migration and later features.
+topics:
+  - "[[Warehouse]]"
+  - "[[Collector]]"
+created: 2026-10-28T22:08
+---
+
 # Personal data workspace: implementation plan
 
 Status: implementation started, 2026-10-28.
-See the [implementation log](workspace/implementation-log.md) for actual milestone
-status and the [decision log](workspace/decisions.md) for choices made during development.
+See the [implementation log](miroir/implementation-log.md) for actual milestone
+status and the [decision log](miroir/decisions.md) for choices made during development.
 Completion criteria below remain gates, not claims of completed work.
 
 ## Objective
@@ -454,11 +465,11 @@ exercise must also pass before claiming portability.
 
 ## Later: automated acquisition and clients
 
-Implement only after the manual import path is stable:
+Watched folders and device uploads already share artifact registration with manual imports.
+The remaining acquisition and client milestones are:
 
 - Playwright acquisition for one concrete export-only service, with durable request,
   retrieval, authentication-needed, and artifact-created states.
-- Watched folders and device uploads using the same artifact registration contract.
 - Browser/mobile/desktop clients as producers. Specify their transport, identity,
   batching, and delivery acknowledgement when a real client is built.
 

@@ -1,3 +1,14 @@
+---
+area: "[[Homelab]]"
+categories:
+  - "[[Resources]]"
+summary: This log records what was built and verified at each stage of the warehouse and collector implementation.
+topics:
+  - "[[Warehouse]]"
+  - "[[Collector]]"
+created: 2026-10-28T22:08
+---
+
 # Implementation log
 
 ## 2026-10-28 — Planning and baseline

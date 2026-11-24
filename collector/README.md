@@ -1,3 +1,14 @@
+---
+area: "[[Homelab]]"
+categories:
+  - "[[Resources]]"
+summary: This guide explains how to install, configure, run, and test the collector and interpret its reports.
+topics:
+  - "[[Collector]]"
+  - "[[Warehouse]]"
+created: 2026-11-20T14:36
+---
+
 # miroir-collector
 
 A small program for a personal machine. It reads sources that exist only
