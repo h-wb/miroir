@@ -3,7 +3,7 @@ area: "[[Homelab]]"
 categories:
   - "[[Resources]]"
 reviewed: 2026-11-24
-summary: The index of this repo's pages, one row per source with its connector and collector source, and how secrets reach a checkout.
+summary: The index of this repo's pages and of its connectors, with what each reads, its collector source, tables and packages, and how secrets reach a checkout.
 topics:
   - "[[Warehouse]]"
   - "[[Device collector]]"
@@ -25,33 +25,36 @@ What is deployed and how to operate it:
 | Page | What it holds |
 | --- | --- |
 | [Miroir](miroir/README.md) | What it is, the words, the rules, the commands, development; the reference pages beside it |
+| [Flows](miroir/flows.md) | How data moves in and out, one diagram per flow |
 | [Architecture](architecture.md) | Which part of the code does what, who may import whom, where a new thing goes |
 | [Decisions](miroir/decisions.md) | Why it is built this way, numbered |
 | [Writing an integration](miroir/integrations.md) | How a connector is written and tested |
 | [Observability](observability.md) | How Miroir tells a quiet source from a broken one; metrics and alert rules |
-| [Operations](operations.md) | Commands and failures seen, from a checkout |
+| [Operations](operations.md) | Adding a device source or an analysis, commands from a checkout, symptoms and failures seen |
 | [Releases](releases.md) | How the collector is versioned and released |
 | [The collector](../collector/README.md) | Install, configure, run and test `miroir-collector` |
 | [Sources](sources/) | One page per source, below |
 
 ## Sources
 
-One row per connector in `src/integrations/registry.py`. A collector source is a
-module in `collector/miroir_collector/sources/`.
+One row per connector in `src/integrations/registry.py`; a collector source is a
+module in `collector/miroir_collector/sources/`. Any number of connections can
+use a connector. The connections configured in an installation (their names,
+schedules, datasets and dashboards) are in its `miroir.json`, which the
+interface edits: read them there, or with `pipelines-miroir connections`.
 
-| Source | Connector, input | Collector source | Package | Handbook |
-| --- | --- | --- | --- | --- |
-| [ListenBrainz](sources/listenbrainz.md) | `listenbrainz`, fetch | | `music`, `crossovers` | [Music listening](https://github.com/h-wb/handbook/blob/main/Systems/Music%20listening.md) |
-| [GitHub](sources/github.md) | `github`, fetch | | `github` | [Code activity](https://github.com/h-wb/handbook/blob/main/Systems/Code%20activity.md) |
-| [Bike Share](sources/bikeshare.md) | `bikeshare`, fetch | | `biking`, `crossovers` | [Bike rides](https://github.com/h-wb/handbook/blob/main/Systems/Bike%20rides.md) |
-| [Apple Health](sources/apple-health.md) | `apple_health`, Health Auto Export JSON | | `health`, `crossovers` | [Health data](https://github.com/h-wb/handbook/blob/main/Systems/Health%20data.md) |
-| [Browser history](sources/browser-history.md) | `browser_history`, Places snapshot or collector batches | `zen_history` | `browser`, `timeline` | [Browser history](https://github.com/h-wb/handbook/blob/main/Systems/Browser%20history.md) |
-| [ScreenMemory](sources/screenmemory.md) | `screenmemory`, collector batches; media `screenshots` | `screenmemory` | `timeline` | [Screen activity](https://github.com/h-wb/handbook/blob/main/Systems/Screen%20activity.md) |
-| [Apple Messages](sources/apple-messages.md) | `apple_messages`, collector batches; media `attachments` | `apple_messages` | `messages` | [Messages](https://github.com/h-wb/handbook/blob/main/Systems/Messages.md) |
+| Source | Reads | Connector | Collector source | Raw tables | Packages |
+| --- | --- | --- | --- | --- | --- |
+| [ListenBrainz](sources/listenbrainz.md) | Every listen, from the API | [`listenbrainz`](../src/integrations/listenbrainz/) | | `listens` | `music`, `crossovers` |
+| [GitHub](sources/github.md) | Repos, commits, pull requests, issues, comments, releases, stars, events, contributions, from the API | [`github`](../src/integrations/github/) | | `repos`, `commits`, `pull_requests`, … | `github` |
+| [Bike Share](sources/bikeshare.md) | Every rental, from the mobile app's API | [`bikeshare`](../src/integrations/bikeshare/) | | `trips` | `biking`, `crossovers` |
+| [Apple Health](sources/apple-health.md) | Health Auto Export JSON files | [`apple_health`](../src/integrations/apple_health/) | | `metrics`, `workouts`, `state_of_mind`, `medications` | `health`, `crossovers` |
+| [Browser history](sources/browser-history.md) | Zen or Firefox history: collector batches or a Places snapshot | [`browser_history`](../src/integrations/browser_history/) | `zen_history` | `zen_*` | `browser`, `timeline` |
+| [ScreenMemory](sources/screenmemory.md) | Screen text, front app, screenshots as media | [`screenmemory`](../src/integrations/screenmemory/) | `screenmemory` | `frames`, `app_usage` | `timeline` |
+| [Apple Messages](sources/apple-messages.md) | Messages, chats, contacts, attachments as media | [`apple_messages`](../src/integrations/apple_messages/) | `apple_messages` | `messages`, `chats`, `handles`, `attachments`, … | `messages` |
 
-Location is not loaded: the location tracker keeps that record, and there is no
-connector for it. Which connections the installation configures, and how each
-arrives, is in home-ops.
+Each source's handbook page says what it is and why it is kept. No connector
+reads location history.
 
 A source page covers: status, where the data comes from, extraction (resources,
 keys, cursors) or what the collector sends and withholds, tables, models and

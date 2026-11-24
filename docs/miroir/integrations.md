@@ -138,5 +138,5 @@ requests and that declared resource names match actual selectable resources.
 or the production warehouse in these tests.
 
 The bundled registry is deliberately explicit. External package installation and
-discovery are not implemented; installing Python integrations will require trusting
-their code, not treating them as sandboxed configuration.
+discovery do not exist. An integration is trusted Python code, not sandboxed
+configuration.

@@ -115,7 +115,7 @@ derived: no thumbnails and no records.
 A file that has a row is not read again unless queued again, whatever its status.
 A row says the file was in the bucket when the run reached it, and it stays if
 the object is deleted later. No row does not mean not stored: the file may be
-queued, its kind may not be derived, it may not be backfilled yet, or it was
+queued, its kind may not be derived, it may predate thumbnails and not have been backfilled, or it was
 gone when the run reached it. A file replaced by another with the same key and
 size is not derived again.
 

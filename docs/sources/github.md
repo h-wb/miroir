@@ -15,13 +15,12 @@ created: 2026-09-24T22:01
 My GitHub footprint: everything in the repos I own (any author, bots included)
 and my activity in other people's repos.
 
-- **Connection**: integration `github`, fetched on the connection's schedule;
-  the installation's is `github`, bound to `github_data`
+- **Integration**: `github`, fetched on a connection's schedule. The connections configured today are listed in the interface and by
+  `pipelines-miroir connections`.
 - **Code**: [`src/integrations/github/`](../../src/integrations/github/), one
   module per resource in `resources/` (decision 028)
 - **Packages**: `github` (`commits`, `pull_requests`, `issues`, `issue_comments`,
   `releases`, `contributions`)
-- **Dashboard**: GitHub (not checked here)
 
 ## Extraction
 

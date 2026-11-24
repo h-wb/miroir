@@ -59,7 +59,7 @@ amendment under it. Older entries say "workspace" (renamed Miroir by 014) and
 | [038](#038--apple-messages-through-the-collector-keyed-so-nothing-arrives-twice) | Apple Messages through the collector, keyed so nothing arrives twice | Accepted |
 | [039](#039--the-collector-reports-every-run-and-miroir-is-where-a-sources-health-is-seen) | The collector reports every run, and Miroir is where a source's health is seen | Accepted |
 | | [038 follow-up — Apple Messages attachment uploads and contact names](#038-follow-up--apple-messages-attachment-uploads-and-contact-names) | Accepted |
-| [040](#040--a-timeline-inside-miroir-and-its-groundwork) | A timeline inside Miroir, and its groundwork | Accepted; conversations phase to come |
+| [040](#040--a-timeline-inside-miroir-and-its-groundwork) | A timeline inside Miroir, and its groundwork | Accepted |
 | | [040 amendment — Thumbnails and stored media (phase 1b)](#040-amendment--thumbnails-and-stored-media-phase-1b) | Accepted |
 | | [040 amendment — Queries, the API and images through the server (phase 1c, part 1)](#040-amendment--queries-the-api-and-images-through-the-server-phase-1c-part-1) | Accepted |
 | | [040 amendment — The Day view and search pages (phase 1c, part 2)](#040-amendment--the-day-view-and-search-pages-phase-1c-part-2) | Accepted |
@@ -1756,8 +1756,7 @@ disagree, the collector reports ambiguity and sends no name for that handle.
 ## 040 — A timeline inside Miroir, and its groundwork
 
 Status: accepted, 2026-11-21. Refines 022 and 033. Built: phase 0 (#42), 1a
-(#43), 1b (#44, #47), 1c (#49, #50) and the media upgrade fix (#51); the
-conversations phase is the plan that follows.
+(#43), 1b (#44, #47), 1c (#49, #50) and the media upgrade fix (#51).
 
 Miroir loads screen frames, their screenshots and soon messages, but the only way
 to look at them is a dashboard that lists rows. The timeline is a page of the

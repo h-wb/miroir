@@ -25,12 +25,13 @@ It is meant for one person who wants their data in a database they own: API
 sources and exported files are equal citizens, original files are kept, and
 loads, models and dashboards hang off one configuration and one status page.
 This installation is its first user; a hosted service and a large catalogue of
-connectors are not goals for now. What is left to build is on the board, and
+connectors are not goals. What is left to build is on the board, and
 the road across systems is the handbook's
 [The road](https://github.com/h-wb/handbook/blob/main/Plans/The%20road.md).
 
 | Page | What it holds |
 | --- | --- |
+| [Flows](flows.md) | How data moves in and out, one diagram per flow |
 | [Configuration](configuration.md) | `miroir.json`, the environment, credentials |
 | [Connections and runs](runs.md) | How data arrives, how a load runs, Prefect, analysis builds, the metadata schema |
 | [Analyses](analyses.md) | The packages, what each builds, the messages and timeline tables |

@@ -16,17 +16,15 @@ created: 2026-09-24T22:01
 Browsing history from Zen, a Firefox-based browser, including how long each page
 was in view and how much was typed on it.
 
-- **Connection**: integration `browser_history`; the installation's is
-  `browser_macbook`, sent by the collector's `zen_history` source (decision 032).
-  The legacy load, and `browser_history_data` with the models built from it,
-  are gone (decisions 025, 042)
+- **Integration**: `browser_history`, sent by the collector's `zen_history`
+  source (decision 032) or loaded from a snapshot. The connections configured today are listed in the interface and by
+  `pipelines-miroir connections`.
 - **Code**: connector [`src/integrations/browser_history/`](../../src/integrations/browser_history/)
   with two formats, a full snapshot and the collector's batches; collector source
   [`collector/miroir_collector/sources/zen_history.py`](../../collector/miroir_collector/sources/zen_history.py)
 - **Raw tables**: `zen_*`, below, in the connection's dataset
 - **Packages**: `browser` (`visits`, `domains_daily`), and the browser lane of
   `timeline`
-- **Dashboard**: Browser (not checked here)
 
 ## Where the data comes from
 

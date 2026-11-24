@@ -16,13 +16,13 @@ created: 2026-11-21T11:39
 Message history (iMessage, SMS and RCS), collected on the Mac by the Miroir
 collector (decision 038).
 
-- **Connection**: integration `apple_messages`; the installation's is
-  `messages`, sent by the collector, with attachments as media
+- **Integration**: `apple_messages`, sent by the collector, with attachments
+  as media. The connections configured today are listed in the interface and by
+  `pipelines-miroir connections`.
 - **Code**: connector [`src/integrations/apple_messages/`](../../src/integrations/apple_messages/),
   source [`collector/miroir_collector/sources/apple_messages.py`](../../collector/miroir_collector/sources/apple_messages.py)
 - **Package**: `messages` (decision 041,
-  [its tables](../miroir/analyses.md#the-messages-package)); dashboard Messages
-  (not checked here)
+  [its tables](../miroir/analyses.md#the-messages-package))
 
 ## Where the data comes from
 
@@ -181,7 +181,7 @@ when it sends its own edited messages again; it is corrected when that machine
 receives the newer state and sends again. Running the source from one always-on
 machine avoids this.
 
-## Not covered yet
+## What it does not cover
 
 Rich formatting, edit history, live events, reading backups directly and old
 exports are not covered. Edits and unsends are sent again, but earlier

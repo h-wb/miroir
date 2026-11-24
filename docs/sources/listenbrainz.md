@@ -15,12 +15,11 @@ created: 2026-09-24T22:01
 Every listen. ListenBrainz is the hub: players scrobble into it and Miroir
 mirrors it.
 
-- **Connection**: integration `listenbrainz`, fetched on the connection's
-  schedule; the installation's is `listenbrainz`, bound to `listenbrainz_data`
+- **Integration**: `listenbrainz`, fetched on a connection's schedule. The connections configured today are listed in the interface and by
+  `pipelines-miroir connections`.
 - **Code**: [`src/integrations/listenbrainz/`](../../src/integrations/listenbrainz/)
 - **Raw table**: `listens`
 - **Packages**: `music`, `crossovers`
-- **Dashboards**: Music, Music & Heart, Late nights, Year in review (not checked here)
 
 ## Where the data comes from
 
@@ -62,7 +61,7 @@ Settings `username` and `start_date` (an instant with a UTC offset). Credential
   copy, and the history was loaded again. Listens only the connector had (during
   multi-scrobbler outages, or plays too short for multi-scrobbler) were kept.
 - 2026-08-24 to 2026-09-22: multi-scrobbler lost its Spotify session and nothing
-  was scrobbled. The gap is still open.
+  was scrobbled. Those listens are not in the warehouse.
 
 ## Quirks
 

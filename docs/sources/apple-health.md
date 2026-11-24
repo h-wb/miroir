@@ -15,12 +15,12 @@ created: 2026-09-24T22:01
 Health metrics (steps, heart rate, energy, sleep, body), workouts, state of mind
 and medications from the phone and the watch.
 
-- **Connection**: integration `apple_health`; the installation's is `health`,
-  fed on each export through its receiving URL
+- **Integration**: `apple_health`, fed on each export through a connection's
+  receiving URL. The connections configured today are listed in the interface and by
+  `pipelines-miroir connections`.
 - **Code**: [`src/integrations/apple_health/`](../../src/integrations/apple_health/)
 - **Raw tables**: `metrics`, `workouts`, `state_of_mind`, `medications`
 - **Packages**: `health` (`daily_summary`, `workout_summary`), `crossovers`
-- **Dashboards**: Health, and the crossovers (not checked here)
 
 ## Where the data comes from
 

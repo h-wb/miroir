@@ -16,15 +16,16 @@ created: 2026-11-20T09:57
 What was on the Mac's screen: one row per screenshot with its recognised text, and
 which app was in front. Collected on the Mac by the Miroir collector (decision 030).
 
-- **Connection**: integration `screenmemory`; the installation's is
-  `screen_macbook`, sent by the collector, with screenshots as media
+- **Integration**: `screenmemory`, sent by the collector, with screenshots as
+  media. The connections configured today are listed in the interface and by
+  `pipelines-miroir connections`.
 - **Code**: connector [`src/integrations/screenmemory/`](../../src/integrations/screenmemory/),
   source [`collector/miroir_collector/sources/screenmemory.py`](../../collector/miroir_collector/sources/screenmemory.py)
 - **Tables**: `frames`, `app_usage`, in the connection's dataset
-- **dbt**: the screen lane of the `timeline` analysis (`screen_frames`, `events`,
+- **Package**: the screen lane of the `timeline` analysis (`screen_frames`, `events`,
   `days`, `apps`; decision 040). Thumbnails and `media_objects` come from the
   derive run
-- **Dashboard**: none; the [timeline](../miroir/timeline.md) reads it
+- Read by the [timeline](../miroir/timeline.md)
 
 ## Where the data comes from
 
@@ -148,13 +149,14 @@ miroir-collector collect --config collector.json --source <id> --out /tmp/batche
 Both merge on their key, so a batch delivered twice changes nothing. A frame joins
 its app on the exact timestamp.
 
-## Not covered yet
+## What it does not cover
 
-- No cleaned text for summaries yet. Sessions and time per app are in the
-  `timeline` analysis.
+- No model cleans screen text; sessions and time per app are in the `timeline`
+  analysis.
 - Screenshots are uploaded only when the source's `media` option is true, and
   only for frames after the media cursor. An existing archive is brought in by
   copying the `screenshots/` folder into the bucket under
-  `<prefix>/<connection>/screenshots/`; the collector then finds those files present.
-- History before the source's `since` is not sent by normal runs. Load it later
-  with `miroir-collector resend --from ... --to ...`, with `--media` for the screenshots.
+  `<prefix>/<connection>/screenshots/`; the collector then finds those files
+  present.
+- Normal runs send nothing before the source's `since`. `miroir-collector resend
+  --from ... --to ...` sends it, with `--media` for the screenshots.
