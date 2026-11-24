@@ -1,3 +1,15 @@
+---
+area: "[[Homelab]]"
+categories:
+  - "[[Resources]]"
+reviewed: 2026-11-24
+summary: How collector releases are versioned and cut by Release Please, and how a collector and a server that disagree are kept from loading wrong rows.
+topics:
+  - "[[Device collector]]"
+  - "[[Warehouse]]"
+created: 2026-11-21T11:52
+---
+
 # Releases
 
 Only the collector is released. It is a program installed on personal machines,
@@ -52,7 +64,9 @@ the new tag.
 Do not create a tag or a release by hand, and do not edit the version by hand:
 the manifest (`.release-please-manifest.json`) would no longer match.
 
-## Maintainer setup (once)
+## Repository setup
+
+Done once; needed again only for a fork or a new repository.
 
 1. Allow squash merges in the repository settings and use the PR title as the
    squash commit title.
@@ -63,7 +77,7 @@ the manifest (`.release-please-manifest.json`) would no longer match.
    workflows, so the release PR would get no checks.
 3. Set the Actions variable `RELEASE_AUTOMATION_ENABLED` to `true`. The workflow
    does nothing until then, including on forks.
-4. Add the workflow `.github/workflows/release-please.yml`.
+4. The workflow is `.github/workflows/release-please.yml`; it runs after a successful Test run of a push to main.
 
 The first release counts commits made after the commit named `bootstrap-sha` in
 `release-please-config.json`, starting from version 0.1.0.

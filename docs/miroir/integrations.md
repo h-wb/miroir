@@ -1,3 +1,14 @@
+---
+area: "[[Homelab]]"
+categories:
+  - "[[Resources]]"
+reviewed: 2026-11-24
+summary: How to write, register and test a connector, a dlt source with a small Miroir definition, without breaking its stored state.
+topics:
+  - "[[Warehouse]]"
+created: 2026-11-11T22:18
+---
+
 # Writing an integration
 
 An integration is an ordinary dlt source plus a small Miroir definition. It does
@@ -38,6 +49,9 @@ and per-run discovery where useful, but not mutable state between source instanc
 Resource keys, write disposition, cursor handling, and table hints live in dlt
 code, not Miroir's metadata. Keep extraction close to upstream records; reporting
 transformations belong in analysis packages.
+
+Open HTTP sessions with dlt's `Client` from `dlt.sources.helpers.requests`, as
+every bundled fetch does: it retries 429 and 5xx answers and times out.
 
 Use `IntegrationError` from `src/integrations/errors.py` for safe, classified
 credential-rejection, rate-limit, and unexpected-response diagnostics. The runner
@@ -94,6 +108,21 @@ an opener over one retained artifact. Upload, receiving URL, and watched folder
 are core transports, not connector implementations. Bump the parser version when
 a change alters rows or values produced by an artifact.
 
+## Media kinds
+
+A connector whose rows point at files declares a `MediaKind`: its name, the
+resource and column holding each file's key, the allowed extensions, a size
+limit, and the extensions the worker makes thumbnails of (none means the kind
+is not derived). Core does the rest: [Media](media.md).
+
+## Sources on a device
+
+A source that exists only on a device is two halves: a module in
+`collector/miroir_collector/sources/` that writes batches, and a file format on
+a connector that reads them, with a batch format and version of its own.
+`tests/test_collector_contract.py` feeds a collected batch to the connector. How
+the collector side is written: [the collector](../../collector/README.md#adding-a-source).
+
 ## Compatibility and tests
 
 Source/resource names, table names, primary keys, and state keys are persistent
@@ -109,5 +138,5 @@ requests and that declared resource names match actual selectable resources.
 or the production warehouse in these tests.
 
 The bundled registry is deliberately explicit. External package installation and
-discovery are not implemented; installing Python integrations will require trusting
-their code, not treating them as sandboxed configuration.
+discovery do not exist. An integration is trusted Python code, not sandboxed
+configuration.

@@ -1,3 +1,15 @@
+---
+area: "[[Homelab]]"
+categories:
+  - "[[Resources]]"
+reviewed: 2026-11-24
+summary: The three signals Miroir keeps per connection to tell a quiet source from a broken or absent one, its metrics, and example alert rules.
+topics:
+  - "[[Warehouse]]"
+  - "[[Device collector]]"
+created: 2026-11-21T11:51
+---
+
 # Observability: noticing a source that stopped
 
 Miroir sees a connection from three places. Together they tell "nothing new"
@@ -30,8 +42,8 @@ connection, and a new connection never inherits reports of an old one with the
 same ID. Counts are integers from 0 to 2^53 with names of letters, digits, `_`
 and `-`; times must fall between 2000 and 2100. A collector that
 predates reports simply sends none; a Miroir that predates them answers 401
-(its login guard) or 404, which the collector notes as `unsupported` and does
-not count. A bad token shows in the row delivery, not in reports.
+(its login guard) or 404, for example. The collector records 401, 404, and 405 as
+`unsupported` and does not count them. A bad token shows in row delivery, not in reports.
 
 ## Metrics
 
@@ -63,6 +75,9 @@ Connections without reports appear only in the first.
 | `miroir_collector_last_count` | Each count of the last report; labels `part` (`rows` or `media`) and `name` (`frames`, `missing`, or one level down such as `masked.token`) |
 
 ## Example alert rules
+
+The rules the installation runs are in
+[home-ops](https://github.com/h-wb/home-ops/blob/main/kubernetes/apps/main/automation/miroir/README.md#monitoring).
 
 ```yaml
 groups:

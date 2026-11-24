@@ -1,13 +1,28 @@
+---
+area: "[[Homelab]]"
+categories:
+  - "[[Resources]]"
+reviewed: 2026-11-24
+summary: What the collector reads from Apple Messages on the Mac, what it sends, masks or never sends, and how Miroir merges messages, contacts and attachments.
+topics:
+  - "[[Messages]]"
+  - "[[Device collector]]"
+  - "[[Warehouse]]"
+created: 2026-11-21T11:39
+---
+
 # Apple Messages
 
 Message history (iMessage, SMS and RCS), collected on the Mac by the Miroir
 collector (decision 038).
 
-- **Status**: collector source and connector built; not deployed
+- **Integration**: `apple_messages`, sent by the collector, with attachments
+  as media. The connections configured today are listed in the interface and by
+  `pipelines-miroir connections`.
 - **Code**: connector [`src/integrations/apple_messages/`](../../src/integrations/apple_messages/),
   source [`collector/miroir_collector/sources/apple_messages.py`](../../collector/miroir_collector/sources/apple_messages.py)
-- **dbt and dashboards**: the `messages` analysis package (decision 041,
-  [its tables](../miroir/README.md#the-messages-package)); no dashboards yet
+- **Package**: `messages` (decision 041,
+  [its tables](../miroir/analyses.md#the-messages-package))
 
 ## Where the data comes from
 
@@ -166,7 +181,7 @@ when it sends its own edited messages again; it is corrected when that machine
 receives the newer state and sends again. Running the source from one always-on
 machine avoids this.
 
-## Not covered yet
+## What it does not cover
 
 Rich formatting, edit history, live events, reading backups directly and old
 exports are not covered. Edits and unsends are sent again, but earlier

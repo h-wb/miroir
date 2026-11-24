@@ -4,5 +4,5 @@
 <h1>Timeline</h1>
 <p class="{{ 'notice' if timeline.ready else 'error' }}" id="timeline-state">{{ timeline.message }}</p>
 {% if timeline.ready %}<p class="muted">Statement time limit: {{ timeline.statement_timeout }}.</p>{% endif %}
-{% if not timeline.configured %}<p class="muted">The timeline needs a read-only warehouse connection and an analysis of the <code>timeline</code> package; see the README.</p>{% endif %}
+{% if not timeline.configured %}<p class="muted">The timeline needs a read-only warehouse connection and an analysis of the <code>timeline</code> package; see docs/miroir/timeline.md.</p>{% endif %}
 {% endblock %}
