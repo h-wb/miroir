@@ -1,0 +1,13 @@
+{# Rows of the conversation list, newest activity first, and the row that
+   loads the next ones as it comes into view (an ordinary link without htmx).
+   Names and previews are values Jinja escapes. #}
+{% for row in conversations %}
+<li><a class="conversation-row" href="{{ row.open }}" data-conversation="{{ row.conversation_id }}"{% if row.current %} aria-current="page"{% endif %}>
+  <span class="row-head"><span class="row-name">{{ row.display_name }}</span>{% if row.is_group %} <span class="group-mark" title="A group of {{ row.participant_count }}">Group</span>{% endif %}
+    <time class="row-time"{% if row.last_message_at %} datetime="{{ row.last_message_at }}"{% endif %}>{{ row.when }}</time></span>
+  <span class="row-preview">{% if row.preview_from_me %}<span class="mine-mark">You:</span> {% endif %}{% if row.preview %}{{ row.preview }}{% else %}<span class="muted">No text</span>{% endif %}</span>
+</a></li>
+{% endfor %}
+{# `intersect`, not `revealed`: beside a thread the list scrolls in its own
+   box, which htmx's `revealed` does not watch. #}
+{% if more %}<li class="more-row"><a href="{{ more }}" hx-get="{{ more }}" hx-trigger="intersect once" hx-target="closest li" hx-swap="outerHTML" hx-push-url="false">More conversations</a></li>{% endif %}

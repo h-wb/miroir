@@ -1,0 +1,29 @@
+{# One page of a thread's messages, oldest first; also the fragment the page's
+   script loads, its neighbours' cursors on the list. Everything from data is a
+   value Jinja escapes; only web addresses are links. #}
+<ol class="messages" id="messages" data-before="{{ before or '' }}" data-after="{{ after or '' }}">
+{% for item in messages %}
+{% if item.separator %}<li class="day-separator" data-day="{{ item.day }}"><time datetime="{{ item.day }}">{{ item.day_title }}</time></li>
+{% endif %}
+<li class="message {{ 'mine' if item.from_me else 'theirs' }}{% if item.marked %} marked{% endif %}" data-guid="{{ item.guid }}" data-day="{{ item.day }}" data-run="{{ item.run }}"{% if item.marked %} id="marked"{% endif %}>
+  {% if item.show_sender %}<p class="sender">{{ item.sender }}</p>{% endif %}
+  <div class="bubble">
+    {% if item.reply %}<p class="reply"><a href="{{ item.reply.open }}">{% if item.reply.quote is not none %}<span aria-hidden="true">↩ </span><span class="visually-hidden">In reply to: </span>{{ item.reply.quote }}{% else %}Reply to an earlier message{% endif %}</a></p>{% endif %}
+    {% if item.unsent %}<p class="unsent">Unsent</p>
+    {% elif item.unreadable %}<p class="unreadable">The text could not be read.</p>
+    {% elif item.parts %}<p class="text">{% for part in item.parts %}{% if part.link %}<a href="{{ part.link }}" rel="noreferrer" target="_blank">{{ part.text }}</a>{% else %}{{ part.text }}{% endif %}{% endfor %}</p>{% endif %}
+    {% if item.text_truncated %}<p class="muted">The text is cut here.</p>{% endif %}
+    {% if item.audio %}<p class="audio">Audio message</p>{% endif %}
+    {% if item.attachments %}<ul class="attachments">{% for file in item.attachments %}
+      <li>{% if file.image %}<a class="attachment-image" href="{{ file.open }}" target="_blank"><img src="{{ file.image }}" alt="{{ file.name }}" loading="lazy" decoding="async"></a>
+      {%- elif file.open %}<a class="file-tile" href="{{ file.open }}" target="_blank"><span class="file-name">{{ file.name }}</span><span class="file-about">{{ file.type }}{% if file.size %} · {{ file.size }}{% endif %}</span></a>
+      {%- else %}<span class="file-tile file-absent"><span class="file-name">{{ file.name }}</span><span class="file-about">{{ file.state }}</span></span>{% endif %}</li>
+    {% endfor %}</ul>{% endif %}
+  </div>
+  <p class="meta"><time datetime="{{ item.sent_at }}">{{ item.clock }}</time>{% if item.edited %} · <span class="edited">{{ item.edited }}</span>{% endif %}{% if item.service and item.service != "iMessage" %} · {{ item.service }}{% endif %}</p>
+  {% if item.reactions %}<ul class="reactions" aria-label="Reactions">{% for reaction in item.reactions %}<li>{% if reaction.symbol %}<span aria-hidden="true">{{ reaction.symbol }}</span><span class="visually-hidden">{{ reaction.kind }}</span>{% else %}<span class="reaction-word">{{ reaction.kind }}</span>{% endif %} {{ reaction.who }}</li>{% endfor %}</ul>{% endif %}
+</li>
+{% else %}
+<li class="empty-page">No dated messages here.</li>
+{% endfor %}
+</ol>

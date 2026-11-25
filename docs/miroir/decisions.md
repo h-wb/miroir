@@ -67,6 +67,7 @@ amendment under it. Older entries say "workspace" (renamed Miroir by 014) and
 | | [040 amendment — Conversations data (phase 2a)](#040-amendment--conversations-data-phase-2a) | Accepted |
 | | [040 amendment — Attachment thumbnails (phase 2b)](#040-amendment--attachment-thumbnails-phase-2b) | Accepted |
 | | [040 amendment — Conversations in the API (phase 2c, part 1)](#040-amendment--conversations-in-the-api-phase-2c-part-1) | Accepted |
+| | [040 amendment — The conversation pages (phase 2c, part 2)](#040-amendment--the-conversation-pages-phase-2c-part-2) | Accepted |
 | [041](#041--a-messages-analysis-conversations-by-identifier-no-text) | A messages analysis: conversations by identifier, no text | Accepted |
 | [042](#042--dashboards-read-the-analysis-outputs-run_dbt-is-removed) | Dashboards read the analysis outputs; `run_dbt` is removed | Accepted |
 
@@ -3153,6 +3154,101 @@ Known limits:
 - Undated messages are counted but cannot be read through the API.
 - `around` names a message by its guid in the address; a guid is Apple's random
   identifier, not a person's handle.
+
+### 040 amendment — The conversation pages (phase 2c, part 2)
+
+Status: accepted, 2026-11-25, with pull request #57. What the pages on part 1's routes had to decide:
+the conversation list and a thread, the Messages kind of search and the Day
+view's Messages lane. *(conservative)* marks the choices that touched privacy,
+correctness or cost. How to use them is in [Timeline](timeline.md#the-pages).
+
+**In modules of their own.** The timeline's pages are to move into a viewer
+package (HOMEL-153), so the conversation pages are kept apart from the Day
+view's: routes in `src/web/conversations.py`, a router the app includes before
+`/timeline/{day}` (which would take the path); templates `conversations.html`,
+`conversation.html`, `_conversation_list.html`, `_messages.html` and
+`_message_results.html`; scripts `conversations-core.js` (no page, tested with
+`node --test`) and `conversations.js`; and `conversations.css`, which only these
+pages link. They call the reader's methods of part 1 and hold no SQL; the
+reader is unchanged. The Day view's lane, the search's kind and the header link
+are small edits where those live (`timeline_pages.py`, `timeline_day.html`,
+`_timeline.html`, `timeline_search.html`, `_timeline_results.html`,
+`timeline.js`, `miroir.css`, `base.html`, `app.py`).
+
+**Rendered on the server.** The list, a thread and its pages are HTML from the
+server, as the Day view's counts and the search's results are: they work without
+JavaScript (links page instead), are tested as templates, and every value is
+escaped by Jinja. Message text is split into text and web addresses in Python;
+only `http` and `https` become links (`rel="noreferrer"`, a closing bracket kept
+only if the address opened one), with no previews: the server fetches nothing.
+A further page of a thread is `GET /timeline/conversations/{id}/messages` with a
+cursor, the same `_messages.html` alone, its neighbours' cursors on the list; no
+JSON route was added.
+
+**Paging and keeping the place.** A thread opens on its latest 80 messages
+(`?around=` with that message in the middle and marked, `?at=` at a day or a
+time). The script loads the page before or after when the reader is within
+800 pixels of either end, one load at a time on each side, until a side's cursor
+is null; a failed load keeps its cursor for the next scroll. Older messages are
+put above what is read, and the scroll position is moved by the height they
+added, by hand: iOS Safari has no scroll anchoring, and the thread's box turns
+anchoring off (`overflow-anchor: none`) so Chromium's would not add the height
+twice. Thumbnails have a fixed box, so an image that loads late moves nothing
+and the kept place stays right. Where two pages meet, a day separator or a
+sender's name that only repeats the one just above is hidden.
+
+**The list loads on `intersect`, not `revealed`.** Beside a thread the list
+scrolls in its own box, which htmx's `revealed` does not watch (htmx says to use
+`intersect` there); `intersect once` works in the page and in the box.
+
+**Attachments by what is known of the file.** From each attachment's `media`:
+`thumbnails`, the 360-pixel thumbnail, opening the 1280-pixel one; `stored`
+without thumbnails (video, audio, documents, an image none could be made of), a
+tile with its name, type and size opening the media route's redirect, so a
+video streams from storage with range requests and is never copied through the
+server *(conservative: cost)*; `unknown`, a tile "File state not known yet" (the
+file may well be stored); no `media`, "Not available". A thumbnail whose file is
+gone becomes a tile, never a broken image.
+
+**What an address and a title hold** *(conservative)*. A conversation is named
+only by its id, a message by its guid (part 1's known limit), a page by its
+cursor: a handle, a number or a word never reaches an address, a log or the
+history. A malformed id is 404 before any query. A thread's search is a POST to
+`/timeline/search` with the conversation as a field; the search page shows it
+as a filter that a box unticks, and another kind drops it. The thread's title is
+"Conversation", without the name: browsers keep titles in their history, as the
+search page found.
+
+**The Day view's lane.** Where the analysis links messages, the Day view reads
+the day's counts and the month's for every source of the analysis, so a day of
+messages alone is shaded and not empty (this revises part 1's "the pages ask
+`days` for screen and browser only" for the Day view; the home page still opens
+the latest day of screen or browser). A third lane draws one mark per message
+(up to 2,000 a day, four pages of the events route); over each mark is a link
+to its thread at that message, placed in percent of the day so a resize moves
+it, and kept out of the tab order: the list of messages within fifteen minutes
+of the frame, beside the visits with each conversation's name, holds the same
+links for the keyboard. Elsewhere the lane scrubs as the others do. Without a
+`messages` input none of this is added: the tests check that the Day view and
+the search page then have no Messages lane, no list of messages, no Messages
+kind and no Conversations link, that the day's summary, its calendar shading
+and an empty day read as before, and that a message search is refused.
+
+**Layout.** On a desktop the list (20 rem) sits beside the thread, each in its
+own scroll box under the header. Up to 760 pixels wide the list page shows the
+list and a thread shows alone, with "‹ Conversations" back to it. Mine on the
+right on a blue bubble, theirs on the left; reactions under the bubble, an
+emoji for a tapback with its word for assistive technology, "emoji" or
+"sticker" as words (041 has no emoji for them), and who reacted.
+
+Known limits:
+- An attachment the worker has not recorded yet (queued, or stored before a
+  backfill) shows "File state not known yet" until the next timeline build after
+  its derive run (phase 2b).
+- A thread keeps every page it loaded in the page; a very long reading session
+  grows it.
+- A reply quotes its message only when that message is on the page as served;
+  one loaded later by scrolling does not turn the link into a quote.
 
 ## 041 — A messages analysis: conversations by identifier, no text
 

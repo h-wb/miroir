@@ -516,8 +516,9 @@ class TimelineReader:
         self, start: date, end: date, sources: tuple[str, ...] = SOURCES
     ) -> dict[str, Any]:
         """Counts per local day and source, from `start` to `end` inclusive. The
-        pages ask for the screen and the browser only; the API for every source
-        of the analysis (`TimelineSource.sources`)."""
+        API and the Day view ask for every source of the analysis
+        (`TimelineSource.sources`); the home page for the screen and the
+        browser only, so it never opens a day of messages alone."""
         if end < start or (end - start).days >= MAX_DAYS_RANGE:
             raise OperationError(
                 f"The range must run forward and span at most {MAX_DAYS_RANGE} days"

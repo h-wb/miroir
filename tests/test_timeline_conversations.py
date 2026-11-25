@@ -283,7 +283,8 @@ class ConversationQueryTests(ConversationsFixture):
                 {"day": "2026-01-10", "messages": {"events": 21}},
             ],
         )
-        # What the pages read: no day of messages alone.
+        # What the home page reads: no day of messages alone (the Day view
+        # reads every source of the analysis, phase 2c part 2).
         self.assertEqual(self.reader.days(first, last)["days"], [])
 
     def test_a_message_event_names_its_conversation_and_sender(self):

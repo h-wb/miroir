@@ -74,6 +74,12 @@ textarea.short { min-height: 4rem; }
 .visits { list-style: none; padding: 0; margin: 0; }
 .visits li { padding: .3rem 0; border-bottom: 1px solid #8882; overflow-wrap: anywhere; }
 .visits time { font-variant-numeric: tabular-nums; margin-right: .3rem; }
+/* Messages on the Day view, where linked (phase 2c): a link over each mark, the
+   messages around the frame beside the visits. */
+.message-marks { position: absolute; inset: 0; pointer-events: none; }
+.message-mark { position: absolute; top: 0; bottom: 0; width: 12px; margin-left: -6px; pointer-events: auto; }
+.message-mark:hover { background: #5c6bc044; }
+.near-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 1.2rem; }
 .calendar { position: sticky; top: 1rem; }
 .month-nav { display: flex; justify-content: space-between; align-items: center; }
 table.month { table-layout: fixed; margin: .5rem 0 1rem; }
@@ -110,6 +116,7 @@ mark { background: #fdd83588; color: inherit; padding: 0 .1rem; }
   .timeline-page { grid-template-columns: minmax(0, 1fr); }
   .calendar { position: static; }
   .viewer { grid-template-columns: minmax(0, 1fr); }
+  .near-pair { grid-template-columns: minmax(0, 1fr); }
   .lane { grid-template-columns: 3.8rem minmax(0, 1fr); }
   .lane-track { height: 2.4rem; }
   .hours { margin-left: 4.3rem; }

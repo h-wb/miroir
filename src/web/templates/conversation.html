@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{# No name in the title: browsers keep titles in their history. #}
+{% block title %}Conversation{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/conversations.css">
+<script src="/static/htmx.min.js" defer></script>
+<script type="module" src="/static/conversations.js"></script>{% endblock %}
+{% block body %}
+<div class="conversations-page thread-open">
+  <nav class="conversation-pane" aria-labelledby="conversations-heading">
+    <h2 id="conversations-heading"><a href="/timeline/conversations">Conversations</a></h2>
+    <ul class="conversation-list" id="conversation-list">{% include "_conversation_list.html" %}</ul>
+  </nav>
+  <main class="thread" id="thread" data-conversation="{{ conversation_id }}" data-opened="{{ opened }}" data-fragment="{{ fragment }}">
+    <header class="thread-head">
+      <a class="back" href="/timeline/conversations">‹ Conversations</a>
+      <h1>{{ conversation_name }}</h1>
+      <p class="people muted" id="people">{% if people %}{{ "With " if not conversation.is_group else "" }}{{ people | join(", ") }}{% else %}No one else is listed.{% endif %}</p>
+      <details class="thread-tools" {% if at_day %}open{% endif %}>
+        <summary>Search or go to a day</summary>
+        {# POST: search words are never in an address (decision 040). #}
+        <form class="thread-search" method="post" action="/timeline/search" role="search">
+          <input type="hidden" name="kind" value="messages">
+          <input type="hidden" name="conversation" value="{{ conversation_id }}">
+          <label>Search this conversation <input type="search" name="q" maxlength="200" required></label>
+          <button>Search</button>
+        </form>
+        <form class="thread-jump" method="get" action="{{ thread }}">
+          <label>Go to a day <input type="date" name="at" value="{{ at_day }}" required></label>
+          <button>Go</button>
+        </form>
+      </details>
+    </header>
+    {% if source.warning %}<p class="notice">{{ source.warning }}</p>{% endif %}
+    {% if missing_message %}<p class="error" id="missing-message">That message is not in this conversation; its latest messages are shown.</p>{% endif %}
+    {% if conversation.undated %}<p class="muted" id="undated">{{ conversation.undated }} message{{ " has" if conversation.undated == 1 else "s have" }} no date and {{ "is" if conversation.undated == 1 else "are" }} not shown.</p>{% endif %}
+    <div class="thread-scroll" id="thread-scroll" tabindex="0" aria-label="Messages">
+      {% if older %}<p class="page-link"><a id="older" href="{{ older }}">Older messages</a></p>{% endif %}
+      {% include "_messages.html" %}
+      {% if newer %}<p class="page-link"><a id="newer" href="{{ newer }}">Newer messages</a></p>{% endif %}
+    </div>
+    <p id="thread-status" class="muted" role="status"></p>
+  </main>
+</div>
+{% endblock %}
