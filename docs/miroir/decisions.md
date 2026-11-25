@@ -2986,8 +2986,7 @@ Consequences:
 
 ### 040 amendment — Conversations in the API (phase 2c, part 1)
 
-Status: accepted, 2026-11-25, with the pull request that adds the conversation
-routes. What reading the phase 2a tables from the server had to decide. Queries
+Status: accepted, 2026-11-25, with pull request #56. What reading the phase 2a tables from the server had to decide. Queries
 and JSON only; the pages come in part 2 and build on these routes.
 *(conservative)* marks the choices that touched privacy, correctness or cost.
 The routes and their answers are in [Timeline](timeline.md#the-api).
