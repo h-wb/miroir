@@ -157,7 +157,9 @@ def visit(visit_id, place_id, offset, visit_type):
 
 
 class TimelinePackageTests(unittest.TestCase):
-    def test_package_reads_optional_screen_and_browser_inputs_every_five_minutes(self):
+    def test_package_reads_optional_screen_browser_and_messages_every_five_minutes(
+        self,
+    ):
         package = PACKAGES["timeline"]
         self.assertEqual(package.min_build_interval, timedelta(minutes=5))
         self.assertEqual(
@@ -165,9 +167,21 @@ class TimelinePackageTests(unittest.TestCase):
             {
                 "screen": (("screenmemory",), False),
                 "browser": (("browser_history",), False),
+                "messages": (("apple_messages",), False),
             },
         )
-        self.assertEqual(package.relations, ("screen_frames", "events", "days", "apps"))
+        self.assertEqual(
+            package.relations,
+            (
+                "screen_frames",
+                "events",
+                "days",
+                "apps",
+                "conversations",
+                "messages",
+                "people",
+            ),
+        )
         for inputs in ({"screen": "screen"}, {"browser": "browser"}):
             configuration([timeline("t", inputs)])
         with self.assertRaisesRegex(ConfigurationError, "link at least one input"):
@@ -189,7 +203,9 @@ class TimelinePackageTests(unittest.TestCase):
         miroir = configuration([timeline("t", {"browser": "browser"})])
         variables = analysis_plan(miroir.analyses[0]).variables
         self.assertEqual(variables["miroir_connections"], {"browser": "browser"})
-        self.assertEqual(variables["miroir_unlinked_sources"], ["screenmemory"])
+        self.assertEqual(
+            variables["miroir_unlinked_sources"], ["screenmemory", "apple_messages"]
+        )
         music = analysis_plan(parse_miroir(json.dumps(example())).analyses[0])
         self.assertNotIn("miroir_connections", music.variables)
 
@@ -548,7 +564,8 @@ class TimelineModelTests(TimelineBuildFixture):
         self.assertEqual(
             self.query(
                 f"select image_path from {schema}.screen_frames where "
-                "to_tsvector('simple', text) @@ websearch_to_tsquery('simple', 'resent')"
+                "to_tsvector('simple', left(text, 100000)) "
+                "@@ websearch_to_tsquery('simple', 'resent')"
             ),
             [(path(-60),)],
         )
@@ -701,7 +718,16 @@ class TimelineModelTests(TimelineBuildFixture):
         )
         miroir = configuration([timeline("timeline", both)])
         self.build(analysis_plan(miroir.analyses[0]))
-        for table in ("screen_frames", "events", "days", "apps", "timeline_screen"):
+        for table in (
+            "screen_frames",
+            "events",
+            "days",
+            "apps",
+            "conversations",
+            "messages",
+            "people",
+            "timeline_screen",
+        ):
             with (
                 self.subTest(table=table),
                 self.assertRaises(psycopg2.errors.InsufficientPrivilege),

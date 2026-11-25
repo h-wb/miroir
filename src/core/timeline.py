@@ -329,6 +329,15 @@ _MEDIA_STATES = {
     MEDIA_WITHHELD: "withheld",
 }
 SOURCES = ("screen", "browser")
+# Text search covers the first characters of a text, as the models index it
+# (timeline_search_vector in dbt/macros/timeline.sql, the same number).
+SEARCH_CHARACTERS = 100_000
+
+
+def search_vector(column: str) -> str:
+    """The indexed search expression over a text column; queries must use it
+    as it is for the index to answer."""
+    return f"to_tsvector('simple', left({column}, {SEARCH_CHARACTERS}))"
 
 
 def media_code(
@@ -486,9 +495,16 @@ class TimelineReader:
                 sa.text(
                     f"SELECT day, source, events, frames FROM {self.source.table('days')}"
                     " WHERE day >= :start AND day <= :end AND timezone = :tz"
-                    " ORDER BY day, source"
+                    " AND source = ANY(:sources) ORDER BY day, source"
                 ),
-                {"start": start, "end": end, "tz": self.source.timezone},
+                # Only the sources the server shows: the package counts others
+                # (messages) before any page does.
+                {
+                    "start": start,
+                    "end": end,
+                    "tz": self.source.timezone,
+                    "sources": list(SOURCES),
+                },
             ).all()
         days: dict[str, dict[str, Any]] = {}
         for day, source, events, frames in rows:
@@ -717,7 +733,7 @@ class TimelineReader:
             "headline": _HEADLINE,
             "marks": _START + _STOP,
         }
-        conditions = ["to_tsvector('simple', f.text) @@ q.query"]
+        conditions = [f"{search_vector('f.text')} @@ q.query"]
         conditions += _range_conditions("f.captured_at", start, end, parameters)
         if app is not None:
             conditions.append("f.bundle_id = :app")
@@ -741,7 +757,8 @@ class TimelineReader:
             f" FROM {frames} f, q WHERE {' AND '.join(conditions)}"
             " GROUP BY 1, 2 ORDER BY 1 DESC, coalesce(f.bundle_id, '') LIMIT :limit)"
             " SELECT m.bucket, m.bundle_id, m.matches, m.first_at, m.last_at, m.key,"
-            " ts_headline('simple', translate(f.text, :marks, ''), q.query, :headline),"
+            " ts_headline('simple',"
+            f" translate(left(f.text, {SEARCH_CHARACTERS}), :marks, ''), q.query, :headline),"
             " f.withheld, f.media_status, f.thumbnail_w360, f.thumbnail_w1280,"
             f" f.connection, {_local_day_sql('m.first_at')}"
             f" FROM moments m JOIN {frames} f ON f.image_path = m.key, q"

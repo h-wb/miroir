@@ -18,6 +18,10 @@ sources:
       - name: message_attachments
       - name: chat_handles
       - name: contacts
+      # Written by the derive worker (decision 040); absent until a kind of this
+      # connector is derived. The timeline joins it to attachments.
+      - name: media_objects
+      - name: _dlt_loads
   - name: listenbrainz
     schema: "{{ var('miroir_sources', {}).get('listenbrainz', 'listenbrainz_data') }}"
     tables:

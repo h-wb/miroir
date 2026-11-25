@@ -57,7 +57,7 @@
    carry it as `_input`; rows of another identity belong to an input no longer
    linked, or replaced, and are removed before the build. #}
 {% macro timeline_input(role) -%}
-    {%- set sources = {'screen': 'screenmemory', 'browser': 'browser_history'} -%}
+    {%- set sources = {'screen': 'screenmemory', 'browser': 'browser_history', 'messages': 'apple_messages'} -%}
     {%- set connection = var('miroir_connections', {}).get(role) -%}
     {%- if not connection -%}{{ return('') }}{%- endif -%}
     {{- return(connection ~ '@' ~ var('miroir_sources', {}).get(sources[role], '')) -}}
@@ -107,7 +107,8 @@
     {%- if not execute -%}{{ return(result) }}{%- endif -%}
     {%- set completed = '(' ~ timeline_completed(source_name) ~ ')' -%}
     {%- if not result.rebuild -%}
-        {%- set lower = timeline_scalar('select max(_cursor)::text from ' ~ this) -%}
+        {%- set lower = (timeline_kept_cursor() if config.get('keep_cursor') else '')
+            or timeline_scalar('select max(_cursor)::text from ' ~ this) -%}
         {%- set found = timeline_scalar(
             "select string_agg(load_id, ',' order by inserted_at, load_id) || '|' || max(inserted_at)::text from (select * from "
             ~ completed ~ " l where inserted_at > coalesce(nullif(" ~ timeline_literal(lower) ~ ", '')::timestamptz, '-infinity') - interval '"
@@ -149,18 +150,23 @@
    the model's transaction, so no other state is ever visible. #}
 {% macro timeline_exact_acl(readable) -%}
     {%- set role = timeline_reader_role() if readable else none -%}
+    {%- set backup = this.incorporate(path={'identifier': this.identifier ~ '__dbt_backup'}) -%}
     do $acl$
-    declare grantee oid;
+    declare relation regclass; grantee oid;
     begin
-        for grantee in
-            select distinct a.grantee from pg_class c, aclexplode(c.relacl) a
-            where c.oid = '{{ this }}'::regclass and a.grantee <> c.relowner
-        loop
-            if grantee = 0 then
-                execute 'revoke all on {{ this }} from public';
-            else
-                execute format('revoke all on {{ this }} from %s', grantee::regrole);
-            end if;
+        -- A rebuild from scratch renamed the old table to its backup in this
+        -- transaction; dbt drops it only after the commit. It keeps no grant.
+        foreach relation in array array_remove(array['{{ this }}'::regclass, to_regclass('{{ backup }}')], null) loop
+            for grantee in
+                select distinct a.grantee from pg_class c, aclexplode(c.relacl) a
+                where c.oid = relation and a.grantee <> c.relowner
+            loop
+                if grantee = 0 then
+                    execute format('revoke all on %s from public', relation);
+                else
+                    execute format('revoke all on %s from %s', relation, grantee::regrole);
+                end if;
+            end loop;
         end loop;
         {%- if role %}
         execute 'grant select on {{ this }} to {{ role }}';
@@ -174,7 +180,9 @@
    created once, when missing, and committed at once, so the lock that holds
    writes to that raw table lasts only while the index is built. An invalid one
    (an interrupted build) is rebuilt. A table the build's role does not own is
-   left alone: reads stay correct, only slower.
+   left alone: reads stay correct, only slower. An entry is a column name, or
+   (name, column, expression) for an index on an expression of that column; an
+   entry whose column the table lacks is skipped.
 
    The hook ends by opening the model's transaction itself. dbt sends a literal
    `commit` before a hook outside the transaction; psycopg2, which opens
@@ -196,14 +204,22 @@
                 {%- if not owned -%}
                     {%- do log('Not indexing ' ~ relation ~ ': owned by another role', info=true) -%}
                 {%- endif -%}
-                {%- for column in columns if owned -%}
-                    {%- set name = 'miroir_' ~ raw.identifier ~ '_' ~ column.strip('_') -%}
+                {%- set present = adapter.get_columns_in_relation(relation) | map(attribute='name') | map('lower') | list if owned else [] -%}
+                {%- for entry in columns if owned -%}
+                    {%- if entry is string -%}
+                        {%- set suffix, column, expression = entry.strip('_'), entry, adapter.quote(entry) -%}
+                    {%- else -%}
+                        {%- set suffix, column, expression = entry[0], entry[1], '(' ~ entry[2] ~ ')' -%}
+                    {%- endif -%}
+                    {%- set name = 'miroir_' ~ raw.identifier ~ '_' ~ suffix -%}
                     {%- set qualified = adapter.quote(raw.schema) ~ '.' ~ adapter.quote(name) -%}
-                    {%- set state = run_query("select coalesce((select indisvalid::text from pg_index where indexrelid = to_regclass('" ~ qualified ~ "')), 'missing')").columns[0].values()[0] -%}
-                    {%- if state == 'missing' -%}
-                        {%- do statements.append('create index if not exists ' ~ adapter.quote(name) ~ ' on ' ~ relation ~ ' (' ~ adapter.quote(column) ~ ')') -%}
-                    {%- elif state == 'false' -%}
-                        {%- do statements.append('reindex index ' ~ qualified) -%}
+                    {%- if column in present -%}
+                        {%- set state = run_query("select coalesce((select indisvalid::text from pg_index where indexrelid = to_regclass('" ~ qualified ~ "')), 'missing')").columns[0].values()[0] -%}
+                        {%- if state == 'missing' -%}
+                            {%- do statements.append('create index if not exists ' ~ adapter.quote(name) ~ ' on ' ~ relation ~ ' (' ~ expression ~ ')') -%}
+                        {%- elif state == 'false' -%}
+                            {%- do statements.append('reindex index ' ~ qualified) -%}
+                        {%- endif -%}
                     {%- endif -%}
                 {%- endfor -%}
             {%- endif -%}
@@ -290,8 +306,40 @@
     where {% for key in keys %}t.{{ adapter.quote(key) }} = s.{{ adapter.quote(key) }}{% if not loop.last %} and {% endif %}{% endfor %};
     insert into {{ target }} ({{ columns }})
     select {{ columns }} from {{ source }}{% if removes %} where not _deleted{% endif %};
+    {%- if config.get('keep_cursor') %}
+    {{ timeline_keep_cursor(target, source) }};
+    {%- endif %}
     {#- The staging table is a table of the schema (timeline_staging.sql). -#}
     drop table {{ source }}
+{%- endmacro %}
+
+{# A model with keep_cursor keeps the cursor it read in its table's comment,
+   so a load that wrote none of its rows still counts as read; without it, every
+   build would read again the loads since the last one that wrote a row, and at
+   5,000 read everything. The model stages one row more on incremental builds,
+   with _deleted true and its cursor, which the upsert never inserts. A first
+   build, or a rebuild from scratch, keeps the cursor of its rows (post-hook
+   timeline_keep_cursor(this, this)). #}
+{% macro timeline_keep_cursor(target, source) -%}
+    do $cursor$ begin
+        execute format('comment on table {{ target }} is %L',
+            'miroir cursor ' || (select max(_cursor)::text from {{ source }}));
+    end $cursor$
+{%- endmacro %}
+
+{% macro timeline_kept_cursor() -%}
+    {{- return(timeline_scalar("select substring(obj_description('" ~ this ~ "'::regclass, 'pg_class') from '^miroir cursor (.+)$')")) -}}
+{%- endmacro %}
+
+{# Incremental strategy for a table rebuilt in full every build: replace its
+   rows in the model's transaction. No table is renamed, so no backup of it
+   exists at any moment, and its indexes keep their names. #}
+{% macro get_incremental_timeline_replace_sql(arg_dict) -%}
+    {%- set columns = get_quoted_csv(arg_dict['dest_columns'] | map(attribute='name')) -%}
+    delete from {{ arg_dict['target_relation'] }};
+    insert into {{ arg_dict['target_relation'] }} ({{ columns }})
+    select {{ columns }} from {{ arg_dict['temp_relation'] }};
+    drop table {{ arg_dict['temp_relation'] }}
 {%- endmacro %}
 
 {# What the worker recorded of a row's stored file (media_objects, decision 040):
@@ -350,5 +398,113 @@
     {%- for name, type in timeline_media_columns().items() %}
         add column if not exists {{ adapter.quote(name) }} {{ type }}{% if not loop.last %},{% endif %}
     {%- endfor %}
+    {%- endif -%}
+{%- endmacro %}
+
+{# A conversation's opaque id: the first 128 bits of SHA-256 over the package's
+   own random key (timeline_secret) and the conversation key, in hex. Stable for
+   as long as the key and the conversation key are; never derivable from a
+   phone number without the key, which only the owner may read. #}
+{% macro timeline_conversation_id(key) -%}
+    encode(substr(sha256((select s.secret from {{ ref('timeline_secret') }} s limit 1)
+        || convert_to('conversation:' || {{ key }}, 'UTF8')), 1, 16), 'hex')
+{%- endmacro %}
+
+{# A time as fixed ISO 8601 text in UTC, for JSON: never the session's zone. #}
+{% macro timeline_utc_text(column) -%}
+    to_char({{ column }} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+{%- endmacro %}
+
+{# As timeline_previous, for a time that can be null (an undated message): a
+   time left for no time, or for another, is kept; no time is never kept. #}
+{% macro timeline_previous_moved(column, old, new, consumed) -%}
+    nullif(
+        (case when t._stamp <= {{ timeline_literal(consumed) }} then '{}'::timestamptz[]
+            else coalesce(t.{{ column }}, '{}'::timestamptz[]) end)
+        || (case when {{ old }} is not null and {{ old }} is distinct from {{ new }}
+            then array[{{ old }}] else '{}'::timestamptz[] end),
+        '{}'::timestamptz[])
+{%- endmacro %}
+
+{# Whether messages holds rows of another timezone than the analysis's: a
+   new timezone is read as everything again (their local days change). An
+   update in place cost the same and left the table as large; one code path
+   instead of two. #}
+{% macro timeline_messages_retimed() -%}
+    {%- if not (execute and is_incremental()) -%}{{ return(false) }}{%- endif -%}
+    {%- set tz = timeline_literal(var('timezone')) -%}
+    {{- return(timeline_scalar('select 1 from ' ~ this ~ ' where timezone < ' ~ tz ~ ' or timezone > ' ~ tz ~ ' limit 1') != '') -}}
+{%- endmacro %}
+
+{# Pre-hook of messages, before any other in its transaction: when this build
+   reads every message (a first build, a replaced input, a new timezone, too
+   many loads), join by
+   hash. The planner cannot estimate how many raw rows are messages (a CASE over
+   two columns of a table that may not be analysed yet) and otherwise takes one,
+   then repeats each per-message aggregate once per message. An incremental
+   build keeps its index probes. #}
+{% macro timeline_messages_plan() -%}
+    {%- if not is_incremental()
+        or timeline_replaced(['messages']) | length > 0
+        or timeline_messages_retimed()
+        or timeline_load_cursor('apple_messages', false).rebuild -%}
+    set local enable_nestloop = off
+    {%- endif -%}
+{%- endmacro %}
+
+{# What text search indexes: the first 100,000 characters of a frame's or a
+   message's text (src/core/timeline.py SEARCH_CHARACTERS, the same number). A
+   tsvector holds at most 1 MB of words, and one longer text would fail every
+   build; 100,000 characters are at most 400 KB. The text is stored whole; words
+   after that are not found by search. Queries must use this expression to use
+   the index. #}
+{% macro timeline_search_vector(column) -%}
+    to_tsvector('simple', left({{ column }}, 100000))
+{%- endmacro %}
+
+{# Pre-hook: an existing table indexed on the whole text (before the bound)
+   gets the bounded index instead, once. #}
+{% macro timeline_search_index(column) -%}
+    {%- if is_incremental() -%}
+    do $index$
+    declare old regclass;
+    begin
+        for old in
+            select i.indexrelid::regclass from pg_index i
+            where i.indrelid = '{{ this }}'::regclass
+                and pg_get_indexdef(i.indexrelid) like '%to_tsvector%'
+                and pg_get_indexdef(i.indexrelid) not like '%left%'
+        loop
+            execute format('drop index %s', old);
+        end loop;
+        if not exists (
+            select 1 from pg_index i where i.indrelid = '{{ this }}'::regclass
+                and pg_get_indexdef(i.indexrelid) like '%to_tsvector%left%'
+        ) then
+            execute $create$create index on {{ this }} using gin (({{ timeline_search_vector(column) }}))$create$;
+        end if;
+    end
+    $index$
+    {%- endif -%}
+{%- endmacro %}
+
+{# Post-hook of messages: the reactions map (timeline_message_reaction_targets)
+   for the messages this build wrote (the newest stamp; a build that wrote none
+   writes the previous build's again, unchanged). A stale entry only makes a
+   message be recomputed for nothing; a missing one would leave a reaction on a
+   message it left. #}
+{% macro timeline_message_reactions_map() -%}
+    {%- set map = ref('timeline_message_reaction_targets') -%}
+    {%- set written = 'select guid, _reactions_from from ' ~ this ~ ' where _stamp = (select max(_stamp) from ' ~ this ~ ')' -%}
+    delete from {{ map }} m using ({{ written }}) w where m.message_guid = w.guid;
+    insert into {{ map }} (reaction_guid, message_guid)
+    select distinct r.guid, w.guid from ({{ written }}) w cross join unnest(w._reactions_from) r (guid)
+{%- endmacro %}
+
+{# Pre-hook of messages: a replaced or unlinked input empties the map, as the
+   messages of that input are removed. #}
+{% macro timeline_message_reactions_reset() -%}
+    {%- if timeline_replaced(['messages']) | length > 0 -%}
+    delete from {{ ref('timeline_message_reaction_targets') }}
     {%- endif -%}
 {%- endmacro %}

@@ -8,13 +8,14 @@
         {'columns': ['source', '_input']},
     ],
     grants=timeline_grants(),
-    pre_hook="{{ timeline_remove_foreign(['screen', 'browser'], by_source=true) }}",
+    pre_hook="{{ timeline_remove_foreign(['screen', 'browser', 'messages'], by_source=true) }}",
     post_hook=[
         "delete from {{ this }} where timezone <> '{{ var('timezone') | replace(\"'\", \"''\") }}'",
         "{{ timeline_exact_acl(true) }}",
+        "delete from {{ ref('messages') }} where deleted",
     ],
 ) }}
--- depends_on: {{ ref('timeline_screen') }}, {{ ref('timeline_browser') }}
+-- depends_on: {{ ref('timeline_screen') }}, {{ ref('timeline_browser') }}, {{ ref('messages') }}
 -- Per local day (in the analysis's timezone) and source: how many events started
 -- that day, and for the screen how many frames were captured. A day with neither
 -- has no row.
@@ -25,6 +26,11 @@
 -- or replaced recounts every day once: the pre-hook removes that source's days,
 -- the post-hook the days counted in the old timezone.
 --
+-- Messages: events of source 'messages', recounted for the days of messages
+-- written since (previous_sent_at included). The last post-hook removes the
+-- former messages that messages kept as deleted rows: events and this model have
+-- both read them now, and a rebuild from scratch would have none.
+--
 -- Known limit: where the clocks go back at midnight, a day starts at the later
 -- of the two midnights, so the hour before it counts on the previous day.
 {% set tz = var('timezone') | replace("'", "''") %}
@@ -32,13 +38,15 @@
 {% if is_incremental() and execute %}
     {% set other = run_query("select 1 from " ~ this ~ " where timezone <> '" ~ tz ~ "' limit 1") %}
     {% set ns.rebuild = other.rows | length > 0
-        or timeline_replaced(['screen', 'browser'], by_source=true) | length > 0 %}
+        or timeline_replaced(['screen', 'browser', 'messages'], by_source=true) | length > 0 %}
 {% endif %}
 {% set screen_upper = timeline_resume(ref('screen_frames')) %}
 {% set browser_upper = timeline_resume(ref('timeline_browser')) %}
+{% set messages_upper = timeline_resume(ref('messages')) %}
 {% if not ns.rebuild %}
     {% set screen_lower = timeline_literal(timeline_resume(this, "source = 'screen'")) %}
     {% set browser_lower = timeline_literal(timeline_resume(this, "source = 'browser'")) %}
+    {% set messages_lower = timeline_literal(timeline_resume(this, "source = 'messages'")) %}
 {% endif %}
 with affected as (
     {% if ns.rebuild %}
@@ -61,6 +69,11 @@ with affected as (
     from {{ ref('timeline_browser') }} v
     cross join lateral (select v.started_at union all select unnest(v.previous_started_at)) moved (at)
     where v._stamp > {{ browser_lower }} and moved.at is not null
+    union
+    select 'messages', {{ timeline_local_day('moved.at') }}
+    from {{ ref('messages') }} m
+    cross join lateral (select m.sent_at union all select unnest(m.previous_sent_at)) moved (at)
+    where m._stamp > {{ messages_lower }} and moved.at is not null
     {% endif %}
 ),
 spans as (
@@ -84,11 +97,13 @@ counted as (
         '{{ tz }}'::text as timezone,
         case d.source
             when 'screen' then {{ timeline_literal(timeline_input('screen')) }}
-            else {{ timeline_literal(timeline_input('browser')) }}
+            when 'browser' then {{ timeline_literal(timeline_input('browser')) }}
+            else {{ timeline_literal(timeline_input('messages')) }}
         end as _input,
         case d.source
             when 'screen' then {{ timeline_literal(screen_upper) }}
-            else {{ timeline_literal(browser_upper) }}
+            when 'browser' then {{ timeline_literal(browser_upper) }}
+            else {{ timeline_literal(messages_upper) }}
         end as _stamp
     from spans d
 )

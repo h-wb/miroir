@@ -10,35 +10,15 @@ with raw as (
     }, ['guid']) }}
 ),
 named as (
-    select
-        *,
-        lower(mime_type) as mime,
-        lower(coalesce(
-            substring(media_key from '\.([A-Za-z0-9]{1,10})$'),
-            substring(transfer_name from '\.([A-Za-z0-9]{1,10})$')
-        )) as extension
+    select *, {{ messages_attachment_extension('media_key', 'transfer_name') }} as extension
     from raw
 )
 select
     guid,
     mime_type,
     extension,
-    case
-        when mime like 'image/%' then 'image'
-        when mime like 'video/%' then 'video'
-        when mime like 'audio/%' then 'audio'
-        when mime like 'text/%' or mime in ('application/pdf', 'application/rtf', 'application/msword')
-            or mime like 'application/vnd.openxmlformats-officedocument.%'
-            or mime like 'application/vnd.ms-%'
-            or mime like 'application/vnd.apple.%' then 'document'
-        when extension in ('heic', 'heif', 'jpeg', 'jpg', 'png', 'gif', 'webp', 'tiff', 'tif', 'bmp') then 'image'
-        when extension in ('mov', 'mp4', 'm4v', '3gp') then 'video'
-        when extension in ('caf', 'm4a', 'mp3', 'aac', 'amr', 'wav') then 'audio'
-        when extension in ('pdf', 'vcf', 'txt', 'rtf', 'csv', 'ics', 'doc', 'docx', 'xls', 'xlsx',
-            'ppt', 'pptx', 'pages', 'numbers', 'key') then 'document'
-        else 'other'
-    end as kind,
+    {{ messages_attachment_kind('mime_type', 'extension') }} as kind,
     total_bytes as bytes,
     media_key is not null as has_media_key,
-    coalesce(lower(transfer_name) like '%.pluginpayloadattachment', false) as is_link_preview
+    {{ messages_is_link_preview('transfer_name') }} as is_link_preview
 from named
