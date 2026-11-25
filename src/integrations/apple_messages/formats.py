@@ -67,6 +67,11 @@ KEYS = {
 }
 REQUIRED = {kind: set(keys) for kind, keys in KEYS.items()}
 REQUIRED["message"].update(("text_source", "masked"))
+# Apple's guids are never empty; an empty one would also collide with keys the
+# models reserve.
+GUIDS = {
+    kind: [key for key in keys if key.endswith("guid")] for kind, keys in KEYS.items()
+}
 
 
 # Postgres cannot store U+0000, and the loader fails on a lone surrogate.
@@ -101,6 +106,8 @@ def _valid_record(kind: str, record: dict[str, Any]) -> bool:
         or _valid_value(record[key], column_type)
         for key, column_type in fields.items()
     ):
+        return False
+    if any(record[key] == "" for key in GUIDS[kind]):
         return False
     if kind == "contact":
         return bool(record["handle"])

@@ -264,11 +264,20 @@ PACKAGES: Mapping[str, Package] = {
         Package(
             "timeline",
             "Timeline",
-            "Screen frames, app sessions and visits on one time axis, for the "
-            "Miroir server's timeline. Link at least one input.",
+            "Screen frames, app sessions, visits and messages on one time axis, "
+            "with conversations and message text, for the Miroir server's "
+            "timeline. Link at least one input.",
             "+path:models/timeline",
             "timeline",
-            ("screen_frames", "events", "days", "apps"),
+            (
+                "screen_frames",
+                "events",
+                "days",
+                "apps",
+                "conversations",
+                "messages",
+                "people",
+            ),
             {
                 "screen": InputSpec(
                     "Screen text and app usage",
@@ -278,6 +287,9 @@ PACKAGES: Mapping[str, Package] = {
                 ),
                 "browser": InputSpec(
                     "Browser history", ("browser_history",), "browser_history", False
+                ),
+                "messages": InputSpec(
+                    "Apple Messages", ("apple_messages",), "apple_messages", False
                 ),
             },
             TimelineParameters,

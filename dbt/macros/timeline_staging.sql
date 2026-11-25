@@ -1,4 +1,5 @@
-{# The timeline's incremental models (strategy timeline_upsert) stage their new
+{# The timeline's incremental models (strategies timeline_upsert and
+   timeline_replace) stage their new
    rows in an unlogged table of their own schema, not in the temporary table dbt
    uses for an incremental build. A build that reads everything again (an
    upgrade, a replaced input, more loads than one statement lists) stages every
@@ -10,7 +11,7 @@
    dbt's own behaviour. #}
 
 {% macro timeline_staged() -%}
-    {{- return(config.get('incremental_strategy') == 'timeline_upsert') -}}
+    {{- return(config.get('incremental_strategy') in ('timeline_upsert', 'timeline_replace')) -}}
 {%- endmacro %}
 
 {% macro postgres__make_temp_relation(base_relation, suffix) %}

@@ -12,11 +12,7 @@ with raw as (
 named as (
     select
         {{ messages_address('handle') }} as address,
-        coalesce(
-            nullif(btrim(concat_ws(' ', btrim(first_name), btrim(last_name))), ''),
-            nullif(btrim(nickname), ''),
-            nullif(btrim(organization), '')
-        ) as display_name
+        {{ messages_contact_name('first_name', 'last_name', 'nickname', 'organization') }} as display_name
     from raw
 )
 select address, min(display_name) as display_name

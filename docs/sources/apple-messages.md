@@ -21,8 +21,11 @@ collector (decision 038).
   `pipelines-miroir connections`.
 - **Code**: connector [`src/integrations/apple_messages/`](../../src/integrations/apple_messages/),
   source [`collector/miroir_collector/sources/apple_messages.py`](../../collector/miroir_collector/sources/apple_messages.py)
-- **Package**: `messages` (decision 041,
-  [its tables](../miroir/analyses.md#the-messages-package))
+- **Packages**: `messages` (decision 041,
+  [its tables](../miroir/analyses.md#the-messages-package)), without text; the
+  `timeline` package's `messages` input (decision 040,
+  [its tables](../miroir/analyses.md#the-timeline-package)) holds the text, for
+  the timeline's conversation view and message search
 
 ## Where the data comes from
 
@@ -180,6 +183,27 @@ that still holds an older version of an edited message can put that version back
 when it sends its own edited messages again; it is corrected when that machine
 receives the newer state and sends again. Running the source from one always-on
 machine avoids this.
+
+## In the timeline
+
+The `timeline` package reads these tables when its `messages` input is linked.
+It reads only rows of loads `_dlt_loads` lists as complete and builds
+`conversations`, `messages` (with text, reactions and attachments) and `people`.
+What it relies on here:
+
+- `chats`, `chat_handles` and `contacts` are read whole at each build: they are
+  snapshots that the collector sends again when they change.
+- The `handles` table is not read: a sender's address is on its message and a
+  chat's people are in `chat_handles`.
+- A message's attachments have no order in what is sent; the timeline orders them
+  by `created_at`, then `transfer_name`, then guid.
+- `media_objects`, written by the derive worker, joins on `media_key` with kind
+  `attachments`. Attachments are not derived today (HOMEL-6), so every
+  attachment's file status is unknown.
+- Builds add indexes to these raw tables when the build's role owns them: load
+  ID, `guid`, `chat_guid`, `message_guid`, `attachment_guid`, `media_key` and the
+  reaction's target (`associated_message_guid` without its `p:N/` or `bp:`
+  prefix).
 
 ## What it does not cover
 
