@@ -36,7 +36,7 @@ uv run --locked mypy --strict --config-file collector/pyproject.toml collector/m
 
 - Branch and pull request; never push to `main`. The title follows Conventional Commits: pull requests are squash merged and the title decides the collector's next version ([docs/releases.md](docs/releases.md)). Never tag or edit the collector's version by hand.
 - A change that makes a page wrong fixes the page in the same pull request.
-- A design choice is written down with the code. A change to an existing decision is an amendment under its number. A new decision gets a page of its own in `docs/decisions/` (the first one creates the folder; `docs/miroir/decisions.md` takes no new number), named by its day, as the handbook's [Write a page](https://github.com/h-wb/handbook/blob/main/Resources/Write%20a%20page.md) says; the numbered file takes no new number.
+- A design choice is written down with the code. A change to an existing decision is an amendment under its number. A new decision gets a page of its own in `docs/decisions/`, named by its day, as the handbook's [Write a page](https://github.com/h-wb/handbook/blob/main/Resources/Write%20a%20page.md) says; `docs/miroir/decisions.md` takes no new number.
 - Persistent identities do not move: source, resource and table names, primary keys, dlt state keys, generated dataset names. Changing one is a data migration ([integrations](docs/miroir/integrations.md#compatibility-and-tests)).
 - A new metadata schema (`SCHEMA_VERSION` in `src/core/operations.py`) means server, worker and flow-run image are released together; say so in the pull request.
 - Product errors raise `OperationError`, so the interface and the CLI show them; no raw HTTP error or traceback reaches a user.
