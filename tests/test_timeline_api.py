@@ -26,7 +26,6 @@ from fastapi.testclient import TestClient
 from src.core import timeline as timeline_module
 from src.core.analysis import analysis_plan
 from src.core.config import parse_miroir
-from src.core.operations import OperationError
 from src.core.service import InlineExecutor, MiroirService
 from src.core.timeline import (
     MEDIA_NO_THUMBNAILS,
@@ -45,6 +44,7 @@ from src.core.timeline import (
     status,
     timeline_source,
 )
+from src.kernel.errors import OperationError
 from src.web.app import STATIC_DIR, create_app
 from src.web.timeline_pages import MEDIA_LABELS
 from tests import test_messages_models as apple_messages

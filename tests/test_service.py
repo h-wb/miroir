@@ -13,8 +13,8 @@ from sqlalchemy.engine import make_url
 
 from src.core.artifacts import receive_file
 from src.core.config import file_revision, save_miroir
-from src.core.operations import OperationError
 from src.core.runner import failure_kind
+from src.kernel.errors import OperationError
 from tests.test_web import WebFixture
 
 

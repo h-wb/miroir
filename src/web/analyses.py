@@ -11,8 +11,8 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from src.core.config import ConfigurationConflict, ConfigurationError
-from src.core.operations import OperationError
 from src.core.service import MiroirService
+from src.kernel.errors import OperationError
 
 Page = Callable[..., HTMLResponse]
 

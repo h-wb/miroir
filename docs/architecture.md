@@ -2,7 +2,7 @@
 area: "[[Homelab]]"
 categories:
   - "[[Resources]]"
-reviewed: 2026-11-24
+reviewed: 2026-11-25
 summary: Which part of the code does what, who may import whom, and where a new thing goes.
 topics:
   - "[[Warehouse]]"
@@ -14,12 +14,15 @@ created: 2026-11-20T14:36
 
 Each part of Miroir has one job. The import rules below are enforced by
 `tests/test_boundaries.py`, so this page and the code cannot drift apart
-silently. Decision 031 records why.
+silently. Decision 031 records why; the
+[package split](decisions/2026-11-25-package-split.md) is moving the code
+towards its parts, one step at a time, and this page says where it is now.
 
 ## The parts
 
 | Part | Its job | It must not |
 |---|---|---|
+| `src/kernel/` | The shared vocabulary: `models.py` (`StrictModel`, `Identifier`, `DatabaseIdentifier`, `SecretKey`) and `errors.py` (`OperationError`, the product error the interface and the CLI show, and its bases `Unavailable` and `Timeout`) | Import anything but the standard library and pydantic |
 | `src/integrations/` (connectors) | Know one source: what it can read (a fetch, file formats) and how to turn it into tables | Know how a file arrived, when anything runs, or where it is stored |
 | `src/analyses/` | Catalog of analysis packages (dbt models and dashboards) and the inputs they need | Load data |
 | `src/core/` | Configuration, receiving and storing files, opening a connection's inputs, running and recording loads, secrets | Know about HTTP, the command line or the scheduler |
@@ -32,19 +35,23 @@ silently. Decision 031 records why.
 
 | Part | May import, besides itself |
 |---|---|
-| `integrations` | `src.core.models` only |
-| `analyses` | `src.core.models` only |
-| `core` | `integrations`, `analyses` |
-| `pipelines` | `core`, and `adapters.s3` (the flow builds the worker's bucket client) |
-| `adapters` | `core`, `pipelines` |
-| `web` | `core`, `integrations` |
-| `cli` | `core`, `integrations`, `adapters`, `web` |
+| `kernel` | Nothing: the standard library and pydantic only |
+| `integrations` | `kernel` only |
+| `analyses` | `kernel` only |
+| `core` | `kernel`, `integrations`, `analyses` |
+| `pipelines` | `kernel`, `core`, and `adapters.s3` (the flow builds the worker's bucket client) |
+| `adapters` | `kernel`, `core`, `pipelines` |
+| `web` | `kernel`, `core`, `integrations` |
+| `cli` | `kernel`, `core`, `integrations`, `adapters`, `web` |
+
+Connectors and analyses take their base types and errors from the kernel, never
+from `core`.
 
 Also: nothing under `src/` imports the collector, and a connector's `formats.py` and
 `contracts.py` never import dlt at module level, so files can be validated
 without the loading stack. `src/core/timeline.py`, the server's read-only access
-to the warehouse (decision 040), imports only `src.core.config`,
-`src.core.operations` and `src.core.analysis` (to name the timeline's schema as
+to the warehouse (decision 040), imports only the kernel,
+`src.core.config` and `src.core.analysis` (to name the timeline's schema as
 the build does) of the server's code, and only `web` and `cli` import it.
 Nothing in `web` or the timeline module imports an image library: media is never
 decoded in the web process. Only `src/core/thumbnails.py` imports one (Pillow,

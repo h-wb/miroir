@@ -19,9 +19,10 @@ import requests
 from fastapi.testclient import TestClient
 
 from src.core.config import load_miroir
-from src.core.operations import MetadataStore, OperationError, OrchestratorUnavailable
+from src.core.operations import MetadataStore, OrchestratorUnavailable
 from src.core.runner import execute_operation
 from src.core.service import InlineExecutor, MiroirService, SubprocessExecutor
+from src.kernel.errors import OperationError
 from src.web.app import SESSION_COOKIE, create_app
 from tests.test_artifacts import export
 from tests.test_browser_history_batch import FORMAT, batch, compress, record, snapshot

@@ -11,8 +11,9 @@ import duckdb
 
 from src.core.artifacts import submit_artifact
 from src.core.config import ConfigurationError, parse_miroir
-from src.core.operations import MetadataStore, OperationError
+from src.core.operations import MetadataStore
 from src.core.runner import IngestionFailed, import_artifact, run_connection
+from src.kernel.errors import OperationError
 
 CUTOFF = "2026-06-04"
 

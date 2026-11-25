@@ -23,7 +23,6 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, Response
 
 from src.core.config import ResolvedMiroir
-from src.core.operations import OperationError
 from src.core.timeline import (
     ATTACHMENTS,
     MAX_GUID,
@@ -38,6 +37,7 @@ from src.core.timeline import (
     timeline_source,
     valid_conversation_id,
 )
+from src.kernel.errors import OperationError
 from src.web.timeline import (
     NO_STORE,
     UNKNOWN_CONVERSATION,

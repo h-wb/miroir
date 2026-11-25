@@ -7,13 +7,13 @@ from typing import Any, Literal
 
 from pydantic import Field, field_validator
 
-from src.core.models import StrictModel
 from src.integrations.apple_health.formats import validate_export
 from src.integrations.contracts import (
     FileFormat,
     IntegrationDefinition,
     ResourceDefinition,
 )
+from src.kernel.models import StrictModel
 
 
 class AppleHealthSettings(StrictModel):

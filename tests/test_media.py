@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from src.core import media
 from src.core.config import MediaConfig, load_miroir
-from src.core.operations import OperationError
+from src.kernel.errors import OperationError
 from tests.fakes import FakeObjectStore
 
 

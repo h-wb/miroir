@@ -18,7 +18,8 @@ from functools import wraps
 from typing import Any, Literal, ParamSpec, TypedDict, TypeVar
 
 from src.core.config import ResolvedMiroir
-from src.core.operations import MetadataStore, OperationError, OrchestratorUnavailable
+from src.core.operations import MetadataStore, OrchestratorUnavailable
+from src.kernel.errors import OperationError
 
 P = ParamSpec("P")
 R = TypeVar("R")

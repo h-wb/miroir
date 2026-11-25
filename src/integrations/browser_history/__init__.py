@@ -5,7 +5,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from src.core.models import StrictModel
 from src.integrations.browser_history.formats import (
     BATCH_FORMAT,
     BATCH_VERSION,
@@ -16,6 +15,7 @@ from src.integrations.contracts import (
     IntegrationDefinition,
     ResourceDefinition,
 )
+from src.kernel.models import StrictModel
 
 
 class BrowserHistorySettings(StrictModel):

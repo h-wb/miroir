@@ -42,8 +42,9 @@ from src.core.media import (
     thumbnail_name,
     valid_key,
 )
-from src.core.operations import MetadataStore, OperationError, PendingMedia
+from src.core.operations import MetadataStore, PendingMedia
 from src.integrations.contracts import MediaKind
+from src.kernel.errors import OperationError
 
 if TYPE_CHECKING:
     from dlt.common.schema.typing import TTableSchemaColumns

@@ -155,7 +155,7 @@ class TimelineRouteTests(WebFixture):
         self.assertNotIn("/timeline", self.client.get("/").text)
 
     def test_a_configured_timeline_reports_its_database(self):
-        from src.core.operations import OperationError
+        from src.kernel.errors import OperationError
 
         # Without a timeline analysis the database alone is not a timeline.
         ready = FakeTimeline({"read_only": True, "statement_timeout": "5s"})

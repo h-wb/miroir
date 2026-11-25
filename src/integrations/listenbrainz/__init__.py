@@ -7,7 +7,6 @@ from typing import Any
 
 from pydantic import Field, field_validator
 
-from src.core.models import StrictModel
 from src.integrations import checks
 from src.integrations.contracts import (
     CredentialField,
@@ -15,6 +14,7 @@ from src.integrations.contracts import (
     IntegrationDefinition,
     ResourceDefinition,
 )
+from src.kernel.models import StrictModel
 
 
 class ListenBrainzSettings(StrictModel):

@@ -5,7 +5,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from src.core.models import StrictModel
 from src.integrations.contracts import (
     FileFormat,
     IntegrationDefinition,
@@ -13,6 +12,7 @@ from src.integrations.contracts import (
     ResourceDefinition,
 )
 from src.integrations.screenmemory.formats import FORMAT_ID, VERSION, validate_batch
+from src.kernel.models import StrictModel
 
 
 class ScreenMemorySettings(StrictModel):

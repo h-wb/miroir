@@ -27,7 +27,6 @@ from src.core.operations import (
     SCHEMA_VERSION,
     ConnectionBusy,
     MetadataStore,
-    OperationError,
     delivery_tokens,
     media_backfills,
     media_pending,
@@ -43,6 +42,7 @@ from src.core.runner import (
     run_connection,
 )
 from src.core.secrets import SecretResolutionError, resolve_credentials
+from src.kernel.errors import OperationError
 from tests.test_miroir import example
 
 TOKEN = "token-SENSITIVE"

@@ -5,7 +5,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from src.core.models import StrictModel
 from src.integrations.apple_messages.formats import FORMAT_ID, VERSION, validate_batch
 from src.integrations.contracts import (
     FileFormat,
@@ -13,6 +12,7 @@ from src.integrations.contracts import (
     MediaKind,
     ResourceDefinition,
 )
+from src.kernel.models import StrictModel
 
 
 class AppleMessagesSettings(StrictModel):
