@@ -3229,8 +3229,10 @@ to its thread at that message, placed in percent of the day so a resize moves
 it, and kept out of the tab order: the list of messages within fifteen minutes
 of the frame, beside the visits with each conversation's name, holds the same
 links for the keyboard. Elsewhere the lane scrubs as the others do. Without a
-`messages` input the Day view and the search page render exactly as before
-(compared byte for byte on the synthetic day).
+`messages` input none of this is added: the tests check that the Day view and
+the search page then have no Messages lane, no list of messages, no Messages
+kind and no Conversations link, that the day's summary, its calendar shading
+and an empty day read as before, and that a message search is refused.
 
 **Layout.** On a desktop the list (20 rem) sits beside the thread, each in its
 own scroll box under the header. Up to 760 pixels wide the list page shows the

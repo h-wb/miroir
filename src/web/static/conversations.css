@@ -37,7 +37,7 @@
 .page-link { text-align: center; margin: .6rem 0; }
 .page-link a { color: var(--muted); padding: .4rem; }
 .messages { list-style: none; padding: 0; margin: 0 0 .6rem; }
-.day-separator { text-align: center; color: var(--muted); font-size: .8rem; margin: 1rem 0 .4rem; }
+.day-separator, .empty-page { text-align: center; color: var(--muted); font-size: .8rem; margin: 1rem 0 .4rem; }
 .message { display: flex; flex-direction: column; align-items: flex-start; margin: .25rem 0; }
 .message.mine { align-items: flex-end; }
 .sender { margin: .5rem .7rem .1rem; font-size: .8rem; color: var(--muted); }

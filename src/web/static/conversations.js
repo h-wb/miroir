@@ -9,7 +9,7 @@ import {
   Pager,
   centredTop,
   initialScroll,
-  keptScrollTop,
+  keepingPlace,
   seam,
   wanted,
 } from "./conversations-core.js";
@@ -70,21 +70,28 @@ class Thread {
       this.say(error.message);
       return;
     }
-    const items = [...page.children].map((node) => document.adoptNode(node));
+    // An empty page's placeholder goes once messages arrive; a fetched page
+    // brings none of its own.
+    const items = [...page.children]
+      .filter((node) => !node.classList.contains("empty-page"))
+      .map((node) => document.adoptNode(node));
+    if (items.length) for (const empty of this.list.querySelectorAll(".empty-page")) empty.remove();
+    this.pager.done(side, page.dataset[side]);
     if (side === "before") {
       const lower = this.list.querySelector(".message");
-      const top = this.box.scrollTop;
-      const height = this.box.scrollHeight;
-      this.list.prepend(...items);
-      this.#join(this.#last(items), lower);
-      this.box.scrollTop = keptScrollTop(top, height, this.box.scrollHeight);
+      // The link to older messages sits above too: hidden at the first
+      // message, it is part of the height the place is kept by.
+      keepingPlace(this.box, () => {
+        this.list.prepend(...items);
+        this.#join(this.#last(items), lower);
+        this.#link(side);
+      });
     } else {
       const upper = this.#last([...this.list.children]);
       this.list.append(...items);
       this.#join(upper, items.find((item) => item.classList.contains("message")));
+      this.#link(side);
     }
-    this.pager.done(side, page.dataset[side]);
-    this.#link(side);
     this.say("");
     this.check();
   }

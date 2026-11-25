@@ -6,6 +6,7 @@ import {
   Pager,
   centredTop,
   initialScroll,
+  keepingPlace,
   keptScrollTop,
   messageLine,
   seam,
@@ -55,6 +56,19 @@ test("the reader's place is kept when older messages arrive above", () => {
   assert.equal(keptScrollTop(10, 4000, 3000), 0); // never above the top
   assert.equal(centredTop(1000, 100, 600), 750);
   assert.equal(centredTop(100, 100, 600), 0);
+});
+
+test("the place is kept by everything that changes above the reader", () => {
+  // A box whose content is what sits above the reader plus what is below.
+  const box = { above: 100, below: 3000, scrollTop: 60 };
+  Object.defineProperty(box, "scrollHeight", { get: () => box.above + box.below });
+  const before = box.above - box.scrollTop; // where the reader is, from the top
+  keepingPlace(box, () => {
+    box.above += 900; // the oldest page arrives...
+    box.above -= 40; // ...and the "Older messages" link above it goes
+  });
+  assert.equal(box.scrollTop, 920);
+  assert.equal(box.above - box.scrollTop, before);
 });
 
 test("pages are wanted near either end, while a cursor leads there", () => {

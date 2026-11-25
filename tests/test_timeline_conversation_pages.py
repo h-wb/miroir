@@ -359,6 +359,19 @@ class ConversationPageTests(ConversationsFixture):
                 '?around=a19">Reply to an earlier message</a></p>',
                 item(reply, "a06"),
             )
+        # A day after the last message: an empty page, its placeholder marked
+        # for the script to remove when the older page arrives, and that page
+        # brings none of its own.
+        with patch("src.web.conversations.MESSAGE_PAGE", 4):
+            late = self.thread(client, self.alex, at="2099-01-01").text
+            self.assertEqual(guids(late), [])
+            self.assertIn('<li class="empty-page">No dated messages here.</li>', late)
+            self.assertIsNone(cursor(late, "after"))
+            older = self.fragment(client, self.alex, before=cursor(late, "before"))
+            self.assertEqual(guids(older.text), dated[-4:])
+            self.assertNotIn("empty-page", older.text)
+        script = (STATIC_DIR / "conversations.js").read_text()
+        self.assertIn('querySelectorAll(".empty-page")', script)
         unknown = self.get(
             client,
             f"/timeline/conversations/{self.alex}/messages?around=g1",

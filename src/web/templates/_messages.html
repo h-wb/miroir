@@ -24,6 +24,6 @@
   {% if item.reactions %}<ul class="reactions" aria-label="Reactions">{% for reaction in item.reactions %}<li>{% if reaction.symbol %}<span aria-hidden="true">{{ reaction.symbol }}</span><span class="visually-hidden">{{ reaction.kind }}</span>{% else %}<span class="reaction-word">{{ reaction.kind }}</span>{% endif %} {{ reaction.who }}</li>{% endfor %}</ul>{% endif %}
 </li>
 {% else %}
-<li class="day-separator">No dated messages here.</li>
+<li class="empty-page">No dated messages here.</li>
 {% endfor %}
 </ol>

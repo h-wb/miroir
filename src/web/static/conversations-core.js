@@ -48,6 +48,17 @@ export function keptScrollTop(oldTop, oldHeight, newHeight) {
   return Math.max(0, oldTop + (newHeight - oldHeight));
 }
 
+// Runs `change`, which puts content above what is read (and may change what
+// sits above it, such as the link to older messages), then moves the box by
+// the height that added, so the reader's place is kept. Anything that changes
+// height below the reader must happen outside it.
+export function keepingPlace(box, change) {
+  const top = box.scrollTop;
+  const height = box.scrollHeight;
+  change();
+  box.scrollTop = keptScrollTop(top, height, box.scrollHeight);
+}
+
 // The scroll position that puts an element in the middle of the box.
 export function centredTop(offsetTop, height, clientHeight) {
   return Math.max(0, offsetTop - (clientHeight - height) / 2);
