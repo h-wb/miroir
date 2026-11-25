@@ -216,6 +216,10 @@ class Deployment(StrictModel):
     # Job variables for the work pool (e.g. the namespace); None falls back to
     # the environment default, an empty object replaces it with nothing.
     job_variables: dict[str, Any] | None = None
+    # Merged over job_variables for the media deployment alone, the one derive
+    # runs use: a reference to the bucket key (e.g. a Secret the work pool's
+    # template mounts), never the key, since Prefect stores job variables.
+    media_job_variables: dict[str, Any] | None = None
 
 
 class MediaConfig(StrictModel):

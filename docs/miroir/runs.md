@@ -103,7 +103,8 @@ failure leaves the load succeeded and the analysis stale.
 The connection page shows each attempt; **Activity** holds receipts, uploads,
 imports and history, **Settings** holds settings, credentials, data delivery,
 the watched folder and removal (decision 018). Guided setup for a new connection
-offers its delivery methods, prepares only that connection's deployment, and for
+offers its delivery methods, prepares that connection's deployment (and the
+Miroir's media deployment), and for
 a sender waits for the first automatic delivery and its import. A manual upload
 never counts as proof that a sender is connected.
 
@@ -139,6 +140,21 @@ section, each connection gets one deployment of the flow `sync_connection`
 a concurrency limit of 1, its schedule, and the section's pool, image and job
 variables. Miroir decides what a load is; Prefect only runs it.
 
+While some connection has a media kind with thumbnails, the Miroir also gets one
+media deployment, `sync-connection/<miroir>--media` (decision 033 amendment):
+the same flow, pool and image, a concurrency limit of 1, no schedule, and the
+tag `miroir:media`. Every derive run (thumbnails, backfill walks) of every
+connection runs there, with its connection as a parameter; everything else runs
+on the connection's deployment. Its job variables are the section's
+`job_variables` with `media_job_variables` merged over them (top-level keys
+replace; the image is always the connections'), so the work pool's
+template can give the bucket key to its Jobs alone. A derive and a load of one
+connection take turns by the advisory locks, not by Prefect: the derive's writer
+waits for the connection's lock inside its Job (up to an hour), and derives of
+one connection hold `<pipeline>-media`. Derives of different connections queue
+behind each other in Prefect. Preparing a connection also creates or updates the
+media deployment.
+
 ```bash
 uv run --locked pipelines-miroir deployments plan    # creates, updates, removals; hand edits show as drift
 uv run --locked pipelines-miroir deployments apply   # or the Apply deployments button
@@ -157,8 +173,9 @@ Prefect.
 On a cluster each flow run is its own Kubernetes Job from the pinned image. The
 image is built in CI from `uv.lock` (Python 3.12, `PIPELINES_CODE_REVISION`
 baked in). The Job needs the configuration and artifacts at the configured
-paths, the warehouse and metadata credentials, the master key, and for media the
-bucket key; how the installation provides them is in
+paths, the warehouse and metadata credentials and the master key; the media
+deployment's Jobs alone also need the bucket key. How the installation provides
+them is in
 [home-ops](https://github.com/h-wb/home-ops/blob/main/kubernetes/apps/main/automation/miroir/README.md).
 The repo's own tasks, `mise run miroir:deploy` and `mise run miroir:refresh`,
 run `deployments apply` and `refresh` from a checkout whose gitignored

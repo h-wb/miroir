@@ -13,7 +13,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from src.adapters.prefect import PrefectOrchestrator
+from src.adapters.prefect import (
+    MEDIA_TAG,
+    PrefectOrchestrator,
+    media_deployment_name,
+)
 from src.cli.main import main
 from src.core.config import ConfigurationError, load_miroir, parse_miroir
 from src.core.operations import MetadataStore, OperationError, OrchestratorUnavailable
@@ -23,6 +27,9 @@ from tests.test_miroir import example
 
 POOL = "test-pool"
 DEPLOYMENT = {"work_pool": POOL, "image": "ghcr.io/x/pipelines:abc"}
+# What the installation sets: a reference the work pool's template resolves.
+MEDIA_JOB_VARIABLES = {"env_from": [{"secretRef": {"name": "miroir-media"}}]}
+SCREEN = {"id": "screen", "integration": "screenmemory", "settings": {}}
 
 
 def closed_api() -> str:
@@ -44,6 +51,15 @@ def miroir(schedule=None, drop_health=False, deployment=DEPLOYMENT):
     if drop_health:
         config["connections"] = config["connections"][:1]
     return parse_miroir(json.dumps(config))
+
+
+def with_screen(miroir_id, deployment=DEPLOYMENT):
+    """The example plus a connection whose kind has thumbnails, as raw JSON."""
+    raw = example()
+    raw["id"] = miroir_id
+    raw["deployment"] = dict(deployment)
+    raw["connections"].append(dict(SCREEN))
+    return raw
 
 
 class PrefectAdapterTests(unittest.TestCase):
@@ -344,7 +360,7 @@ class PrefectAdapterTests(unittest.TestCase):
 
         from src.core.runner import _new_operation
 
-        ws = miroir()
+        ws = parse_miroir(json.dumps(with_screen("personal")))
         self.converge(ws)
         self.addCleanup(self.delete_deployments, ws)
         start_at = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(
@@ -353,7 +369,7 @@ class PrefectAdapterTests(unittest.TestCase):
         derive = _new_operation(
             self.store,
             ws,
-            ws.connections[0],
+            ws.connections[2],
             "webhook",
             kind="derive",
             options=json.dumps({"not_before": start_at.isoformat()}),
@@ -372,13 +388,13 @@ class PrefectAdapterTests(unittest.TestCase):
 
         from src.core.runner import _new_operation
 
-        ws = miroir()
+        ws = parse_miroir(json.dumps(with_screen("personal")))
         self.converge(ws)
         self.addCleanup(self.delete_deployments, ws)
         runs = []
         for _ in range(3):
             derive = _new_operation(
-                self.store, ws, ws.connections[0], "webhook", kind="derive"
+                self.store, ws, ws.connections[2], "webhook", kind="derive"
             )
             self.orchestrator.submit(derive.id)
             runs.append(self.store.get_operation(derive.id).backend_run_id)
@@ -427,6 +443,118 @@ class PrefectAdapterTests(unittest.TestCase):
         ):
             self.orchestrator.submit(operation.id)
 
+    def test_plan_and_apply_own_the_media_deployment(self):
+        raw = with_screen("media_owned")
+        media = media_deployment_name("media_owned")
+        ws = parse_miroir(json.dumps(raw))
+        self.addCleanup(self.delete_deployments, ws)
+        # An installation from before the media deployment: its connections only.
+        self.orchestrator.apply(
+            ws,
+            [c for c in self.orchestrator.plan(ws) if c["connection_id"] is not None],
+        )
+        before = self.orchestrator.actual(ws)
+        self.assertNotIn(media, before)
+        [create] = self.orchestrator.plan(ws)
+        self.assertEqual(
+            (create["action"], create["deployment"], create["connection_id"]),
+            ("create", media, None),
+        )
+        self.assertEqual(
+            json.loads(json.dumps(create["set"])),
+            {
+                "parameters": {"config_path": "/miroir/miroir.json"},
+                "schedules": [],
+                "work_pool_name": POOL,
+                "job_variables": {"image": "ghcr.io/x/pipelines:abc"},
+                "concurrency_limit": 1,
+            },
+        )
+        self.converge(ws)
+        after = self.orchestrator.actual(ws)
+        self.assertEqual(
+            {name: after[name] for name in before}, before
+        )  # the connections' deployments are untouched
+
+        # The media job variables are an update of the media deployment alone.
+        raw["deployment"]["media_job_variables"] = MEDIA_JOB_VARIABLES
+        referenced = parse_miroir(json.dumps(raw))
+        [update] = self.orchestrator.plan(referenced)
+        self.assertEqual(
+            (update["action"], update["deployment"], list(update["changes"])),
+            ("update", media, ["job_variables"]),
+        )
+        self.converge(referenced)
+        actual = self.orchestrator.actual(referenced)
+        self.assertEqual(
+            actual[media]["attributes"]["job_variables"],
+            {**MEDIA_JOB_VARIABLES, "image": "ghcr.io/x/pipelines:abc"},
+        )
+        self.assertEqual(
+            actual["media_owned-screen"]["attributes"]["job_variables"],
+            {"image": "ghcr.io/x/pipelines:abc"},
+        )
+
+        # Without a kind that has thumbnails, it is removed with its connection.
+        raw["connections"].pop()
+        removed = parse_miroir(json.dumps(raw))
+        self.assertEqual(
+            sorted(
+                (c["action"], c["deployment"]) for c in self.orchestrator.plan(removed)
+            ),
+            [("delete", media), ("delete", "media_owned-screen")],
+        )
+        self.converge(removed)
+
+    def test_derive_runs_go_to_the_media_deployment(self):
+        from prefect import get_client
+
+        from src.core.runner import _new_operation
+
+        ws = parse_miroir(json.dumps(with_screen("routing")))
+        self.converge(ws)
+        self.addCleanup(self.delete_deployments, ws)
+        actual = self.orchestrator.actual(ws)
+        screen = ws.connections[2]
+        derive = _new_operation(self.store, ws, screen, "webhook", kind="derive")
+        load = _new_operation(self.store, ws, screen, "webhook", kind="sync")
+        for operation in (derive, load):
+            self.orchestrator.submit(operation.id)
+        with get_client(sync_client=True) as client:
+            runs = {
+                operation.kind: client.read_flow_run(
+                    uuid.UUID(self.store.get_operation(operation.id).backend_run_id)
+                )
+                for operation in (derive, load)
+            }
+        self.assertEqual(
+            str(runs["derive"].deployment_id), actual["routing--media"]["id"]
+        )
+        self.assertEqual(
+            str(runs["sync"].deployment_id), actual["routing-screen"]["id"]
+        )
+        for run in runs.values():
+            self.assertEqual(run.parameters["connection_id"], "screen")
+        self.assertEqual(runs["derive"].parameters["operation_id"], derive.id)
+
+    def test_preparing_a_connection_also_prepares_the_media_deployment(self):
+        raw = with_screen("prepared")
+        path = Path(self.tmp.name) / "miroir.json"
+        path.write_text(json.dumps(raw))
+        service = MiroirService(
+            path,
+            self.store,
+            Path(self.tmp.name) / "artifacts",
+            self.orchestrator,
+            orchestrator=self.orchestrator,
+        )
+        self.addCleanup(self.delete_deployments, service.miroir())
+        service.prepare_connection("screen")
+        self.assertEqual(
+            sorted(self.orchestrator.actual(service.miroir())),
+            ["prepared--media", "prepared-screen"],
+        )
+
     def test_schedules_are_validated(self):
         for bad in (
             {"cron": "every day"},
@@ -465,6 +593,96 @@ class DeploymentSettingsTests(unittest.TestCase):
         self.assertEqual(
             next(iter(adapter.desired(bare).values()))["job_variables"], {}
         )
+
+    def test_the_media_deployment_has_its_own_job_variables(self):
+        adapter = PrefectOrchestrator(self.store, "/config.json")
+        deployment = {
+            "work_pool": "config-pool",
+            "image": "ghcr.io/h-wb/pipelines:sha-config",
+            "job_variables": {"namespace": "from-config"},
+        }
+        plain = adapter.desired(parse_miroir(json.dumps(with_screen("m", deployment))))
+        specs = adapter.desired(
+            parse_miroir(
+                json.dumps(
+                    with_screen(
+                        "m", {**deployment, "media_job_variables": MEDIA_JOB_VARIABLES}
+                    )
+                )
+            )
+        )
+        media = specs.pop("m--media")
+        # The connections' deployments do not change.
+        self.assertEqual(
+            {name: spec for name, spec in plain.items() if name != "m--media"}, specs
+        )
+        self.assertEqual(sorted(specs), ["m-health", "m-music", "m-screen"])
+        self.assertEqual(
+            media["job_variables"],
+            {
+                "namespace": "from-config",
+                **MEDIA_JOB_VARIABLES,
+                "image": "ghcr.io/h-wb/pipelines:sha-config",
+            },
+        )
+        self.assertEqual(media["parameters"], {"config_path": "/config.json"})
+        self.assertEqual(
+            (media["work_pool_name"], media["schedules"], media["concurrency_limit"]),
+            ("config-pool", [], 1),
+        )
+        self.assertEqual(media["tags"], ["miroir", "miroir:m", MEDIA_TAG])
+        # Without media job variables it runs like the others.
+        self.assertEqual(
+            plain["m--media"]["job_variables"], specs["m-screen"]["job_variables"]
+        )
+        # The image is the deployment's, whatever the media job variables say.
+        overridden = with_screen(
+            "m", {**deployment, "media_job_variables": {"image": "other"}}
+        )
+        self.assertEqual(
+            adapter.desired(parse_miroir(json.dumps(overridden)))["m--media"][
+                "job_variables"
+            ]["image"],
+            "ghcr.io/h-wb/pipelines:sha-config",
+        )
+        # Without deployment.image too: the connections' image from job_variables.
+        unpinned = {key: value for key, value in deployment.items() if key != "image"}
+        unpinned = with_screen(
+            "m",
+            {
+                **unpinned,
+                "job_variables": {"image": "from-job-variables"},
+                "media_job_variables": {"image": "other"},
+            },
+        )
+        self.assertEqual(
+            adapter.desired(parse_miroir(json.dumps(unpinned)))["m--media"][
+                "job_variables"
+            ]["image"],
+            "from-job-variables",
+        )
+        # No kind with thumbnails, no media deployment.
+        self.assertEqual(
+            sorted(adapter.desired(miroir())), ["personal-health", "personal-music"]
+        )
+
+    def test_the_media_deployment_name_is_no_connections(self):
+        name = media_deployment_name("personal")
+        adapter = PrefectOrchestrator(self.store, "/config.json")
+        specs = adapter.desired(parse_miroir(json.dumps(with_screen("personal"))))
+        self.assertIn(name, specs)
+        self.assertEqual(
+            [spec["parameters"].get("connection_id") for spec in specs.values()].count(
+                None
+            ),
+            1,
+        )
+        # `<miroir>-<connection>` would equal it only for the connection `-media`,
+        # which is not an identifier.
+        raw = with_screen("personal")
+        raw["connections"][2]["id"] = "-media"
+        with self.assertRaises(ConfigurationError):
+            parse_miroir(json.dumps(raw))
 
     def test_no_deployment_section_is_a_clear_error(self):
         adapter = PrefectOrchestrator(self.store, "/config.json")
