@@ -1,6 +1,7 @@
 """Prefect entry point for miroir connections.
 
-Deployed per connection (decision 013). A flow run needs the miroir
+Deployed per connection (decision 013), and once for the miroir's derive runs
+(the media deployment, decision 033 amendment). A flow run needs the miroir
 configuration at `config_path`, the metadata database (MIROIR_METADATA_URL or
 MIROIR_METADATA__* — see `metadata_url`), and, for built-in secrets,
 MIROIR_SECRET_KEY (decision 011). A derive run (thumbnails, decision 040) also

@@ -42,7 +42,7 @@ Media is off until the configuration has a `media` section:
 | `upload_ttl_seconds` | 900 (60–3600) | How long an upload link lasts |
 | `view_ttl_seconds` | 300 (30–3600) | How long a view link lasts |
 | `derive_delay_seconds` | 300 (30–3600) | How long a derive run waits for more confirmations |
-| `derive_batch` | 500 (1–5000) | Files of one kind per derive run, about 2 to 3 minutes of the connection's deployment |
+| `derive_batch` | 500 (1–5000) | Files of one kind per derive run, about 2 to 3 minutes of the media deployment |
 
 The key comes from `MIROIR_MEDIA_ACCESS_KEY_ID` and
 `MIROIR_MEDIA_SECRET_ACCESS_KEY`; the server refuses to start with the section
@@ -87,12 +87,12 @@ PDF or other document) gets a row with `unsupported` and is not read. A file ove
   name.
 - **When.** When the server answers `stored` to a confirmation (or `present` to
   an upload request), it queues the file in the metadata store (`media_pending`)
-  before answering and asks for a `derive` operation on the connection's own
-  deployment, due `derive_delay_seconds` later. Confirmations before it starts
+  before answering and asks for a `derive` operation on the Miroir's media
+  deployment ([Prefect](runs.md#prefect)), due `derive_delay_seconds` later. Confirmations before it starts
   join it, so a collector confirming thousands of files in a pass causes one run.
   A run handles at most `derive_batch` files of each kind and, if more wait and
   it made progress, schedules the next at once; loads of the connection take
-  turns with it. Without Prefect the run starts at once and empties the queue
+  turns with it by lock. Without Prefect the run starts at once and empties the queue
   itself. An overdue run is joined only while Prefect says it is scheduled,
   pending or running; if Prefect lost it, the next confirmation asks for a new
   one.
@@ -144,8 +144,10 @@ line for it: files waiting, and the last derive run with its counts
 
 Without the bucket key in its environment, a derive run is closed as blocked
 ("Media storage is not configured where this runs") and everything else runs as
-before. A key given to every flow run reaches every connector's runs, which can
-then read and write the whole bucket. A flow run needs about 1 GiB of memory for
+before. Derive runs run on the media deployment alone, so only its Jobs need the
+key: the work pool's template gives it to them through `media_job_variables`
+([Configuration](configuration.md#execution-links-and-media)), and syncs,
+imports and builds do not hold it. A flow run needs about 1 GiB of memory for
 a derive run (the check measured 530 MB for the decoder, 711 MB with the
 worker); give it 1.5 GiB. With less, every derive run stops as "decoder
 unavailable" without charging files. On macOS the decoder's memory limit is not

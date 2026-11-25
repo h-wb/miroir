@@ -86,7 +86,12 @@ next write saves the new shape. `"analyses": []` means no analyses.
 
 `deployment` turns on Prefect (decisions 013, 016, 029): `work_pool` is the pool
 flow runs go to; `image` and `job_variables` are optional and become the
-deployment's job variables. On a cluster, pin an image by `sha-` tag or digest:
+deployment's job variables. `media_job_variables`, optional, is merged over
+`job_variables` for the media deployment alone (its top-level keys replace
+those of `job_variables`; `image` is always the connections'), the one derive runs use
+(decision 033 amendment): a reference the work pool's template resolves, such as
+`{"env_from": [{"secretRef": {"name": "miroir-media"}}]}`, never the key itself,
+since Prefect stores job variables. On a cluster, pin an image by `sha-` tag or digest:
 a registry mirror can serve stale mutable tags. Without the section, requests
 run as local subprocesses. How deployments are planned: [Prefect](runs.md#prefect).
 
@@ -107,7 +112,7 @@ described in [Media](media.md).
 | `MIROIR_ARTIFACT_DIR` | Where artifacts are kept (default `.miroir/artifacts`) |
 | `MIROIR_PREFECT_CONFIG_PATH` | Where flow runs read the configuration, when it differs from the writer's path |
 | `DESTINATION__POSTGRES__CREDENTIALS__*` | The warehouse, for flow runs and dbt |
-| `MIROIR_MEDIA_ACCESS_KEY_ID`, `MIROIR_MEDIA_SECRET_ACCESS_KEY` | The bucket key, on the server and in flow runs; required when `media` is set |
+| `MIROIR_MEDIA_ACCESS_KEY_ID`, `MIROIR_MEDIA_SECRET_ACCESS_KEY` | The bucket key, on the server and in derive runs (the media deployment's); required by the server when `media` is set |
 | `MIROIR_TIMELINE_DATABASE_URL`, or `MIROIR_TIMELINE_DATABASE__*` | The timeline's read-only access to the warehouse ([Timeline](timeline.md)) |
 | `MIROIR_METRICS_TOKEN` | Turns on `/metrics`; must differ from the API token ([observability](../observability.md)) |
 | `FORWARDED_ALLOW_IPS` | Uvicorn's trusted proxies, so receiving URLs use HTTPS and cookies are Secure behind a TLS proxy |
