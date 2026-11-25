@@ -9,14 +9,14 @@
   <h1>Search the timeline</h1>
   <nav class="day-nav"><a href="/timeline">Latest day</a></nav>
   {% if source.warning %}<p class="notice">{{ source.warning }}</p>{% endif %}
-  {{ t.search_form(q, kind, app, from_day, to_day) }}
+  {{ t.search_form(q, kind, app, from_day, to_day, messages_linked, conversation) }}
   {% if refused %}
   <p class="error" id="search-refused">{{ refused }}</p>
   {% elif results is not none %}
     {% if results %}
     <div class="results" id="results">{% include "_timeline_results.html" %}</div>
     {% else %}
-    <p class="empty-day" id="no-results">Nothing found{% if kind == "browser" %} in page titles or addresses{% else %} on screen{% endif %}.</p>
+    <p class="empty-day" id="no-results">Nothing found{% if kind == "browser" %} in page titles or addresses{% elif kind == "messages" %} in messages{% else %} on screen{% endif %}.</p>
     {% endif %}
   {% endif %}
 </main>

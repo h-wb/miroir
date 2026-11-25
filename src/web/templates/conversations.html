@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Conversations{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/conversations.css">
+<script src="/static/htmx.min.js" defer></script>
+<script type="module" src="/static/conversations.js"></script>{% endblock %}
+{% block body %}
+<div class="conversations-page list-only">
+  <nav class="conversation-pane" aria-labelledby="conversations-heading">
+    <h1 id="conversations-heading">Conversations</h1>
+    <p class="pane-links"><a href="/timeline">Timeline</a> <a href="/timeline/search">Search</a></p>
+    {% if source.warning %}<p class="notice">{{ source.warning }}</p>{% endif %}
+    {% if conversations %}<ul class="conversation-list" id="conversation-list">{% include "_conversation_list.html" %}</ul>
+    {% else %}<p class="empty-day" id="no-conversations">No conversations{% if later_page %} after these{% endif %}.</p>{% endif %}
+    {% if later_page %}<p><a href="/timeline/conversations">The newest conversations</a></p>{% endif %}
+  </nav>
+  <section class="thread-empty" aria-label="Conversation"><p>Choose a conversation.</p></section>
+</div>
+{% endblock %}

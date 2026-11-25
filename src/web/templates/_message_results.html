@@ -1,0 +1,10 @@
+{# Messages found by a search, newest first; each opens its thread there. #}
+{% import "_timeline.html" as t %}
+{% for item in results %}
+<article class="visit message-result">
+  <p><a href="{{ item.open }}"><time datetime="{{ item.sent_at }}">{{ item.day }} {{ item.clock }}</time></a>
+    <strong>{{ item.display_name or "A conversation" }}</strong>
+    <span class="muted">{{ item.who }}</span></p>
+  <p class="snippet">{{ t.snippet(item.snippet) }}</p>
+</article>
+{% endfor %}

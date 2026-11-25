@@ -3,7 +3,7 @@ area: "[[Homelab]]"
 categories:
   - "[[Resources]]"
 reviewed: 2026-11-25
-summary: How the server reads the timeline's tables, the JSON API it answers (screen, browser and conversations), how it serves images, and how the Day view and search pages behave.
+summary: How the server reads the timeline's tables, the JSON API it answers (screen, browser and conversations), how it serves images, and how the Day view, search and conversation pages behave.
 topics:
   - "[[Warehouse]]"
   - "[[Screen activity]]"
@@ -15,8 +15,9 @@ created: 2026-11-24T23:30
 # Timeline
 
 The timeline (decision 040) lets you move through a day of screenshots and
-browser visits and search what was on screen. Its API also reads Apple Messages
-conversations, when the analysis links a `messages` input. Its tables are built by the
+browser visits and search what was on screen. When the analysis links a
+`messages` input, it also reads Apple Messages: conversations to open and
+search, and a lane of messages on the Day view. Its tables are built by the
 [`timeline` package](analyses.md#the-timeline-package); the server only reads
 them. It is the server's only access to the warehouse, in
 `src/core/timeline.py`, which only `web` and `cli` import.
@@ -189,10 +190,13 @@ affected. The file stays in the bucket: it is hidden, not deleted.
 
 ## The pages
 
-With a timeline configured, the header links **Timeline**. Every page needs the
-login and is `Cache-Control: private, no-store`. JavaScript fills the Day view's
-lanes and scrubber from the API (`static/timeline-core.js`, tested with
-`node --test`, and `static/timeline.js`); the rest of each page works without it.
+With a timeline configured, the header links **Timeline**, and **Conversations**
+when the analysis links a `messages` input. Every page needs the login and is
+`Cache-Control: private, no-store`. JavaScript fills the Day view's lanes and
+scrubber from the API (`static/timeline-core.js`, tested with `node --test`, and
+`static/timeline.js`) and pages a conversation as you scroll
+(`static/conversations-core.js`, tested the same way, and
+`static/conversations.js`); the rest of each page works without it.
 
 - `/timeline` opens the latest day with frames or visits in the last 400 days, or
   today. Without a reader or a timeline analysis it says why (503), as every
@@ -204,6 +208,11 @@ lanes and scrubber from the API (`static/timeline-core.js`, tested with
   original" when its file is stored; two lanes on the day's time axis (23 to 25
   hours), Screen coloured by app and Browser with one mark per visit; the visits
   within fifteen minutes of the frame shown. A day with nothing recorded says so.
+- With a `messages` input the Day view also counts the day's messages, shades
+  the calendar by them too (a day of messages alone is not empty), draws a third
+  lane, Messages, with one mark per message that opens its thread at that
+  message, and lists the messages within fifteen minutes of the frame beside the
+  visits, each with its conversation's name. Without the input it is as it was.
 - `?frame=<key>` opens the day at that frame (a frame of another day opens on its
   own day). The address follows the scrubber.
 - Scrubbing: drag the slider, or drag or tap a lane. Keys on the slider or a
@@ -217,18 +226,55 @@ lanes and scrubber from the API (`static/timeline-core.js`, tested with
   still open), "Withheld" (never uploaded, no text either), "The image could not
   be loaded" (a record whose file is gone).
 - `/timeline/search` searches screen text (moments, newest window first, apps in
-  name order within one) or, with **Browser visits**, titles and addresses, with
-  an app filter (screen only) and a date range. The form is posted, so the words
+  name order within one) or, with **Browser visits**, titles and addresses, or,
+  with **Messages** (where linked), message text, newest first, each result with
+  its conversation's name, the sender and the time, opening the thread at that
+  message; with an app filter (screen only), a conversation filter (messages
+  only, set by a thread's own search) and a date range. The form is posted, so the words
   are never in the address bar, the history or a log; `?q=` is refused (400) with
   an empty form. The form takes no files, at most 10 fields and 8 KB a part.
   Each moment opens the Day view at its first match. "Older results" posts the
   words, filters and next-page token again, in place with htmx or as a page.
+- `/timeline/conversations` lists conversations, newest activity first: the
+  name, a mark on a group, the last message's first 200 characters ("You:" when
+  I sent it) and its time. More rows load as the end of the list comes into
+  view (htmx; a "More conversations" link without it).
+- `/timeline/conversations/{id}` is a thread, the list beside it. It opens on the
+  latest messages; `?around=<guid>` opens with that message in the middle and
+  marked, `?at=<day>` (or a time with its offset) at that day, from the date
+  field. Older messages load as you scroll up, newer ones as you scroll down,
+  80 at a time, and the page keeps your place when older ones arrive above (by
+  hand: iOS Safari does no scroll anchoring); without JavaScript, "Older
+  messages" and "Newer messages" are links (`?before=` and `?after=` cursors).
+  Days are separated in the analysis's time zone; mine on the right, theirs on
+  the left, in a group the sender's name on the first message of a run. A
+  message shows when it was edited, "Unsent", "Audio message", "The text could
+  not be read", and a reply quotes the first line of its message when that is on
+  the page, else "Reply to an earlier message" opens the thread at it.
+  Reactions are shown under the message, an emoji (or "emoji", "sticker") with
+  who. The participants are named under the title; a thread's own search posts
+  its words with the conversation set. The page title holds no name. An unknown
+  conversation is 404; an `around` message that is not in it shows the latest
+  messages and says so. Messages without a date are counted, not shown.
+- An attachment shows in place, by what is known of its file: its 360-pixel
+  thumbnail, opening the 1280-pixel one; a stored file without thumbnails
+  (video, audio, documents, an image none could be made of) a tile with its
+  name, type and size that opens the file from storage, so a video streams from
+  there; "File state not known yet" with no record of it; "Not available" for a
+  file that was never stored. A thumbnail box has a fixed size, so one that
+  loads late moves nothing. The worker does not derive attachments today (the
+  `attachments` kind names no thumbnail extensions), so no attachment has a
+  record or a thumbnail and each shows "File state not known yet".
 - An htmx request made after the login expired gets `HX-Redirect` to the login.
 - Up to 760 pixels wide everything is one column: the image, the text, the
-  lanes, the slider, the calendar; lanes and slider are taller for a finger.
+  lanes, the slider, the calendar; lanes and slider are taller for a finger. A
+  thread is shown alone there, with a link back to the list.
 
-Data is always shown as text: titles, snippets and screen text are never read as
-markup, and only `http` and `https` addresses become links (`rel="noreferrer"`).
+Data is always shown as text: titles, snippets, screen text, message text, names
+and file names are never read as markup, and only `http` and `https` addresses
+become links (`rel="noreferrer"`), with no previews. A conversation is named in
+an address by its id only, a message by its guid; a handle, a number or search
+words never are.
 The pages keep nothing in the browser beyond its HTTP cache: no service worker,
 no IndexedDB, htmx's history off. Logging out sends
 `Clear-Site-Data: "cache", "storage"` and empties the page's storages, and a page

@@ -1,5 +1,6 @@
 {% import "_timeline.html" as t %}
-{% for item in results %}
+{% if kind == "messages" %}{% include "_message_results.html" %}{% else %}
+{%- for item in results %}
 {% if kind == "screen" %}
 <article class="moment">
   <a class="moment-image" href="{{ item.open }}">{{ t.media(item.code, labels, item.thumbnail, "Screenshot at " ~ item.clock) }}</a>
@@ -19,6 +20,7 @@
 </article>
 {% endif %}
 {% endfor %}
+{%- endif %}
 {# The next page: the words, filters and cursor go in the POST body, with htmx
    or without it; never in an address, and htmx pushes no URL for it. #}
 {% if more %}<form class="more" method="post" action="/timeline/search" hx-post="/timeline/search" hx-target="this" hx-swap="outerHTML" hx-push-url="false">

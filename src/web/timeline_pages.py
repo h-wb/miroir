@@ -1,4 +1,6 @@
-"""The timeline's pages (decision 040, phase 1c): the Day view and search.
+"""The timeline's pages (decision 040, phase 1c): the Day view and search. The
+conversation pages are in `conversations.py`; the Day view's Messages lane and
+the search's Messages kind are here, where those pages live (phase 2c).
 
 Rendered on the server from the same reader the JSON API uses; the Day view's
 scrubber and lanes are filled in the browser by `/static/timeline.js` from that
@@ -28,6 +30,7 @@ from src.core.timeline import (
     MEDIA_THUMBNAILS,
     MEDIA_UNKNOWN,
     MEDIA_WITHHELD,
+    MESSAGES,
     NO_ANALYSIS,
     NOT_CONFIGURED,
     SCREENSHOTS,
@@ -36,8 +39,18 @@ from src.core.timeline import (
     TimelineTimeout,
     TimelineUnavailable,
     timeline_source,
+    valid_conversation_id,
 )
-from src.web.timeline import NO_STORE, USE_POST, _day, _plain, search_fields
+from src.web.conversations import thread_url
+from src.web.timeline import (
+    NO_STORE,
+    PAGE_KINDS,
+    SEARCH_KINDS,
+    USE_POST,
+    _day,
+    _plain,
+    search_fields,
+)
 
 Page = Callable[..., HTMLResponse]
 # What a tile says where there is no image to show (the index's media codes).
@@ -52,7 +65,7 @@ MEDIA_LABELS = {
 LATEST_WITHIN_DAYS = 399
 SEARCH_PAGE = 20
 # What the search form sends; `limit` is the page's own.
-SEARCH_FORM_FIELDS = {"q", "kind", "app", "from", "to", "before"}
+SEARCH_FORM_FIELDS = {"q", "kind", "app", "from", "to", "before", "conversation"}
 FORM_TOO_LARGE = "The search form was too large; search again."
 # A value longer than this is not shown back in the form.
 ECHO_LIMIT = 255
@@ -79,16 +92,22 @@ def _level(count: int) -> int:
 
 
 def _activity(row: dict[str, Any]) -> int:
-    """Frames of the screen, visits of the browser."""
+    """Frames of the screen, visits of the browser, messages where linked."""
     screen, browser = row.get("screen") or {}, row.get("browser") or {}
-    return int(screen.get("frames", 0)) + int(browser.get("events", 0))
+    messages = row.get(MESSAGES) or {}
+    return (
+        int(screen.get("frames", 0))
+        + int(browser.get("events", 0))
+        + int(messages.get("events", 0))
+    )
 
 
 def _month(reader: TimelineReader, day: date) -> list[list[dict[str, Any]]]:
     """The weeks of a day's month, Monday first, with each day's counts."""
     first = day.replace(day=1)
     last = day.replace(day=calendar.monthrange(day.year, day.month)[1])
-    counts = {row["day"]: _activity(row) for row in reader.days(first, last)["days"]}
+    found = reader.days(first, last, reader.source.sources)["days"]
+    counts = {row["day"]: _activity(row) for row in found}
     weeks = []
     for week in calendar.Calendar().monthdatescalendar(day.year, day.month):
         weeks.append(
@@ -219,8 +238,10 @@ def timeline_page_routes(
                     status_code=303,
                     headers={"Cache-Control": NO_STORE},
                 )
-            counts = reader.days(chosen, chosen)["days"]
+            # Messages count only where linked: the sources are the analysis's.
+            counts = reader.days(chosen, chosen, reader.source.sources)["days"]
             totals = counts[0] if counts else {}
+            linked = bool(reader.source.messages)
             context = {
                 "source": reader.source.describe(),
                 "day": chosen.isoformat(),
@@ -241,6 +262,9 @@ def timeline_page_routes(
                 "missing_frame": bool(key) and frame is None,
                 "labels": MEDIA_LABELS,
             }
+            if linked:
+                context["messages_linked"] = True
+                context["messages"] = (totals.get(MESSAGES) or {}).get("events", 0)
             return _no_store(page(request, "timeline_day.html", **context), 200)
 
         return guarded(request, render)
@@ -279,8 +303,15 @@ def _search(
 ) -> Response:
     words = fields.get("q", "")
     kind = fields.get("kind", "screen")
-    if kind not in ("screen", "browser"):
+    linked = bool(reader.source.messages)
+    kinds = SEARCH_KINDS if linked else PAGE_KINDS
+    if kind not in kinds:
         kind = "screen"
+    # The conversation filter is for messages; another kind leaves it.
+    conversation_id = fields.get("conversation", "")
+    if kind != MESSAGES or not linked:
+        fields = {k: v for k, v in fields.items() if k != "conversation"}
+        conversation_id = ""
     context: dict[str, Any] = {
         "source": reader.source.describe(),
         # Shown back in the form, never in an address, and only at a length the
@@ -295,11 +326,24 @@ def _search(
         "refused": refused,
         "more": None,
     }
+    if linked:
+        context["messages_linked"] = True
+        context["conversation"] = None
+        if valid_conversation_id(conversation_id):
+            found_conversation = reader.conversation(conversation_id)
+            context["conversation"] = {
+                "id": conversation_id,
+                "name": found_conversation["display_name"]
+                if found_conversation
+                else "this conversation",
+            }
     fragment = request.headers.get("hx-request") == "true"
     status = 400 if refused else 200
     if words.strip() and not refused:
         try:
-            found = search_fields(lambda: reader, {**fields, "limit": str(SEARCH_PAGE)})
+            found = search_fields(
+                lambda: reader, {**fields, "limit": str(SEARCH_PAGE)}, kinds
+            )
         except (TimelineUnavailable, TimelineTimeout):
             raise  # the page's own error, from `guarded`
         except OperationError as error:
@@ -310,6 +354,8 @@ def _search(
                 context["results"] = [
                     _moment(m, found["apps"]) for m in found["moments"]
                 ]
+            elif kind == MESSAGES:
+                context["results"] = [_message(m) for m in found["messages"]]
             else:
                 context["results"] = [_visit(v) for v in found["visits"]]
             if found["next"]:
@@ -339,6 +385,21 @@ def _moment(moment: dict[str, Any], apps: list[dict[str, str]]) -> dict[str, Any
         else None,
         "code": code,
         "open": day_url(moment["day"], moment["key"]),
+    }
+
+
+def _message(message: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **message,
+        "clock": _clock(message["sent_at"]),
+        "day": message["day"] or message["sent_at"][:10],
+        # In a direct conversation the sender is its name: not said twice.
+        "who": "You"
+        if message["from_me"]
+        else ""
+        if message["sender"] == message["display_name"]
+        else (message["sender"] or ""),
+        "open": thread_url(message["conversation_id"], message["guid"]),
     }
 
 

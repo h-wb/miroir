@@ -335,7 +335,7 @@ USE_POST = (
     " address, where logs and the browser's history would keep them."
 )
 SEARCH_FIELDS = {"q", "kind", "app", "conversation", "from", "to", "limit", "before"}
-# The kinds of search: the pages search the screen and the browser only.
+# The kinds of search: the pages search messages too where they are linked.
 PAGE_KINDS = ("screen", "browser")
 SEARCH_KINDS = (*PAGE_KINDS, MESSAGES)
 UNKNOWN_CONVERSATION = "Unknown conversation"

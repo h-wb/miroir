@@ -743,18 +743,22 @@ def create_app(
 
     # ---- Web interface ---------------------------------------------------------
 
-    def timeline_link() -> bool:
-        """The header links the timeline only where there is one to see."""
+    def timeline_links() -> tuple[bool, bool]:
+        """The header links the timeline only where there is one to see, and its
+        conversations where it reads a `messages` input."""
         if timeline is None:
-            return False
+            return False, False
         try:
-            return timeline_source(service.miroir()) is not None
+            source = timeline_source(service.miroir())
         except (ConfigurationError, OperationError):
-            return False
+            return False, False
+        return source is not None, bool(source and source.messages)
 
     def page(request: Request, name: str, **context: Any) -> HTMLResponse:
         context["notice"] = NOTICES.get(request.query_params.get("notice", ""))
-        context.setdefault("timeline_link", timeline_link())
+        if "timeline_link" not in context:
+            links = timeline_links()
+            context["timeline_link"], context["conversations_link"] = links
         return templates.TemplateResponse(request, name, context)
 
     @app.get("/login", response_class=HTMLResponse)
@@ -788,12 +792,15 @@ def create_app(
 
     from src.web.analyses import analysis_pages
     from src.web.connections import connection_pages
+    from src.web.conversations import conversation_pages
     from src.web.timeline import timeline_pages
     from src.web.timeline_pages import timeline_page_routes
 
     app.include_router(connection_pages(service, page))
     app.include_router(analysis_pages(service, page))
     app.include_router(timeline_pages(timeline, page, service.miroir))
+    # Before the Day view's `/timeline/{day}`, which would take the path.
+    app.include_router(conversation_pages(timeline, page, service.miroir))
     app.include_router(timeline_page_routes(timeline, page, service.miroir))
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 

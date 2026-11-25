@@ -1,5 +1,6 @@
 // The timeline's pages (decision 040): app colours on every page, and on the
-// Day view the lanes, the scrubber and the frame shown. Data from the API is
+// Day view the lanes, the scrubber and the frame shown; where the analysis
+// links messages, their lane and the messages around the frame (phase 2c). Data from the API is
 // only ever set as text (textContent) or as a validated colour; nothing is
 // parsed as markup. No storage: nothing is kept outside the page and the
 // browser's HTTP cache, which logging out clears.
@@ -21,10 +22,12 @@ import {
   timeForX,
   xForTime,
 } from "./timeline-core.js";
+import { messageLine, threadUrl } from "./conversations-core.js";
 
 const REST_MS = 250; // after this long without moving, the scrubber rests
 const NEAR_SECONDS = 15 * 60;
 const VISIT_PAGES = 4; // at most 2,000 visits a day are drawn
+const MESSAGE_PAGES = 4; // and as many messages
 
 // Through the CSSOM, which the policy allows (it refuses style attributes).
 function paint(element, value) {
@@ -68,8 +71,13 @@ class DayView {
     this.screenLane = document.getElementById("lane-screen");
     this.browserLane = document.getElementById("lane-browser");
     this.near = document.getElementById("visits-near");
+    // Only where the analysis links messages.
+    this.messageLane = document.getElementById("lane-messages");
+    this.messageMarks = document.getElementById("message-marks");
+    this.messagesNear = document.getElementById("messages-near");
     this.current = -1;
     this.visits = [];
+    this.messages = [];
     this.restTimer = 0;
     this.preloaded = new Set();
     // At most ten small images a second while dragging.
@@ -106,6 +114,7 @@ class DayView {
       this.show(found >= 0 ? found : 0, true);
     }
     this.#loadVisits();
+    if (this.messageLane) this.#loadMessages();
   }
 
   say(message) {
@@ -286,6 +295,14 @@ class DayView {
       const x = xForTime(visit.t, this.length, browser.width);
       browser.context.fillRect(Math.floor(x), 0, 2, browser.height);
     }
+    if (this.messageLane) {
+      const lane = this.#canvas(this.messageLane);
+      lane.context.fillStyle = getComputedStyle(this.messageLane).color;
+      for (const message of this.messages) {
+        const x = xForTime(message.t, this.length, lane.width);
+        lane.context.fillRect(Math.floor(x), 0, 2, lane.height);
+      }
+    }
     if (this.current >= 0) this.#cursor(this.times[this.current]);
   }
 
@@ -328,7 +345,91 @@ class DayView {
     else if (this.visits.length) this.#near(this.visits[0].t);
   }
 
+  async #loadMessages() {
+    const start = Date.parse(this.index.start);
+    let after = null;
+    try {
+      for (let page = 0; page < MESSAGE_PAGES; page++) {
+        const query = new URLSearchParams({
+          from: this.day,
+          to: this.day,
+          source: "messages",
+          limit: "500",
+        });
+        if (after) query.set("after", after);
+        const found = await getJson(`/api/timeline/events?${query}`);
+        for (const event of found.events) {
+          const payload = event.payload || {};
+          this.messages.push({
+            t: (Date.parse(event.started_at) - start) / 1000,
+            name: payload.display_name || "A conversation",
+            line: messageLine(event.title, payload),
+            open: threadUrl(event.group, payload.guid),
+          });
+        }
+        after = found.next;
+        if (!after) break;
+      }
+    } catch (error) {
+      this.say(error.message);
+    }
+    this.#marks();
+    this.#drawLanes();
+    if (this.current >= 0) this.#near(this.times[this.current]);
+    else if (this.messages.length) this.#nearMessages(this.messages[0].t);
+  }
+
+  // A link over each message's mark, placed in percent of the day, so a
+  // resize moves it with the lane. Out of the tab order: the list of
+  // messages around the frame holds the same links.
+  #marks() {
+    this.messageMarks.replaceChildren(
+      ...this.messages
+        .filter((message) => message.open)
+        .map((message) => {
+          const mark = document.createElement("a");
+          mark.className = "message-mark";
+          mark.href = message.open;
+          mark.tabIndex = -1;
+          mark.title = `${clock(this.index.start, message.t, this.timeZone)} ${message.name}`;
+          mark.style.left = `${xForTime(message.t, this.length, 100)}%`;
+          return mark;
+        }),
+    );
+  }
+
+  #nearMessages(t) {
+    if (!this.messagesNear) return;
+    const close = this.messages
+      .filter((message) => Math.abs(message.t - t) <= NEAR_SECONDS)
+      .sort((a, b) => Math.abs(a.t - t) - Math.abs(b.t - t))
+      .slice(0, 8)
+      .sort((a, b) => a.t - b.t);
+    this.messagesNear.replaceChildren(
+      ...close.map((message) => {
+        const item = document.createElement("li");
+        const at = document.createElement("time");
+        at.textContent = clock(this.index.start, message.t, this.timeZone);
+        const name = document.createElement(message.open ? "a" : "span");
+        name.textContent = message.name;
+        if (message.open) name.href = message.open;
+        const line = document.createElement("span");
+        line.className = "muted";
+        line.textContent = message.line;
+        item.append(at, " ", name, " ", line);
+        return item;
+      }),
+    );
+    if (close.length === 0) {
+      const item = document.createElement("li");
+      item.className = "muted";
+      item.textContent = "None within fifteen minutes.";
+      this.messagesNear.replaceChildren(item);
+    }
+  }
+
   #near(t) {
+    this.#nearMessages(t);
     const close = this.visits
       .filter((visit) => Math.abs(visit.t - t) <= NEAR_SECONDS)
       .sort((a, b) => Math.abs(a.t - t) - Math.abs(b.t - t))
@@ -375,7 +476,7 @@ class DayView {
       this.move(frameAt(this.times, Number(this.scrubber.value)));
     });
     this.scrubber.addEventListener("change", () => this.rest(this.current));
-    for (const lane of [this.screenLane, this.browserLane]) {
+    for (const lane of [this.screenLane, this.browserLane, this.messageLane].filter(Boolean)) {
       lane.addEventListener("keydown", key);
       const seek = (event) => {
         if (this.times.length === 0) return;

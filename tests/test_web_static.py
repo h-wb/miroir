@@ -53,6 +53,9 @@ class StaticFileTests(WebFixture):
             ("miroir.css", "text/css"),
             ("miroir.js", "javascript"),
             ("htmx.min.js", "javascript"),
+            ("conversations.css", "text/css"),
+            ("conversations.js", "javascript"),
+            ("conversations-core.js", "javascript"),
         ):
             with self.subTest(name=name):
                 response = self.client.get(f"/static/{name}")

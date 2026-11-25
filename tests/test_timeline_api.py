@@ -1329,9 +1329,10 @@ class TimelinePageTests(TimelineApiFixture):
 
 
 class TimelineWithMessagesTests(TimelineApiFixture):
-    """Linking messages changes nothing the pages and the screen and browser
-    routes show (decision 040, phases 2a and 2c): the days answer only gains
-    `messages` counts."""
+    """Linking messages changes nothing the screen and browser routes and the
+    home page answer (decision 040, phases 2a and 2c): the days answer only
+    gains `messages` counts. The Day view gains its Messages lane (phase 2c,
+    part 2) and keeps everything else."""
 
     def answers(self, client):
         answers = {}
@@ -1379,6 +1380,21 @@ class TimelineWithMessagesTests(TimelineApiFixture):
             [(2,)],
         )
         after = self.answers(self.client(raw))
+        # The Day view: as before, plus the Messages lane, the messages near the
+        # frame, their count and the Messages kind of search.
+        pages = {}
+        for day in ("2026-11-20", "2026-11-22"):
+            pages[day] = before.pop(day)[1], after.pop(day)[1]
+            for added in ("lane-messages", "messages-near", 'value="messages"'):
+                self.assertNotIn(added, pages[day][0])
+                self.assertIn(added, pages[day][1])
+        self.assertIn("7 screen frames, 6 browser visits.", pages["2026-11-20"][0])
+        self.assertIn(
+            "7 screen frames, 6 browser visits, 1 message.", pages["2026-11-20"][1]
+        )
+        # A day with a message alone is not empty any more.
+        self.assertIn("Nothing was recorded", pages["2026-11-22"][0])
+        self.assertNotIn("Nothing was recorded", pages["2026-11-22"][1])
         counted = {}
         for route in [r for r in after if r.startswith("/api/timeline/days")]:
             status, text = after[route]
