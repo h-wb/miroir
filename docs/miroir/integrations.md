@@ -112,8 +112,9 @@ a change alters rows or values produced by an artifact.
 
 A connector whose rows point at files declares a `MediaKind`: its name, the
 resource and column holding each file's key, the allowed extensions, a size
-limit, and the extensions the worker makes thumbnails of (none means the kind
-is not derived). Core does the rest: [Media](media.md).
+limit, the extensions the worker makes thumbnails of (none means the kind
+is not derived), and optionally a smaller size above which a file is not read
+to make them (`thumbnail_max_bytes`). Core does the rest: [Media](media.md).
 
 ## Sources on a device
 

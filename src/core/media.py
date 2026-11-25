@@ -23,8 +23,8 @@ MAX_THUMBNAIL_BYTES = 16 * 1024 * 1024
 # The largest original image the server copies through itself; larger ones, and
 # files that are not images, keep the redirect to a signed link.
 MAX_STREAMED_IMAGE = 25 * 1024 * 1024
-# Pillow decoders by extension; an image is read only by the decoders of the
-# extensions its kind makes thumbnails of, whatever its bytes claim to be.
+# Pillow decoders by extension; an image is read only by the decoder of its
+# key's extension, whatever its bytes claim to be.
 IMAGE_DECODERS = {
     ".jpeg": "JPEG",
     ".jpg": "JPEG",
@@ -34,6 +34,9 @@ IMAGE_DECODERS = {
     ".bmp": "BMP",
     ".tiff": "TIFF",
     ".tif": "TIFF",
+    # pillow-heif's format, registered only in the decoder child.
+    ".heic": "HEIF",
+    ".heif": "HEIF",
 }
 # Files one backfill run may walk (decision 040).
 MAX_BACKFILL = 1_000_000

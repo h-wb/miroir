@@ -61,7 +61,8 @@ DEFINITION = IntegrationDefinition(
             "image_path",
             (".jpeg", ".jpg", ".png", ".heic"),
             20 * 1024 * 1024,
-            # HEIC is accepted but has no decoder in the worker (decision 040).
+            # HEIC is accepted, but the collector stores JPEG: a HEIC screenshot
+            # is recorded `unsupported` (decision 040).
             thumbnails=(".jpeg", ".jpg", ".png"),
         ),
     ),

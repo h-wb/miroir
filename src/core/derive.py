@@ -500,16 +500,20 @@ class _Batch:
         extension = PurePosixPath(entry.key).suffix.lower()
         size = entry.size
         thumbnails: dict[int, bytes] = {}
-        if extension not in kind.thumbnails or not image_decoders([extension]):
+        decoders = image_decoders([extension])
+        if extension not in kind.thumbnails or not decoders:
             status = "unsupported"
         elif entry.attempts >= MAX_ATTEMPTS:
             status = "failed"
+        elif entry.size > kind.thumbnail_bound:
+            # The size it was stored with says enough: not read at all.
+            status = "too_large"
         else:
             name = object_name(
                 config.prefix, connection.config.id, kind.name, entry.key
             )
             try:
-                stored = _get(self.object_store, name, kind.max_bytes)
+                stored = _get(self.object_store, name, kind.thumbnail_bound)
             except ObjectTooLarge:
                 status = "too_large"
             else:
@@ -518,9 +522,8 @@ class _Batch:
                 size = len(stored.body)
                 self.store.begin_media_attempt(*scope)
                 try:
-                    status, thumbnails = self.decoder.thumbnails(
-                        stored.body, image_decoders(kind.thumbnails)
-                    )
+                    # Only the decoder of the key's extension reads the file.
+                    status, thumbnails = self.decoder.thumbnails(stored.body, decoders)
                 except DecoderLost:
                     return _INTERRUPTED
                 except DecoderUnavailable:
