@@ -3035,8 +3035,10 @@ Consequences:
 - Confirmed attachments are queued and derived; earlier ones need a backfill
   (`media-backfill <connection> attachments`).
 - A derive run of a Messages connection checks seven decoders (HEIF, JPEG,
-  PNG, GIF, WebP, TIFF, BMP) when its child starts: about 0.9 s and 540 MB,
-  as for screenshots.
+  PNG, GIF, WebP, TIFF, BMP) when its child starts: about 0.9 s and 540 MB on
+  the development machine of this slice. Most of it is the costliest image the
+  bounds accept, so seven decoders cost about what two do (phase 1b measured
+  1.4 s and 530 MB for screenshots on another machine).
 - Measured on generated 12-megapixel photos on a development machine, decoding
   alone: 0.08 to 0.11 s per JPEG, 0.22 to 0.25 s per PNG, 0.34 to 0.43 s per
   HEIC; about 1 s per 40-megapixel HEIC.
