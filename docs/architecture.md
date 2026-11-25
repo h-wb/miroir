@@ -1,3 +1,15 @@
+---
+area: "[[Homelab]]"
+categories:
+  - "[[Resources]]"
+reviewed: 2026-11-24
+summary: Which part of the code does what, who may import whom, and where a new thing goes.
+topics:
+  - "[[Warehouse]]"
+  - "[[Device collector]]"
+created: 2026-11-20T14:36
+---
+
 # Architecture: parts and responsibilities
 
 Each part of Miroir has one job. The import rules below are enforced by
@@ -44,37 +56,15 @@ by `collector/tests/test_boundaries.py` (decision 035).
 
 A new folder under `src/` fails the boundary test until it is given a rule.
 
-## How data gets in
+## Where data moves
 
-There are two ways, and a connector declares which it supports (decision 021):
-
-1. **Fetch.** Miroir pulls from a service's API with the connection's
-   credentials, on a schedule.
-2. **A delivered file.** Someone or something hands Miroir a file. It is
-   validated, stored as an artifact, then imported. A file reaches Miroir
-   through one of three transports, all owned by core:
-   - **upload**, by a person in the web interface;
-   - **the receiving URL**, when a program pushes it;
-   - **a watched folder**, when Miroir picks up a file something left there.
-
-Programs that push to the receiving URL are *senders*. They live outside the
-server: the Health Auto Export app is one, and the collector is another, for sources
-that exist only on a device. The collector is therefore not a fourth transport. It
-is a client of one that already exists. After each run it also reports, with the
-same token, what happened on the device (fixed words and counts, never data), so
-Miroir can tell a quiet source from a broken one ([observability](observability.md),
-decision 039).
-
-## Media
-
-Some rows point at a file: a frame at its screenshot. Those files are media
-(decision 033). They are never parsed, so they are not artifacts and do not go
-through a connector's format. A connector declares which column holds the key;
-core signs upload and view links against an object store it reaches through the
-`ObjectStore` protocol; the S3 implementation is an adapter. A device uploads
-with the links and never holds a storage credential. The worker reads the
-originals of confirmed files, writes their thumbnails beside them and records
-each file in the warehouse's `media_objects` (decision 040).
+How data gets in (a fetch, or a delivered file by upload, receiving URL or
+watched folder), how media skips the import path, and how it is read are the
+[flows](miroir/flows.md). In code terms: every transport is in `core`; a sender
+such as the collector is a client of the receiving URL, not a transport of its
+own; media are never parsed, so they are not artifacts and never go through a
+connector's format, and core reaches the bucket only through the `ObjectStore`
+protocol, implemented by `adapters/s3.py`.
 
 ## Where a new thing goes
 

@@ -1,4 +1,72 @@
-# Workspace design decisions
+---
+area: "[[Homelab]]"
+categories:
+  - "[[Decisions]]"
+summary: "Miroir's design decisions, numbered and cited by number from code and pages: an index, then each decision with its status."
+topics:
+  - "[[Warehouse]]"
+  - "[[Device collector]]"
+created: 2026-10-28T22:08
+---
+
+# Miroir design decisions
+
+A decision is never deleted: a later one supersedes it, and its status says by
+which. Code, tests and pages cite them by number. A new decision gets a page of
+its own named by its day, not a number here; a change to one below is an
+amendment under it. Older entries say "workspace" (renamed Miroir by 014) and
+"agent" (renamed the collector by 037).
+
+| # | Decision | Status |
+| --- | --- | --- |
+| [001](#001--versioned-json-configuration-with-strict-typed-validation) | Versioned JSON configuration with strict typed validation | Accepted |
+| [002](#002--explicit-identities-and-opt-in-legacy-bindings) | Explicit identities and opt-in legacy bindings | Accepted |
+| [003](#003--small-bundled-registry-and-lazy-source-adapters) | Small bundled registry and lazy source adapters | Accepted |
+| [004](#004--lock-application-dependencies-validate-outside-the-worker) | Lock application dependencies; validate outside the worker | Accepted; runtime settled by 012 |
+| [005](#005--operation-and-attempt-records-in-a-small-sqlalchemy-metadata-store) | Operation and attempt records in a small SQLAlchemy metadata store | Accepted; the store's place superseded by 015 |
+| [006](#006--runner-ordering-register-lock-load-record-model) | Runner ordering: register, lock, load, record, model | Accepted; building superseded by 019, 022 |
+| [007](#007--prefect-entry-point-exists-but-is-not-deployed) | Prefect entry point exists but is not deployed | Superseded by 012, 013 |
+| [008](#008--content-addressed-artifacts-and-explicit-versioned-imports) | Content-addressed artifacts and explicit, versioned imports | Accepted |
+| [009](#009--n8n-is-a-temporary-receiver-for-health-auto-export) | n8n is a temporary receiver for Health Auto Export | Done (2026-11-11) |
+| [010](#010--small-server-rendered-interface-over-shared-services) | Small server-rendered interface over shared services | Accepted |
+| [011](#011--connection-secrets-encrypted-in-the-workspace-pluggable-backends) | Connection secrets: encrypted in the workspace, pluggable backends | Accepted |
+| [012](#012--keep-prefect-run-each-flow-in-its-own-kubernetes-job-from-a-versioned-image) | Keep Prefect; run each flow in its own Kubernetes Job from a versioned image | Accepted |
+| [013](#013--prefect-is-the-orchestrator-the-workspace-only-reconciles-with-it) | Prefect is the orchestrator; the workspace only reconciles with it | Accepted |
+| [014](#014--the-product-is-miroir-workspace-is-retired) | The product is Miroir; "workspace" is retired | Accepted |
+| [015](#015--the-metadata-store-gets-its-own-postgres-not-metabases) | The metadata store gets its own Postgres, not Metabase's | Accepted |
+| [016](#016--execution-settings-live-in-the-configuration-not-the-writers-environment) | Execution settings live in the configuration, not the writer's environment | Accepted; fallbacks superseded by 029 |
+| [017](#017--file-delivery-is-independent-of-parsing-connection-scoped-receive-tokens) | File delivery is independent of parsing; connection-scoped receive tokens | Accepted |
+| [018](#018--delivery-aware-onboarding-connection-activity-and-settings-have-separate-homes) | Delivery-aware onboarding; connection activity and settings have separate homes | Accepted |
+| [019](#019--analysis-follows-a-connections-binding-source-local-builds-are-independent) | Analysis follows a connection's binding; source-local builds are independent | Superseded in part by 022 |
+| [020](#020--migrate-connectors-through-explicit-capabilities-and-owned-lifecycle-hooks) | Migrate connectors through explicit capabilities and owned lifecycle hooks | Accepted |
+| [021](#021--connectors-declare-inputs-core-owns-file-delivery) | Connectors declare inputs; core owns file delivery | Accepted |
+| [022](#022--analyses-are-configured-instances-of-packages-with-linked-inputs) | Analyses are configured instances of packages with linked inputs | Accepted |
+| [023](#023--explicit-local-and-infrastructure-development-launchers) | Explicit local and infrastructure development launchers | Accepted |
+| [024](#024--a-file-still-in-a-watched-folder-is-not-a-new-arrival) | A file still in a watched folder is not a new arrival | Accepted |
+| [025](#025--legacy-per-source-loads-are-retired-run_dbt-stays-for-the-mart-schemas) | Legacy per-source loads are retired; `run_dbt` stays for the mart schemas | Accepted; `run_dbt` part superseded by 042 |
+| [026](#026--native-dlt-resources-are-the-connector-authoring-boundary) | Native dlt resources are the connector authoring boundary | Accepted |
+| [027](#027--shared-connector-diagnostics-and-revision-checked-connection-edits) | Shared connector diagnostics and revision-checked connection edits | Accepted; scope superseded for GitHub by 028 |
+| [028](#028--github-uses-native-rest-resources-dependencies-and-incremental-lag) | GitHub uses native REST resources, dependencies, and incremental lag | Accepted |
+| [029](#029--the-prefect-adapter-describes-deployments-in-prefects-own-attributes) | The Prefect adapter describes deployments in Prefect's own attributes | Accepted |
+| [030](#030--a-local-agent-delivers-device-sources-through-the-receiving-url) | A local agent delivers device sources through the receiving URL | Accepted |
+| [031](#031--the-agent-is-its-own-package-part-boundaries-are-tested) | The agent is its own package; part boundaries are tested | Accepted |
+| [032](#032--the-receiving-url-takes-a-format-browser-history-gains-incremental-batches) | The receiving URL takes a format; browser history gains incremental batches | Accepted |
+| [033](#033--media-files-that-rows-point-at-live-in-object-storage) | Media: files that rows point at live in object storage | Accepted; refined by 040 |
+| [034](#034--a-start-date-and-re-sending-a-range) | A start date, and re-sending a range | Accepted |
+| [035](#035--the-agent-takes-two-libraries-and-its-parts-get-tested-boundaries) | The agent takes two libraries, and its parts get tested boundaries | Accepted |
+| [036](#036--a-secret-scanner-beside-the-agents-own-masking-rules) | A secret scanner beside the agent's own masking rules | Accepted |
+| [037](#037--the-agent-is-renamed-the-collector) | The agent is renamed the collector | Accepted |
+| [038](#038--apple-messages-through-the-collector-keyed-so-nothing-arrives-twice) | Apple Messages through the collector, keyed so nothing arrives twice | Accepted |
+| [039](#039--the-collector-reports-every-run-and-miroir-is-where-a-sources-health-is-seen) | The collector reports every run, and Miroir is where a source's health is seen | Accepted |
+| | [038 follow-up — Apple Messages attachment uploads and contact names](#038-follow-up--apple-messages-attachment-uploads-and-contact-names) | Accepted |
+| [040](#040--a-timeline-inside-miroir-and-its-groundwork) | A timeline inside Miroir, and its groundwork | Accepted |
+| | [040 amendment — Thumbnails and stored media (phase 1b)](#040-amendment--thumbnails-and-stored-media-phase-1b) | Accepted |
+| | [040 amendment — Queries, the API and images through the server (phase 1c, part 1)](#040-amendment--queries-the-api-and-images-through-the-server-phase-1c-part-1) | Accepted |
+| | [040 amendment — The Day view and search pages (phase 1c, part 2)](#040-amendment--the-day-view-and-search-pages-phase-1c-part-2) | Accepted |
+| | [040 amendment — The media upgrade on the warehouse (2026-11-23)](#040-amendment--the-media-upgrade-on-the-warehouse-2026-11-23) | Accepted |
+| | [040 amendment — Conversations data (phase 2a)](#040-amendment--conversations-data-phase-2a) | Accepted |
+| [041](#041--a-messages-analysis-conversations-by-identifier-no-text) | A messages analysis: conversations by identifier, no text | Accepted |
+| [042](#042--dashboards-read-the-analysis-outputs-run_dbt-is-removed) | Dashboards read the analysis outputs; `run_dbt` is removed | Accepted |
 
 ## 001 — Versioned JSON configuration with strict typed validation
 
@@ -65,7 +133,7 @@ implementations, not implied by the integration's presence in the catalog.
 
 ## 004 — Lock application dependencies; validate outside the worker
 
-Status: local validation accepted; production runtime selection pending, 2026-10-28.
+Status: accepted, 2026-10-28. The production runtime it left open is settled by 012.
 
 Commit `uv.lock` and use `uv sync --locked` in a separate Python 3.12 environment for
 validation. Keep the package's Prefect compatibility range while locking this tested
@@ -83,7 +151,8 @@ mounts, secret injection, and restart behavior separately before production chan
 
 ## 005 — Operation and attempt records in a small SQLAlchemy metadata store
 
-Status: accepted for the execution slice, 2026-10-28.
+Status: accepted for the execution slice, 2026-10-28. Where the store lives is
+superseded by 015: its own Postgres, schema `miroir_meta` (renamed by 014).
 
 An **operation** is one requested or observed sync of one connection; an **attempt**
 is one execution of it. A Prefect flow run maps to exactly one operation (unique
@@ -111,7 +180,9 @@ are now built (decision 013).
 
 ## 006 — Runner ordering: register, lock, load, record, model
 
-Status: accepted for the execution slice, 2026-10-28.
+Status: accepted for the execution slice, 2026-10-28. Step 5 and the dbt
+selector are superseded by 019 and 022: a load builds the analyses that link its
+connection. A queued request now waits for the lock instead of being blocked.
 
 `src/core/runner.py:run_connection` is the only execution path:
 
@@ -137,7 +208,8 @@ models is milestone 2 work tied to the dbt project, not to the runner.
 
 ## 007 — Prefect entry point exists but is not deployed
 
-Status: accepted, 2026-10-28; deployment blocked on runtime decisions.
+Status: superseded by 012 and 013. The flow is deployed by Miroir's own plan
+and apply since 2026-10-29.
 
 `src/pipelines/workspace.py:sync_connection` wraps the runner with Postgres, dbt,
 and the flow run ID. It is deliberately absent from `prefect.yaml`. Deploying it
@@ -190,7 +262,8 @@ transformation-only retries, and native Apple Health XML or other formats.
 
 ## 009 — n8n is a temporary receiver for Health Auto Export
 
-Status: accepted, 2026-10-28.
+Status: accepted, 2026-10-28; done. The phone posts to the `health` connection's
+receiving URL since the cutover of 2026-11-11 (025).
 
 Today n8n has one job. Workflow "Apple Health → Files: Ingest Exports" receives
 Health Auto Export's webhook POSTs, writes each body unchanged to the NAS share
@@ -449,7 +522,7 @@ metadata URL, so the database password still exists nowhere outside CNPG.
 
 ## 016 — Execution settings live in the configuration, not the writer's environment
 
-Status: accepted, 2026-10-29.
+Status: accepted, 2026-10-29. Its environment fallbacks are superseded by 029.
 
 Until now the deployment job's work pool, image, and job variables came from
 each writer's environment (`MIROIR_PREFECT_POOL`, `MIROIR_IMAGE`,
@@ -531,7 +604,8 @@ uncacheable and never refresh automatically.
 
 ## 019 — Analysis follows a connection's binding; source-local builds are independent
 
-Status: accepted, 2026-10-29.
+Status: accepted, 2026-10-29. Superseded in part by 022: analyses are configured
+instances with explicit, cross-source inputs, and crossovers left the legacy path.
 
 Real Health Auto Export delivery is verified. Its generated raw dataset must feed
 analysis without rebinding it to a legacy dataset. Integration metadata declares
@@ -572,7 +646,8 @@ relations before failing.
 
 ## 020 — Migrate connectors through explicit capabilities and owned lifecycle hooks
 
-Status: accepted, 2026-10-29. Extends 003, 017–019 for milestone 5.
+Status: accepted, 2026-10-29. Extends 003, 017–019 for milestone 5. The legacy
+GitHub export seeding it kept was retired with the legacy flows (025).
 
 The API/file/reference workflow is verified end to end. GitHub, Bike Share Toronto,
  and Firefox/Zen snapshots now exercise the contracts before analysis packaging.
@@ -797,7 +872,8 @@ arbitrary-code upload facility or a plugin installer.
 
 ## 027 — Shared connector diagnostics and revision-checked connection edits
 
-Status: accepted, 2026-11-12. Refines 026's implementation.
+Status: accepted, 2026-11-12. Refines 026's implementation. Its
+no-state-migration scope is superseded for GitHub by 028.
 
 Use a small `IntegrationError` with a safe message and typed kind for credential
 rejection, rate limiting, and malformed upstream responses. GitHub's lightweight
@@ -902,7 +978,8 @@ because Prefect then updates by slug and leaves a hand-added one in place.
 ## 030 — A local agent delivers device sources through the receiving URL
 
 Status: accepted, 2026-11-20. Builds on 017 and 021; answers the "clients as
-producers" item of the product plan.
+producers" item of the product plan. The agent is called the collector
+since 037.
 
 Some sources exist only on a personal machine: a browser's history database, a
 screen recorder's text and app-usage tables, a messages archive. Today one of them
@@ -1019,7 +1096,8 @@ the agent after it.
 
 ## 031 — The agent is its own package; part boundaries are tested
 
-Status: accepted, 2026-11-20. Refines 030.
+Status: accepted, 2026-11-20. Refines 030. The agent is called the collector
+since 037.
 
 Decision 030 put the agent in `src/agent/`, inside the server's one package. That
 left two things unclear. The agent could not be fetched or released on its own: it
@@ -1227,7 +1305,8 @@ deployment (bucket, key, configuration).
 
 ## 034 — A start date, and re-sending a range
 
-Status: accepted, 2026-11-20. Refines 030.
+Status: accepted, 2026-11-20. Refines 030. The agent is called the collector
+since 037.
 
 Decision 030 gave the agent a cursor that only moves forward, and said a better
 masking rule "is applied by collecting again". There was no practical way to
@@ -1261,7 +1340,8 @@ Limits:
 
 ## 035 — The agent takes two libraries, and its parts get tested boundaries
 
-Status: accepted, 2026-11-21. Refines 030 and 031.
+Status: accepted, 2026-11-21. Refines 030 and 031. The agent is called the collector
+since 037.
 
 Decisions 030 and 031 made the agent standard-library only, so that a laptop does
 not install dlt, dbt or Prefect to send a file. That reason holds. The rule went
@@ -1355,7 +1435,8 @@ Considered and left out:
 
 ## 036 — A secret scanner beside the agent's own masking rules
 
-Status: accepted, 2026-11-21. Refines 030 and 035.
+Status: accepted, 2026-11-21. Refines 030 and 035. The agent is called the collector
+since 037.
 
 Decision 030 masks secrets "by fixed rules, never by a model". The rules were all
 written here: private key blocks, a value after a name such as `password`, long
@@ -1661,6 +1742,8 @@ source's layout in its counts, which the Apple Messages source adds (038).
 
 ### 038 follow-up — Apple Messages attachment uploads and contact names
 
+Status: accepted, 2026-11-21, with pull request #40.
+
 Attachment files use the existing media API and are opt-in. The collector
 limits uploads to the configured message scope and remembers fingerprints of
 the attachment keys and links it has delivered. A changed key or a late link
@@ -1673,8 +1756,8 @@ disagree, the collector reports ambiguity and sends no name for that handle.
 
 ## 040 — A timeline inside Miroir, and its groundwork
 
-Status: accepted, 2026-11-21. Refines 022 and 033. Phase 0 is built; the rest is
-the agreed plan for the phases that follow.
+Status: accepted, 2026-11-21. Refines 022 and 033. Built: phase 0 (#42), 1a
+(#43), 1b (#44, #47), 1c (#49, #50) and the media upgrade fix (#51).
 
 Miroir loads screen frames, their screenshots and soon messages, but the only way
 to look at them is a dashboard that lists rows. The timeline is a page of the
@@ -1956,8 +2039,8 @@ Consequences:
 
 ### 040 amendment — Thumbnails and stored media (phase 1b)
 
-Status: proposed with the phase 1b pull request, 2026-11-22, revised after its
-review the same day. What building thumbnails and `media_objects` had to decide
+Status: accepted, 2026-11-22 (proposed with the phase 1b pull request and
+revised after its review the same day). What building thumbnails and `media_objects` had to decide
 that the plan above left open. Where a choice touched security, cost or the
 shared scheduling, the more conservative one was taken; those are marked
 *(conservative)*.
@@ -2204,11 +2287,11 @@ Consequences:
 
 ### 040 amendment — Queries, the API and images through the server (phase 1c, part 1)
 
-Status: proposed with the phase 1c pull request, 2026-11-22. What the server side
+Status: accepted, 2026-11-22, with pull request #49. What the server side
 of the timeline had to decide that the plan above left open. Choices that touched
 security, privacy or cost took the more conservative option; those are marked
-*(conservative)*. The routes and their answers are in the README (*The timeline
-API*).
+*(conservative)*. The routes and their answers are in
+[Timeline](timeline.md#the-api).
 
 **Which tables.** The server reads the first analysis of the `timeline` package in
 configuration order, in the schema its build writes, derived by the same code
@@ -2406,10 +2489,10 @@ test from its reproduction:
 
 ### 040 amendment — The Day view and search pages (phase 1c, part 2)
 
-Status: proposed with the pages' pull request, 2026-11-22. What the first version
+Status: accepted, 2026-11-22, with pull request #50. What the first version
 of the pages had to decide that the plan left open; *(conservative)* marks the
-choices that touched security, privacy or cost. How to use them is in the README
-(*The timeline's pages*).
+choices that touched security, privacy or cost. How to use them is in
+[Timeline](timeline.md#the-pages).
 
 **Pages and routes.** `/timeline` opens the latest day with data in the last 400
 days (or today); `/timeline/{day}` is the Day view, `?frame=<key>` opens it at a
@@ -2538,9 +2621,11 @@ found one blocking point, widened on purpose, and three more:
 - *Connections per process*: up to five as the reader (four for queries, one for
   image lookups). During a rolling update two processes hold them, so the role's
   limit (six, defined in the home-ops repository) covers one process at full
-  use, not two. Recorded in the README's notes; no limit is changed here.
+  use, not two. Recorded in [Timeline](timeline.md#turning-it-on); no limit is changed here.
 
 ### 040 amendment — The media upgrade on the warehouse (2026-11-23)
+
+Status: accepted, 2026-11-23, with pull request #51.
 
 The first build with the media columns failed on the installation's warehouse
 (PostgreSQL 18.1) in `screen_frames`: "no empty local buffer available". The
@@ -2635,11 +2720,12 @@ The timeline's model tests run on PostgreSQL 17.11 and 18.1.
 
 ### 040 amendment — Conversations data (phase 2a)
 
-Status: proposed with the phase 2a pull request, 2026-11-23. What giving the
+Status: accepted with pull request #52, proposed 2026-11-23. What giving the
 timeline its Apple Messages data had to decide that the plan left open. It adds
 tables only: no route reads them yet, and the pages come in a later slice.
 *(conservative)* marks the choices that touched privacy, correctness or cost.
-The tables are listed in the README (*The timeline package*).
+The tables are listed in
+[Analyses](analyses.md#the-timeline-package).
 
 **A third input, `messages`.** The `timeline` package reads an `apple_messages`
 connection as the optional role `messages`. Any non-empty subset of `screen`,

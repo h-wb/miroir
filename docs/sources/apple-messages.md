@@ -1,16 +1,31 @@
+---
+area: "[[Homelab]]"
+categories:
+  - "[[Resources]]"
+reviewed: 2026-11-24
+summary: What the collector reads from Apple Messages on the Mac, what it sends, masks or never sends, and how Miroir merges messages, contacts and attachments.
+topics:
+  - "[[Messages]]"
+  - "[[Device collector]]"
+  - "[[Warehouse]]"
+created: 2026-11-21T11:39
+---
+
 # Apple Messages
 
 Message history (iMessage, SMS and RCS), collected on the Mac by the Miroir
 collector (decision 038).
 
-- **Status**: collector source and connector built; not deployed
+- **Integration**: `apple_messages`, sent by the collector, with attachments
+  as media. The connections configured today are listed in the interface and by
+  `pipelines-miroir connections`.
 - **Code**: connector [`src/integrations/apple_messages/`](../../src/integrations/apple_messages/),
   source [`collector/miroir_collector/sources/apple_messages.py`](../../collector/miroir_collector/sources/apple_messages.py)
-- **dbt and dashboards**: the `messages` analysis package (decision 041,
-  [its tables](../miroir/README.md#the-messages-package)), without text; no
-  dashboards yet. The `timeline` package's `messages` input (decision 040,
-  phase 2a, [its tables](../miroir/README.md#the-timeline-package)) holds the
-  text, for the timeline's conversation view and message search
+- **Packages**: `messages` (decision 041,
+  [its tables](../miroir/analyses.md#the-messages-package)), without text; the
+  `timeline` package's `messages` input (decision 040,
+  [its tables](../miroir/analyses.md#the-timeline-package)) holds the text, for
+  the timeline's conversation view and message search
 
 ## Where the data comes from
 
@@ -182,15 +197,15 @@ What it relies on here:
   chat's people are in `chat_handles`.
 - A message's attachments have no order in what is sent; the timeline orders them
   by `created_at`, then `transfer_name`, then guid.
-- `media_objects`, written by the derive worker once attachments are derived,
-  joins on `media_key` with kind `attachments`. Until then every attachment's
-  file status is unknown.
+- `media_objects`, written by the derive worker, joins on `media_key` with kind
+  `attachments`. Attachments are not derived today (HOMEL-6), so every
+  attachment's file status is unknown.
 - Builds add indexes to these raw tables when the build's role owns them: load
   ID, `guid`, `chat_guid`, `message_guid`, `attachment_guid`, `media_key` and the
   reaction's target (`associated_message_guid` without its `p:N/` or `bp:`
   prefix).
 
-## Not covered yet
+## What it does not cover
 
 Rich formatting, edit history, live events, reading backups directly and old
 exports are not covered. Edits and unsends are sent again, but earlier

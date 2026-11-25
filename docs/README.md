@@ -1,120 +1,96 @@
-# Pipelines documentation
+---
+area: "[[Homelab]]"
+categories:
+  - "[[Resources]]"
+reviewed: 2026-11-24
+summary: The index of this repo's pages and of its connectors, with what each reads, its collector source, tables and packages, and how secrets reach a checkout.
+topics:
+  - "[[Warehouse]]"
+  - "[[Device collector]]"
+created: 2026-09-24T22:01
+---
 
-Personal data warehouse: every service I use, mirrored into one Postgres so it
-outlives the service's own retention and can be joined across sources.
+# Documentation
 
-Miroir development: [implementation guide and decision log](miroir/README.md).
-Roadmap: [Miroir implementation plan](product-plan.md).
+Miroir keeps every source I use in one Postgres, so it outlives each service's
+own retention and can be joined across sources. Why, and how it fits with the
+other systems: the handbook's
+[Warehouse](https://github.com/h-wb/handbook/blob/main/Systems/Warehouse.md) and
+[Device collector](https://github.com/h-wb/handbook/blob/main/Systems/Device%20collector.md).
+What is deployed and how to operate it:
+[home-ops](https://github.com/h-wb/home-ops/blob/main/kubernetes/apps/main/automation/miroir/README.md).
 
-```
- source service ──(API / export / file drop)──▶ dlt source ──▶ Postgres  <source>_data   (raw)
-                                                                   │
-                                                dbt (each linked analysis, after each load)
-                                                                   ▼
-                                                  miroir_<analysis>_… schemas ──▶ Metabase
-```
+## Pages
 
-- **Extract raw, transform in dbt.** dlt sources yield records as the service
-  returns them (dlt flattens nested JSON into columns / child tables). Anything
-  that interprets the data (who is "me", bots, units, time zones, dedup across
-  sources) lives in `dbt/`.
-- **Merge, don't append.** Every resource has a primary key and
-  `write_disposition="merge"`, so re-fetching a window is harmless. Incremental
-  cursors re-read a small overlap to catch late updates.
-- **The warehouse keeps what services forget.** Merges never delete, so rows a
-  service expires (GitHub's 90-day event feed, Firefox's history trimming) stay.
-
-Which part of the code does what, who may import whom, and the ways data gets
-in: [architecture](architecture.md).
-
-How the collector is versioned and released: [releases](releases.md).
+| Page | What it holds |
+| --- | --- |
+| [Miroir](miroir/README.md) | What it is, the words, the rules, the commands, development; the reference pages beside it |
+| [Flows](miroir/flows.md) | How data moves in and out, one diagram per flow |
+| [Architecture](architecture.md) | Which part of the code does what, who may import whom, where a new thing goes |
+| [Decisions](miroir/decisions.md) | Why it is built this way, numbered |
+| [Writing an integration](miroir/integrations.md) | How a connector is written and tested |
+| [Observability](observability.md) | How Miroir tells a quiet source from a broken one; metrics and alert rules |
+| [Operations](operations.md) | Adding a device source or an analysis, commands from a checkout, symptoms and failures seen |
+| [Releases](releases.md) | How the collector is versioned and released |
+| [The collector](../collector/README.md) | Install, configure, run and test `miroir-collector` |
+| [Sources](sources/) | One page per source, below |
 
 ## Sources
 
-Since 2026-11-11 every source loads through a Miroir connection bound to its
-original raw schema (decision 021); the legacy per-source flows are retired.
+One row per connector in `src/integrations/registry.py`; a collector source is a
+module in `collector/miroir_collector/sources/`. Any number of connections can
+use a connector. The connections configured in an installation (their names,
+schedules, datasets and dashboards) are in its `miroir.json`, which the
+interface edits: read them there, or with `pipelines-miroir connections`.
 
-| Source | Data | Miroir connection, schedule (UTC) | Raw schema | dbt | Dashboards |
-|---|---|---|---|---|---|
-| [ListenBrainz](sources/listenbrainz.md) | every listen (Spotify, Plex, Last.fm history) | `listenbrainz`, daily 00:00 | `listenbrainz_data` | `music`, `crossovers` | Music (2), crossovers |
-| [GitHub](sources/github.md) | commits, PRs, issues, comments, releases, stars, events, contribution calendar | `github`, daily 01:00 | `github_data` | `github` | GitHub (30) |
-| [Apple Health](sources/apple-health.md) | metrics, workouts, state of mind, medications | `health`, on each export (receiving URL) | `apple_health_data` | `health`, `crossovers` | Health (24), crossovers |
-| [Bike Share Toronto](sources/bikeshare.md) | every rental | `bikeshare`, daily 00:00 | `bikeshare_data` | `biking`, `crossovers` | Biking (3), Rides (26) |
-| [Browser history](sources/browser-history.md) | Zen (Firefox) visits, time on page, typing | retired 2026-11-11, to be redone in Miroir (watched folder, or the collector's `zen_history` source, built 2026-11-20) | `browser_history_data` (dropped 2026-11-22) | `browser` | Browser (31) |
-| [ScreenMemory](sources/screenmemory.md) | screen text per screenshot, front app | built 2026-11-20, not deployed; sent by the Miroir collector | the connection's dataset | – | – |
-| [Apple Messages](sources/apple-messages.md) | iMessage, SMS and RCS rows | built, not deployed; sent by the Miroir collector | the connection's dataset | `messages` | – |
-| Dawarich | location history | in progress, not deployed | `dawarich_data` | – | – |
+| Source | Reads | Connector | Collector source | Raw tables | Packages |
+| --- | --- | --- | --- | --- | --- |
+| [ListenBrainz](sources/listenbrainz.md) | Every listen, from the API | [`listenbrainz`](../src/integrations/listenbrainz/) | | `listens` | `music`, `crossovers` |
+| [GitHub](sources/github.md) | Repos, commits, pull requests, issues, comments, releases, stars, events, contributions, from the API | [`github`](../src/integrations/github/) | | `repos`, `commits`, `pull_requests`, … | `github` |
+| [Bike Share](sources/bikeshare.md) | Every rental, from the mobile app's API | [`bikeshare`](../src/integrations/bikeshare/) | | `trips` | `biking`, `crossovers` |
+| [Apple Health](sources/apple-health.md) | Health Auto Export JSON files | [`apple_health`](../src/integrations/apple_health/) | | `metrics`, `workouts`, `state_of_mind`, `medications` | `health`, `crossovers` |
+| [Browser history](sources/browser-history.md) | Zen or Firefox history: collector batches or a Places snapshot | [`browser_history`](../src/integrations/browser_history/) | `zen_history` | `zen_*` | `browser`, `timeline` |
+| [ScreenMemory](sources/screenmemory.md) | Screen text, front app, screenshots as media | [`screenmemory`](../src/integrations/screenmemory/) | `screenmemory` | `frames`, `app_usage` | `timeline` |
+| [Apple Messages](sources/apple-messages.md) | Messages, chats, contacts, attachments as media | [`apple_messages`](../src/integrations/apple_messages/) | `apple_messages` | `messages`, `chats`, `handles`, `attachments`, … | `messages` |
 
-Crossover dashboards (collection "Crossovers"): Music & Heart (25), Rides (26),
-Late nights (27), Correlations (28), Year in review (29). Each Miroir load builds
-the analyses linked to its connection into their own `miroir_<analysis>_…`
-schemas, and the dashboards read those (since 2026-11-22, decision 042). The dbt
-column and the source pages name model groups (`music`, `crossovers`, …); an
-analysis builds each group into its own `miroir_<analysis>_…_<group>` schema.
+Each source's handbook page says what it is and why it is kept. No connector
+reads location history.
 
-## How a run works
+A source page covers: status, where the data comes from, extraction (resources,
+keys, cursors) or what the collector sends and withholds, tables, models and
+dashboards, credentials and settings, history, quirks.
 
-- **Miroir** connections run as Prefect flow runs on the `miroir-k8s` pool, each
-  in its own Kubernetes Job from the pinned image; their deployments come from
-  the Miroir configuration (see [Miroir](miroir/README.md)).
-- **Prefect**'s process worker (`local-pool`) runs flows from other repositories;
-  this repository no longer deploys to it (decision 042).
-- **Warehouse**: CNPG cluster `postgres-metabase` (automation namespace), database
-  `metabase`. Only reachable in-cluster; `kubectl port-forward` drops under bulk
-  loads, so one-off loads run on the worker (see [operations](operations.md)).
-- **File drops**: Miroir flow runs mount the NAS share `Documents/data` at
-  `/miroir/data`. The same folder is `Hugo/Documents/data` in Nextcloud, so
-  anything synced there from a laptop
-  (browser snapshots, exports) can feed a Miroir watched folder.
-- **Metabase** reads the warehouse as database id 2; dashboards are built with
-  the `mb` CLI (query-builder cards, date + group-by filters).
+### Adding a source
 
-## Secrets and config
+1. A connector package in `src/integrations/<name>/`, listed in `registry.py`:
+   [Writing an integration](miroir/integrations.md). A device-only source also
+   gets a collector source ([the collector](../collector/README.md#adding-a-source)).
+2. dbt: the raw tables in `dbt/models/staging/_sources.yml`, `stg_<source>__*`
+   views, models in `dbt/models/<group>/`, and a package in
+   `src/analyses/catalog.py`.
+3. A page in `sources/` and a row above, and the handbook's system page for it.
+4. In the installation: create the connection in the interface, then sync it once.
 
-- Every credential lives in the Proton Pass **`Automation General`** vault: source
-  tokens (`listenbrainz`, `bikeshare`, `github-pipelines`; the Miroir connections
-  hold their own copies in Miroir's encrypted store) and operator copies
-  (`prefect`, `postgres-metabase`), which mirror BWS/CNPG until operator tasks
-  read those sources directly. References map them to env vars in
-  [`fnox.toml`](../fnox.toml). The `miroir` installation item is still
-  unprovisioned; its metadata password and existing encryption key must be
-  supplied before infrastructure development/deployment tasks can use it.
-  Mise injects only the keys listed in each task's `secrets = [...]` grant, including warehouse and
-  Prefect credentials only where needed.
-  Run `mise run pass:login` first (macOS Keychain or Paseo's `PROTON_PASS_TOKEN`).
-  `mise secrets ls` lists names and grants without fetching values; ad-hoc
-  commands use `mise x --secrets KEY -- <command>`.
-- Shared non-secret config is in [`mise.toml`](../mise.toml); machine overrides
-  go in gitignored `mise.local.toml`. No repo mise environment is selected, so
-  the machine keeps its dotfiles layers (including pod/Paseo settings).
-- In-cluster hosts select the tracked [`fnox.cluster.toml`](../fnox.cluster.toml)
-  profile with the following in gitignored `mise.local.toml`. It changes only
-  `PREFECT_API_URL` to the internal Kubernetes service; other secrets still come
-  from Proton Pass. Without this selection, the default profile uses the vault URL.
-  Do not also set `PREFECT_API_URL` under mise `[env]`: it conflicts with the
-  task secret grant.
+## Secrets and local configuration
+
+- Every credential a task needs is a Proton Pass reference in the
+  `Automation General` vault, mapped to an environment variable in
+  [`fnox.toml`](../fnox.toml): source tokens, and operator copies of the
+  cluster's Prefect, warehouse and Miroir credentials, kept until tasks read
+  those sources directly. Connections hold their own credentials in Miroir's
+  encrypted store ([Configuration](miroir/configuration.md#credentials)).
+- `mise run pass:login` opens the repo's session (the macOS Keychain, or a pod's
+  `PROTON_PASS_TOKEN`); it extends the dotfiles' global `proton-login` task. Each
+  task gets only the keys its `secrets = [...]` grant lists.
+- Shared non-secret settings are in [`mise.toml`](../mise.toml); machine
+  overrides go in the gitignored `mise.local.toml`. The repo selects no mise
+  environment, so a machine keeps its own layers.
+- Inside the cluster, select the tracked [`fnox.cluster.toml`](../fnox.cluster.toml)
+  profile in `mise.local.toml`. It only points `PREFECT_API_URL` at the in-cluster
+  service; do not also set that variable under `[env]`, where it conflicts with
+  the task grant.
 
   ```toml
   [secrets.fnox]
   profile = "cluster"
   ```
-
-## Adding a source
-
-1. A connector package in `src/integrations/<name>/` (settings, credentials,
-   check, resources, inputs, dlt source: extract only, raw records, merge keys,
-   incremental cursor with an overlap), listed in `registry.py` (decision 021).
-2. dbt: raw tables in `dbt/models/staging/_sources.yml`, `stg_<source>__*` views,
-   marts in a `dbt/models/<topic>/` schema, and an analysis package in
-   `src/analyses/catalog.py`.
-3. Create the connection in the Miroir interface (credentials go to its
-   encrypted store), then sync it once.
-4. A page in `docs/sources/` from the template below, and a row in the table above.
-
-Source page template: status & schedule · where the data comes from (and any
-code outside this repo) · extraction (resources, keys, cursors) · tables → dbt →
-dashboards · secrets & config · backfills and history · quirks.
-
-See also: [operations runbook](operations.md), and
-[observability](observability.md): what Miroir knows about each connection, its
-Prometheus metrics and example alerts.
