@@ -4,6 +4,10 @@ The miroir owns desired state (connections, schedules); Prefect owns execution.
 This adapter only translates: deployments from configuration (plan/apply),
 requests into flow runs (submit), and flow run states back into attempts (observe).
 
+Each connection has its own deployment; derive runs (thumbnails, backfill walks)
+of every connection share one media deployment, so the work pool's template can
+give the bucket key to its Jobs alone (decision 033 amendment).
+
 It blocks, so callers run it off the event loop (the web routes that reach it are
 synchronous). On a loop Prefect's `to_deployment` and `run_deployment` would hand
 back coroutines instead of results.
@@ -25,8 +29,10 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 FLOW_NAME = "sync-connection"
-# Prefect queues overlapping runs of one connection.
+# Prefect queues overlapping runs of one connection, and derive runs of the miroir.
 CONCURRENCY_LIMIT = 1
+# Tags the media deployment, beside the miroir's own tags.
+MEDIA_TAG = "miroir:media"
 # The deployment attributes the miroir owns; a difference in any of them is drift.
 OWNED = (
     "parameters",
@@ -74,8 +80,8 @@ def _readable_errors(function: Callable[P, R]) -> Callable[P, R]:
 
 
 class DeploymentSpec(TypedDict):
-    """One connection's deployment, in Prefect's own names: exactly the keyword
-    arguments `Flow.to_deployment` takes (decision 029)."""
+    """One connection's deployment, or the media deployment, in Prefect's own
+    names: exactly the keyword arguments `Flow.to_deployment` takes (decision 029)."""
 
     name: str
     parameters: dict[str, Any]
@@ -89,6 +95,12 @@ class DeploymentSpec(TypedDict):
 
 def deployment_name(miroir_id: str, connection_id: str) -> str:
     return f"{miroir_id}-{connection_id}"
+
+
+def media_deployment_name(miroir_id: str) -> str:
+    """The miroir's media deployment. Identifiers cannot hold `-`, so no
+    connection's `<miroir>-<connection>` can be `<miroir>--media`."""
+    return f"{miroir_id}--media"
 
 
 def _owned(attributes: Any) -> dict[str, Any]:
@@ -118,9 +130,42 @@ class PrefectOrchestrator:
                 "No work pool configured: set deployment.work_pool in the configuration"
             )
         job_variables = dict(declared.job_variables or {})
+        # Merged over the others for the media deployment alone: in Prefect's
+        # database, so a reference the work pool's template resolves, never a key.
+        # Top-level keys replace; `image` is never the media deployment's own,
+        # so derive runs always run the connections' image.
+        media_job_variables = {
+            **job_variables,
+            **{
+                key: value
+                for key, value in (declared.media_job_variables or {}).items()
+                if key != "image"
+            },
+        }
         if declared.image:
             job_variables["image"] = declared.image
+        if "image" in job_variables:
+            media_job_variables["image"] = job_variables["image"]
+        tags = ["miroir", self._tag(miroir)]
         specs: dict[str, DeploymentSpec] = {}
+        # Only while some connection has a kind the worker makes thumbnails of:
+        # without one, no derive run is ever requested.
+        if any(
+            kind.thumbnails
+            for connection in miroir.connections
+            for kind in connection.integration.media
+        ):
+            media = media_deployment_name(miroir.id)
+            specs[media] = {
+                "name": media,
+                # Every run states its connection (submit, schedule_build).
+                "parameters": {"config_path": self.config_path},
+                "schedules": [],
+                "work_pool_name": declared.work_pool,
+                "job_variables": media_job_variables,
+                "concurrency_limit": CONCURRENCY_LIMIT,
+                "tags": [*tags, MEDIA_TAG],
+            }
         for connection in miroir.connections:
             schedule = connection.config.schedule
             name = deployment_name(miroir.id, connection.config.id)
@@ -138,7 +183,7 @@ class PrefectOrchestrator:
                 "work_pool_name": declared.work_pool,
                 "job_variables": dict(job_variables),
                 "concurrency_limit": CONCURRENCY_LIMIT,
-                "tags": ["miroir", self._tag(miroir)],
+                "tags": list(tags),
             }
         return specs
 
@@ -185,7 +230,8 @@ class PrefectOrchestrator:
         changes: list[dict[str, Any]] = []
         for name, spec in sorted(desired.items()):
             want = _owned(spec)
-            connection_id = spec["parameters"]["connection_id"]
+            # None for the media deployment, which serves every connection.
+            connection_id = spec["parameters"].get("connection_id")
             if name not in actual:
                 changes.append(
                     {
@@ -253,7 +299,8 @@ class PrefectOrchestrator:
 
     @_readable_errors
     def submit(self, operation_id: str) -> None:
-        """Start the connection's deployment for a requested operation.
+        """Start a deployment for a requested operation: the media deployment
+        for a derive run, the connection's own for anything else.
 
         The operation ID is the idempotency key: resubmitting after a timeout or
         crash returns the existing flow run instead of starting another. An
@@ -266,7 +313,12 @@ class PrefectOrchestrator:
 
         operation = self.store.get_operation(operation_id)
         name = "/".join(
-            (FLOW_NAME, deployment_name(operation.miroir_id, operation.connection_id))
+            (
+                FLOW_NAME,
+                media_deployment_name(operation.miroir_id)
+                if operation.kind == "derive"
+                else deployment_name(operation.miroir_id, operation.connection_id),
+            )
         )
         not_before = json.loads(operation.options or "{}").get("not_before")
         try:

@@ -57,7 +57,7 @@ the file changed meanwhile.
 | `PUT /api/connections/{id}/resources` | `{"resources": [...]}`; null selects all; keeps data and cursors |
 | `PUT /api/connections/{id}/credentials/{name}` | Replace a credential: `{"value": "..."}` (204) |
 | `POST /api/connections/{id}/check`, `DELETE /api/connections/{id}` | Test or remove a connection |
-| `POST /api/connections/{id}/prepare` | Prepare this connection's deployment only |
+| `POST /api/connections/{id}/prepare` | Prepare this connection's deployment and the Miroir's media deployment |
 | `POST /api/connections/{id}/sync` | Request a sync (202, operation ID) |
 | `POST /api/connections/{id}/artifacts?import=true&name=…&format=…&<option>=…` | Store the raw body as an artifact, optionally import it |
 | `POST /api/connections/{id}/artifacts/{artifact}/import?replay=false` | Request an import (202) |

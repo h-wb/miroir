@@ -52,6 +52,7 @@ amendment under it. Older entries say "workspace" (renamed Miroir by 014) and
 | [031](#031--the-agent-is-its-own-package-part-boundaries-are-tested) | The agent is its own package; part boundaries are tested | Accepted |
 | [032](#032--the-receiving-url-takes-a-format-browser-history-gains-incremental-batches) | The receiving URL takes a format; browser history gains incremental batches | Accepted |
 | [033](#033--media-files-that-rows-point-at-live-in-object-storage) | Media: files that rows point at live in object storage | Accepted; refined by 040 |
+| | [033 amendment — Derive runs on a deployment of their own](#033-amendment--derive-runs-on-a-deployment-of-their-own) | Accepted |
 | [034](#034--a-start-date-and-re-sending-a-range) | A start date, and re-sending a range | Accepted |
 | [035](#035--the-agent-takes-two-libraries-and-its-parts-get-tested-boundaries) | The agent takes two libraries, and its parts get tested boundaries | Accepted |
 | [036](#036--a-secret-scanner-beside-the-agents-own-masking-rules) | A secret scanner beside the agent's own masking rules | Accepted |
@@ -1305,6 +1306,62 @@ Consequences:
 
 Open: an attachments collector, the timeline models and their dashboard, and the
 deployment (bucket, key, configuration).
+
+### 033 amendment — Derive runs on a deployment of their own
+
+Status: accepted, 2026-11-25, with pull request #60. Step 2 of
+[the package split](../decisions/2026-11-25-package-split.md). Revises *The
+worker holds the bucket key* in the 040 amendment for phase 1b: the key no
+longer reaches every connector's runs.
+
+Only derive runs (thumbnails, backfill walks) read or write the bucket from a
+flow run; syncs, imports and builds never do. Given to the shared flow-run Job
+template, the key reached all of them, so any connector's run could read and
+write the whole bucket.
+
+**One media deployment per Miroir.** While some connection has a media kind with
+thumbnails, the `deployment` section also gives the Miroir a deployment
+`sync-connection/<miroir>--media`: the same flow, image and work pool,
+concurrency limit 1, no schedule, the Miroir's tags plus `miroir:media`.
+Identifiers cannot hold `-`, so no `<miroir>-<connection>` can take its name.
+`submit` sends an operation of kind `derive` there and every other kind to the
+connection's own deployment. A derive run states its connection as a parameter,
+as every run does, so one deployment serves them all, and the next batch of a
+long run is scheduled on the deployment the run is on. `plan` and `apply` own it
+like the others: created, updated on drift, removed when no kind has thumbnails.
+Preparing a connection also prepares it, since that connection's derive runs
+need it.
+
+**The key reaches the Job through the work pool's template, never as a value in
+Prefect.** Prefect keeps job variables in its database. The section's optional
+`media_job_variables` is merged over `job_variables` for the media deployment
+alone and carries only a reference (on this installation, a Secret for the
+template's `env_from`); the template gives it to those Jobs. Without it the
+media deployment has the others' job variables.
+
+**Loads and derives take turns by lock, not by Prefect.** Prefect's per-deployment
+limit no longer keeps a derive and a load of one connection apart: the advisory
+locks do, as they already did. A derive run holds `<pipeline>-media` for the
+whole run, so two derives of one connection never overlap, and its writer takes
+the connection's own lock around the load into its dataset, waiting up to the
+flow's lock wait. Both may therefore be running Jobs at once, one waiting inside
+its pod. Derives of different connections now queue behind each other in Prefect.
+
+Considered and left out:
+
+- *A media deployment per connection.* It would keep Prefect's turn-taking, but
+  doubles the deployments for no gain the locks do not already give.
+- *A second work pool with its own template.* Stronger isolation, at the cost of a
+  second pool, template and worker.
+- *Reading the key only in derive runs.* The Job would still hold it.
+
+Consequences:
+
+- Derive runs already scheduled on a connection's deployment when this shipped
+  still run there; they find the key only while the shared template still gives
+  it.
+- No metadata schema change, no change to the flow's path or the connections'
+  deployment names.
 
 ## 034 — A start date, and re-sending a range
 

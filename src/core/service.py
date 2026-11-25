@@ -870,7 +870,9 @@ class MiroirService:
         self._write_config(raw, expected_revision)
 
     def prepare_connection(self, connection_id: str) -> None:
-        """Make this connection executable without applying other connections' drift."""
+        """Make this connection executable without applying other connections'
+        drift. The media deployment, its derive runs' (no connection_id), counts
+        as this connection's."""
         miroir = self.miroir()
         self._connection(miroir, connection_id)
         if self.orchestrator is None:
@@ -879,7 +881,7 @@ class MiroirService:
             changes = [
                 change
                 for change in self.orchestrator.plan(miroir)
-                if change.get("connection_id") == connection_id
+                if change.get("connection_id") in (connection_id, None)
                 and change["action"] in ("create", "update")
             ]
             if changes:
