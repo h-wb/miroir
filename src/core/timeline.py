@@ -14,7 +14,7 @@ import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, cast
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
@@ -181,11 +181,16 @@ def status(
 
 PACKAGE = "timeline"
 SCREEN_ROLE = "screen"
+MESSAGES_ROLE = "messages"
 SCREENSHOTS = "screenshots"
+ATTACHMENTS = "attachments"
 NO_ANALYSIS = (
     "The timeline is not configured: no analysis of the timeline package is set up."
 )
 NOT_BUILT = "The timeline has not been built yet, or its reader role cannot read it."
+NO_MESSAGES = (
+    "The timeline reads no Apple Messages: its analysis has no messages input."
+)
 TIMED_OUT = (
     f"The timeline query took longer than {STATEMENT_TIMEOUT_MS // 1000} seconds; "
     "narrow it (a shorter range, more words) and try again."
@@ -210,10 +215,17 @@ class TimelineSource:
     timezone: str
     # Further timeline analyses, not shown: only the first one is.
     ignored: tuple[str, ...] = ()
+    # The connection linked as its `messages` input, if any.
+    messages: str | None = None
 
     @property
     def zone(self) -> ZoneInfo:
         return ZoneInfo(self.timezone)
+
+    @property
+    def sources(self) -> tuple[str, ...]:
+        """The sources of days and events: Messages only when it is linked."""
+        return SOURCES + ((MESSAGES,) if self.messages else ())
 
     def table(self, name: str) -> str:
         return f'"{self.schema}".{name}'
@@ -247,7 +259,14 @@ def _source(analysis: ResolvedAnalysis, ignored: tuple[str, ...]) -> TimelineSou
     schema = analysis_plan(analysis).relations[0].split(".")[0]
     if not _SCHEMA.fullmatch(schema):  # derived from validated IDs; kept honest
         raise TimelineUnavailable("The timeline analysis has an unexpected schema")
-    return TimelineSource(analysis.id, schema, analysis.config.timezone, ignored)
+    messages = analysis.inputs.get(MESSAGES_ROLE)
+    return TimelineSource(
+        analysis.id,
+        schema,
+        analysis.config.timezone,
+        ignored,
+        messages.config.id if messages else None,
+    )
 
 
 def media_withheld(
@@ -328,7 +347,16 @@ _MEDIA_STATES = {
     MEDIA_NO_THUMBNAILS: "stored",
     MEDIA_WITHHELD: "withheld",
 }
+# Screen and browser are always sources; Messages when the analysis links it.
 SOURCES = ("screen", "browser")
+MESSAGES = "messages"
+ALL_SOURCES = (*SOURCES, MESSAGES)
+MAX_CONVERSATIONS = 200
+MAX_MESSAGES = 200
+PREVIEW_CHARACTERS = 200
+# A conversation's opaque id (timeline_conversation_id): checked before any query.
+_CONVERSATION_ID = re.compile(r"[0-9a-f]{32}")
+MAX_GUID = 255
 # Text search covers the first characters of a text, as the models index it
 # (timeline_search_vector in dbt/macros/timeline.sql, the same number).
 SEARCH_CHARACTERS = 100_000
@@ -484,8 +512,12 @@ class TimelineReader:
             log.warning("Timeline query failed: %s", type(error).__name__)
             raise TimelineUnavailable(UNAVAILABLE) from None
 
-    def days(self, start: date, end: date) -> dict[str, Any]:
-        """Counts per local day and source, from `start` to `end` inclusive."""
+    def days(
+        self, start: date, end: date, sources: tuple[str, ...] = SOURCES
+    ) -> dict[str, Any]:
+        """Counts per local day and source, from `start` to `end` inclusive. The
+        pages ask for the screen and the browser only; the API for every source
+        of the analysis (`TimelineSource.sources`)."""
         if end < start or (end - start).days >= MAX_DAYS_RANGE:
             raise OperationError(
                 f"The range must run forward and span at most {MAX_DAYS_RANGE} days"
@@ -497,13 +529,13 @@ class TimelineReader:
                     " WHERE day >= :start AND day <= :end AND timezone = :tz"
                     " AND source = ANY(:sources) ORDER BY day, source"
                 ),
-                # Only the sources the server shows: the package counts others
-                # (messages) before any page does.
+                # Only the sources asked for: the package counts messages even
+                # where no page shows them.
                 {
                     "start": start,
                     "end": end,
                     "tz": self.source.timezone,
-                    "sources": list(SOURCES),
+                    "sources": list(sources),
                 },
             ).all()
         days: dict[str, dict[str, Any]] = {}
@@ -642,8 +674,8 @@ class TimelineReader:
         `end` includes that day."""
         if not 1 <= limit <= MAX_EVENTS:
             raise OperationError(f"The limit must be between 1 and {MAX_EVENTS}")
-        if not sources or set(sources) - set(SOURCES):
-            raise OperationError(f"Sources are {', '.join(SOURCES)}")
+        if not sources or set(sources) - set(self.source.sources):
+            raise OperationError(f"Sources are {', '.join(self.source.sources)}")
         events = self.source.table("events")
         parameters: dict[str, Any] = {"limit": limit + 1, "max_text": MAX_EVENT_TEXT}
         keyset = ""
@@ -656,14 +688,17 @@ class TimelineReader:
         parts = []
         for number, source in enumerate(sources):
             parameters[f"source{number}"] = source
-            parts.append(
-                "(SELECT source, event_id, started_at, ended_at, kind,"
-                " left(title, :max_text), left(body, :max_text), group_key, payload,"
-                " media_kind, media_key, media_status, thumbnail_w360,"
-                f" thumbnail_w1280, media_withheld, connection FROM {events}"
-                f" WHERE source = :source{number}"
+            part = (
+                "SELECT source, event_id, started_at, ended_at, kind,"
+                " left(title, :max_text) AS title, left(body, :max_text) AS body,"
+                " group_key, payload, media_kind, media_key, media_status,"
+                " thumbnail_w360, thumbnail_w1280, media_withheld, connection"
+                f" FROM {events} WHERE source = :source{number}"
                 f" AND started_at >= :lo AND started_at < :hi{keyset}"
-                " ORDER BY started_at, event_id LIMIT :limit)"
+                " ORDER BY started_at, event_id LIMIT :limit"
+            )
+            parts.append(
+                f"({self._named_messages(part) if source == MESSAGES else part})"
             )
         sql = (
             "SELECT * FROM (" + " UNION ALL ".join(parts) + ") merged"
@@ -711,6 +746,26 @@ class TimelineReader:
             "events": answer,
             "next": _cursor([last[2].isoformat(), last[1]]) if more and last else None,
         }
+
+    def _named_messages(self, page: str) -> str:
+        """A page of message events with names read now: the conversation's
+        `display_name` and the sender's, never the handle the stored payload
+        holds. Names change; the events table does not hold them (phase 2a)."""
+        return (
+            "SELECT e.source, e.event_id, e.started_at, e.ended_at, e.kind, e.title,"
+            " e.body, e.group_key, (e.payload - 'sender') || jsonb_build_object("
+            f"'display_name', c.display_name, 'sender', {_SENDER}) AS payload,"
+            " e.media_kind, e.media_key, e.media_status, e.thumbnail_w360,"
+            " e.thumbnail_w1280, e.media_withheld, e.connection"
+            f" FROM ({page}) e"
+            f" LEFT JOIN {self.source.table('messages')} m"
+            " ON m.guid = e.payload->>'guid'"
+            f" LEFT JOIN {self.source.table('conversations')} c"
+            " ON c.conversation_id = e.group_key"
+            f" LEFT JOIN {self.source.table('people')} p"
+            " ON p.handle = m.sender_handle"
+            " ORDER BY e.started_at, e.event_id"
+        )
 
     def search_screen(
         self,
@@ -861,6 +916,444 @@ class TimelineReader:
             "visits": visits,
             "next": _cursor([last[1].isoformat(), last[0]]) if more and last else None,
         }
+
+    # ---- Messages (decision 040, phase 2c) -----------------------------------
+
+    def _messages_tables(self) -> tuple[str, str, str]:
+        if not self.source.messages:
+            raise TimelineUnavailable(NO_MESSAGES)
+        return (
+            self.source.table("conversations"),
+            self.source.table("messages"),
+            self.source.table("people"),
+        )
+
+    def _preview_sql(self, messages: str) -> str:
+        """The last dated message of conversation `c`: one probe of the
+        (conversation_id, sent_at, guid) index, backwards."""
+        return (
+            "LEFT JOIN LATERAL (SELECT nullif(left(m.text, :preview), '') AS text,"
+            f" m.is_from_me FROM {messages} m"
+            " WHERE m.conversation_id = c.conversation_id AND m.sent_at IS NOT NULL"
+            " AND NOT m.deleted ORDER BY m.sent_at DESC, m.guid DESC LIMIT 1) l ON true"
+        )
+
+    def conversations(
+        self, limit: int, after: tuple[datetime | None, str] | None
+    ) -> dict[str, Any]:
+        """Conversations with at least one message, newest activity first (those
+        whose messages are all undated last), paged by keyset on
+        (last_message_at, conversation_id)."""
+        if not 1 <= limit <= MAX_CONVERSATIONS:
+            raise OperationError(f"The limit must be between 1 and {MAX_CONVERSATIONS}")
+        conversations, messages, _ = self._messages_tables()
+        parameters: dict[str, Any] = {"limit": limit + 1, "preview": PREVIEW_CHARACTERS}
+        keyset = ""
+        if after is not None:
+            parameters["after_id"] = after[1]
+            if after[0] is None:
+                keyset = " AND last_message_at IS NULL AND conversation_id > :after_id"
+            else:
+                parameters["after_at"] = after[0]
+                keyset = (
+                    " AND (last_message_at < :after_at OR last_message_at IS NULL"
+                    " OR (last_message_at = :after_at AND conversation_id > :after_id))"
+                )
+        order = "last_message_at DESC NULLS LAST, conversation_id"
+        sql = (
+            "SELECT c.conversation_id, c.display_name, c.is_group,"
+            " c.participant_count, c.last_message_at, c.message_count, l.text,"
+            " l.is_from_me FROM (SELECT * FROM"
+            f" {conversations} WHERE message_count > 0{keyset}"
+            f" ORDER BY {order} LIMIT :limit) c {self._preview_sql(messages)}"
+            f" ORDER BY c.{order.replace(', ', ', c.')}"
+        )
+        with self._session() as db:
+            rows = db.execute(sa.text(sql), parameters).all()
+        more = len(rows) > limit
+        rows = rows[:limit]
+        zone = self.source.zone
+        listed = [_conversation(row[:8], zone) for row in rows]
+        last = rows[-1] if rows else None
+        return {
+            **self.source.describe(),
+            "conversations": listed,
+            "next": _cursor([last[4].isoformat() if last[4] else "", last[0]])
+            if more and last
+            else None,
+        }
+
+    def conversation(self, conversation_id: str) -> dict[str, Any] | None:
+        """One conversation, its people and how many of its messages are undated;
+        None if unknown."""
+        conversations, messages, people = self._messages_tables()
+        sql = (
+            "SELECT c.conversation_id, c.display_name, c.is_group,"
+            " c.participant_count, c.last_message_at, c.message_count, l.text,"
+            " l.is_from_me, c.title, c.first_message_at,"
+            " (SELECT count(*) FROM"
+            f" {messages} u WHERE u.conversation_id = c.conversation_id"
+            " AND u.sent_at IS NULL AND NOT u.deleted),"
+            " (SELECT coalesce(jsonb_agg(jsonb_build_object('handle', h.handle,"
+            " 'display_name', coalesce(n.display_name, h.handle))"
+            " ORDER BY coalesce(n.display_name, h.handle), h.handle), '[]')"
+            f" FROM unnest(c.participants) h (handle) LEFT JOIN {people} n"
+            " ON n.handle = h.handle)"
+            f" FROM {conversations} c {self._preview_sql(messages)}"
+            " WHERE c.conversation_id = :id"
+        )
+        with self._session() as db:
+            row = db.execute(
+                sa.text(sql), {"id": conversation_id, "preview": PREVIEW_CHARACTERS}
+            ).one_or_none()
+        if row is None:
+            return None
+        zone = self.source.zone
+        title, first, undated, participants = row[8:]
+        return {
+            **self.source.describe(),
+            **_conversation(row[:8], zone),
+            "title": title,
+            "first_message_at": _iso(first, zone) if first else None,
+            "participants": participants,
+            "undated": int(undated),
+        }
+
+    def conversation_messages(
+        self,
+        conversation_id: str,
+        limit: int,
+        *,
+        before: tuple[datetime, str] | None = None,
+        after: tuple[datetime, str] | None = None,
+        around: str | None = None,
+        at: datetime | date | None = None,
+    ) -> dict[str, Any] | None:
+        """A page of a conversation's dated messages, oldest first, by keyset on
+        (sent_at, guid): the latest page, the page before or after a cursor, the
+        page with a message in its middle, or the page starting at a time. None
+        if the conversation (or `around`'s message) is unknown. `before` and
+        `after` are the neighbouring pages' cursors, null at either end."""
+        if not 1 <= limit <= MAX_MESSAGES:
+            raise OperationError(f"The limit must be between 1 and {MAX_MESSAGES}")
+        if sum(value is not None for value in (before, after, around, at)) > 1:
+            raise OperationError("Give at most one of before, after, around and at")
+        conversations, messages, people = self._messages_tables()
+        page = _MessagePage(messages, people, conversation_id)
+        with self._session() as db:
+            known = db.execute(
+                sa.text(f"SELECT 1 FROM {conversations} WHERE conversation_id = :id"),
+                {"id": conversation_id},
+            ).first()
+            if known is None:
+                return None
+            # Where an empty page sits, for its neighbours' cursors.
+            empty_before: tuple[datetime, str] | None = None
+            empty_after: tuple[datetime, str] | None = None
+            if around is not None:
+                target = db.execute(
+                    sa.text(
+                        f"SELECT sent_at FROM {messages} WHERE guid = :guid"
+                        " AND conversation_id = :id AND sent_at IS NOT NULL"
+                        " AND NOT deleted"
+                    ),
+                    {"guid": around, "id": conversation_id},
+                ).first()
+                if target is None:
+                    return None
+                key = (target[0], around)
+                older = page.rows(db, "<", key, limit - 1)
+                newer = page.rows(db, ">=", key, limit)
+                ahead = min(len(older), (limit - 1) // 2)
+                behind = min(len(newer), limit - ahead)
+                ahead = min(len(older), limit - behind)
+                rows = older[:ahead][::-1] + newer[:behind]
+            elif at is not None:
+                start = self._instant(db, at, end=False)
+                rows = page.rows(db, ">=", (start, ""), limit)
+                empty_before = (start, "")
+            elif after is not None:
+                rows = page.rows(db, ">", after, limit)
+                # Nothing after it: the page before holds everything up to it.
+                empty_before = (after[0] + timedelta(microseconds=1), "")
+            else:
+                rows = page.rows(db, "<", before, limit)[::-1]
+                if before is not None:
+                    # Nothing before it: the page after starts at it.
+                    empty_after = (before[0], "")
+            if rows:
+                first, last = _message_key(rows[0]), _message_key(rows[-1])
+                older_key = first if page.rows(db, "<", first, 1) else None
+                newer_key = last if page.rows(db, ">", last, 1) else None
+            else:
+                older_key = (
+                    empty_before
+                    if empty_before and page.rows(db, "<", empty_before, 1)
+                    else None
+                )
+                newer_key = (
+                    empty_after
+                    if empty_after and page.rows(db, ">", empty_after, 1)
+                    else None
+                )
+            names = _people_names(db, people, rows)
+        zone = self.source.zone
+        return {
+            **self.source.describe(),
+            "conversation_id": conversation_id,
+            "messages": [_message(row, names, zone) for row in rows],
+            "before": _message_cursor(older_key),
+            "after": _message_cursor(newer_key),
+        }
+
+    def search_messages(
+        self,
+        query: str,
+        conversation_id: str | None,
+        start: date | None,
+        end: date | None,
+        limit: int,
+        before: tuple[datetime, str] | None,
+    ) -> dict[str, Any]:
+        """Dated messages whose text matches, newest first. The match is read
+        from the text index alone (`OFFSET 0` keeps the other conditions out of
+        that scan): with them, Postgres may walk a conversation's messages in
+        time order and compute every text's vector instead."""
+        words = _query(query, limit)
+        conversations, messages, people = self._messages_tables()
+        parameters: dict[str, Any] = {
+            "q": words,
+            "tz": self.source.timezone,
+            "limit": limit + 1,
+            "headline": _HEADLINE,
+            "marks": _START + _STOP,
+        }
+        conditions = ["NOT m.deleted", "m.sent_at IS NOT NULL"]
+        conditions += _range_conditions("m.sent_at", start, end, parameters)
+        if conversation_id is not None:
+            conditions.append("m.conversation_id = :conversation")
+            parameters["conversation"] = conversation_id
+        if before is not None:
+            conditions.append(
+                "m.sent_at <= :before_at AND (m.sent_at, m.guid) < (:before_at, :before_id)"
+            )
+            parameters.update(before_at=before[0], before_id=before[1])
+        sql = (
+            "WITH q AS (SELECT websearch_to_tsquery('simple', :q) AS query),"
+            " matched AS (SELECT t.guid, t.conversation_id, t.sent_at, t.deleted"
+            f" FROM {messages} t, q WHERE {search_vector('t.text')} @@ q.query"
+            " OFFSET 0),"
+            " hits AS (SELECT m.guid, m.conversation_id, m.sent_at FROM matched m"
+            f" WHERE {' AND '.join(conditions)}"
+            " ORDER BY m.sent_at DESC, m.guid DESC LIMIT :limit)"
+            " SELECT h.guid, h.conversation_id, c.display_name, h.sent_at, m.day,"
+            f" m.is_from_me, {_SENDER}, ts_headline('simple',"
+            f" translate(left(m.text, {SEARCH_CHARACTERS}), :marks, ''),"
+            " q.query, :headline)"
+            f" FROM hits h JOIN {messages} m ON m.guid = h.guid CROSS JOIN q"
+            f" LEFT JOIN {conversations} c ON c.conversation_id = h.conversation_id"
+            f" LEFT JOIN {people} p ON p.handle = m.sender_handle"
+            " ORDER BY h.sent_at DESC, h.guid DESC"
+        )
+        with self._session() as db:
+            _searchable(db, words)
+            rows = db.execute(sa.text(sql), parameters).all()
+        more = len(rows) > limit
+        rows = rows[:limit]
+        zone = self.source.zone
+        found = [
+            {
+                "guid": guid,
+                "conversation_id": conversation,
+                "display_name": name,
+                "sent_at": _iso(sent, zone),
+                "day": day.isoformat() if day else None,
+                "from_me": bool(from_me),
+                "sender": sender,
+                "snippet": snippet(marked),
+            }
+            for guid, conversation, name, sent, day, from_me, sender, marked in rows
+        ]
+        last = rows[-1] if rows else None
+        return {
+            **self.source.describe(),
+            "kind": "messages",
+            "messages": found,
+            "next": _cursor([last[3].isoformat(), last[0]]) if more and last else None,
+        }
+
+
+class _MessagePage:
+    """One side of a conversation's dated messages from a key, along the
+    (conversation_id, sent_at, guid) index: older ones newest first, newer ones
+    oldest first."""
+
+    def __init__(self, messages: str, people: str, conversation_id: str) -> None:
+        self.messages = messages
+        self.people = people
+        self.conversation_id = conversation_id
+
+    def rows(
+        self,
+        db: Any,
+        side: str,
+        key: tuple[datetime, str] | None,
+        count: int,
+    ) -> list[Any]:
+        if count < 1:
+            return []
+        parameters: dict[str, Any] = {
+            "id": self.conversation_id,
+            "count": count,
+            "max_text": MAX_TEXT,
+        }
+        keyset = " AND m.sent_at IS NOT NULL"
+        if key is not None:
+            # The plain bound keeps the index range narrow; the row comparison
+            # orders ties on sent_at by guid.
+            bound = {"<": "<=", ">": ">=", ">=": ">="}[side]
+            keyset = (
+                f" AND m.sent_at {bound} :key_at"
+                f" AND (m.sent_at, m.guid) {side} (:key_at, :key_guid)"
+            )
+            parameters.update(key_at=key[0], key_guid=key[1])
+        direction = "DESC" if side == "<" else "ASC"
+        sql = (
+            "SELECT m.guid, m.sent_at, m.day, m.is_from_me, m.sender_handle,"
+            f" {_SENDER}, m.service, left(m.text, :max_text),"
+            " length(m.text) > :max_text, m.text_unreadable, m.is_edited,"
+            " m.edited_at, m.is_unsent, m.is_audio, m.reply_to_guid, m.attachments,"
+            " m.reactions, m.connection FROM (SELECT * FROM"
+            f" {self.messages} m WHERE m.conversation_id = :id AND NOT m.deleted"
+            f"{keyset} ORDER BY m.sent_at {direction}, m.guid {direction}"
+            f" LIMIT :count) m LEFT JOIN {self.people} p"
+            f" ON p.handle = m.sender_handle"
+            f" ORDER BY m.sent_at {direction}, m.guid {direction}"
+        )
+        return list(db.execute(sa.text(sql), parameters).all())
+
+
+def valid_conversation_id(value: str) -> bool:
+    """Whether a value has a conversation id's shape: 32 lower-case hex digits."""
+    return bool(_CONVERSATION_ID.fullmatch(value))
+
+
+def _conversation(row: Any, zone: ZoneInfo) -> dict[str, Any]:
+    conversation_id, name, group, count, last, messages, text, from_me = row
+    return {
+        "conversation_id": conversation_id,
+        "display_name": name,
+        "is_group": bool(group),
+        "participant_count": int(count),
+        "last_message_at": _iso(last, zone) if last else None,
+        "message_count": int(messages),
+        "preview": text,
+        "preview_from_me": None if from_me is None else bool(from_me),
+    }
+
+
+def _message_key(row: Any) -> tuple[datetime, str]:
+    return (row[1], row[0])
+
+
+def _message_cursor(key: tuple[datetime, str] | None) -> str | None:
+    return _cursor([key[0].isoformat(), key[1]]) if key else None
+
+
+def _people_names(db: Any, people: str, rows: list[Any]) -> dict[str, str]:
+    """Display names of the people who reacted to these messages."""
+    handles = sorted(
+        {
+            reaction["sender"]
+            for row in rows
+            for reaction in row[16] or []
+            if reaction.get("sender")
+        }
+    )
+    if not handles:
+        return {}
+    found = db.execute(
+        sa.text(f"SELECT handle, display_name FROM {people} WHERE handle = ANY(:h)"),
+        {"h": handles},
+    ).all()
+    return {handle: name for handle, name in found}
+
+
+def _utc_text(value: str | None, zone: ZoneInfo) -> str | None:
+    """A time the models wrote as UTC text (timeline_utc_text), with its offset."""
+    if not value:
+        return None
+    return _iso(datetime.fromisoformat(value.replace("Z", "+00:00")), zone)
+
+
+def _message(row: Any, names: dict[str, str], zone: ZoneInfo) -> dict[str, Any]:
+    (guid, sent, day, from_me, handle, sender, service, text, cut) = row[:9]
+    (unreadable, edited, edited_at, unsent, audio, reply_to) = row[9:15]
+    attachments, reactions, connection = row[15:]
+    return {
+        "guid": guid,
+        "sent_at": _iso(sent, zone),
+        "day": day.isoformat() if day else None,
+        "from_me": bool(from_me),
+        "sender": None
+        if handle is None
+        else {"handle": handle, "display_name": sender},
+        "service": service,
+        "text": text,
+        "text_truncated": bool(cut),
+        "text_unreadable": bool(unreadable),
+        "edited": bool(edited),
+        "edited_at": _iso(edited_at, zone) if edited_at else None,
+        "unsent": bool(unsent),
+        "audio": bool(audio),
+        "reply_to": reply_to,
+        "attachments": [
+            {
+                "guid": item.get("guid"),
+                "kind": item.get("kind"),
+                "mime_type": item.get("mime_type"),
+                "bytes": item.get("bytes"),
+                "transfer_name": item.get("transfer_name"),
+                "media": _attachment_media(connection, item),
+            }
+            for item in attachments or []
+        ],
+        "reactions": [
+            {
+                "kind": item.get("kind"),
+                "from_me": bool(item.get("from_me")),
+                "sender": names.get(item["sender"], item["sender"])
+                if item.get("sender")
+                else None,
+                "part": item.get("part"),
+                "at": _utc_text(item.get("at"), zone),
+            }
+            for item in reactions or []
+        ],
+    }
+
+
+def _attachment_media(
+    connection: str | None, item: dict[str, Any]
+) -> dict[str, Any] | None:
+    """An attachment's file as a frame's media; null without a media key. Never
+    withheld: only screenshots are."""
+    key = item.get("media_key")
+    if not key:
+        return None
+    status = item.get("media_status")
+    code = media_code(
+        None, status, item.get("thumbnail_w360"), item.get("thumbnail_w1280")
+    )
+    return _media(connection, ATTACHMENTS, key, code, status)
+
+
+# A message's sender as shown: the address book's name, else the handle as that
+# message writes it (decision 041); null for mine. `m` a message, `p` its person.
+_SENDER = (
+    "CASE WHEN m.sender_handle IS NULL THEN NULL"
+    " ELSE coalesce(p.name, m.sender_written, p.display_name, m.sender_handle) END"
+)
 
 
 def _media(
