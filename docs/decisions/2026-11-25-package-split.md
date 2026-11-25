@@ -2,7 +2,7 @@
 area: "[[Homelab]]"
 categories:
   - "[[Decisions]]"
-summary: "Miroir is split into six parts inside one repo, one distribution and one image (kernel, connectors, analyses, media, control plane, viewer, plus a web shell), in eleven pull requests that each leave production working."
+summary: "Miroir is split into six parts inside one repo, one distribution and one image (kernel, connectors, analyses, media, control plane, viewer, plus a web shell), in eleven steps that each leave production working, beside per-source fixes to raw data."
 topics:
   - "[[Warehouse]]"
 created: 2026-11-25T22:04
@@ -95,7 +95,7 @@ flowchart TB
 | kernel (`src/kernel/`) | The shared vocabulary | `models.py` (StrictModel, Identifier, DatabaseIdentifier, SecretKey) and `errors.py` (OperationError, Unavailable, Timeout) | The standard library, pydantic | Any other part. Configuration stays out: it imports the connector registry (`src/core/config.py:24-25`) |
 | integrations (`src/integrations/`) | One source each | The connectors and the registry | kernel, `media.kinds` | Anything else |
 | analyses (`src/analyses/`, `dbt/`) | Packages and their models | The catalog, the dbt project, view declarations (`views.py`: views, lanes, plugin names, data only) | kernel | control, media, viewer, dlt |
-| media (`src/media/`) | Files that rows point at | `store.py`, `s3.py`, `names.py`, `links.py`, `uploads.py`, `queue.py` (`media_pending`, `media_backfills` and their repository), `derive.py`, `decoder.py` (was `thumbnails.py`), `decoder_checks.py`, `config.py` (MediaConfig), `kinds.py` (MediaKind), the `media_objects` writer, `MIROIR_MEDIA_*`. No routes | kernel | control, viewer, the connector registry, fastapi, prefect |
+| media (`src/media/`) | Files that rows point at | `store.py`, `s3.py`, `names.py`, `links.py`, `uploads.py`, `queue.py` (`media_pending`, `media_backfills` and their repository), `derive.py`, `decoder.py` (was `thumbnails.py`), `decoder_checks.py`, `config.py` (MediaConfig), `kinds.py` (MediaKind), `profiles.py`, the `media_objects` writer, `MIROIR_MEDIA_*`. No routes | kernel | control, viewer, the connector registry, fastapi, prefect |
 | control plane (`src/control/`, `src/adapters/` with Prefect only, `src/pipelines/`, `src/web/` admin, `src/cli/`) | Configuration, connections, runs, Prefect, artifacts, secrets, the metadata store, builds, the ingest API, the setup interface | `miroir.json`, every metadata table but the two media ones, `MIROIR_SECRET_KEY`, Prefect credentials, delivery tokens, metrics | kernel, integrations, analyses, media | The viewer; only `cli` composes it |
 | viewer (`src/viewer/`) | Reading the warehouse and showing it | The reader, `/timeline*`, `/api/timeline/*`, the `/media/{connection}/{kind}/{key}` view route and its withheld check, the plugins `scrubber` (screen) and `thread` (conversations), its templates and static files, the reader credentials | kernel, media (the view side), `analyses.views` | control, adapters, pipelines, integrations, web, dlt, prefect, Pillow, boto3 |
 | web shell (`src/web/shell.py`) | One HTTP surface | Token and session checks (today `authorize`, `src/web/app.py:187-206`), security headers with a policy per mounted part, `/login`, `/logout`, `/static`, the base template, a navigation registry in place of `timeline_links` | kernel | Any other part |
@@ -145,6 +145,93 @@ roles, connection-to-kind map) built by the composition root, as
   `analyses[].parameters.reader_role` stays.
 
 Embedding Metabase comes later, as a viewer plugin, outside this plan.
+
+## ELT
+
+Connectors and collector sources load what the source gives, as it gives it:
+the runner hands the source to `pipeline.run` unchanged
+(`src/core/runner.py:821-822`) after selecting resources
+(`src/core/sources.py:29`). dbt does every reshaping, filtering, joining,
+renaming, aggregating and derived value. Between the source and a raw table
+only these are allowed:
+
+- **Extraction**: decoding a format or blob (the Messages typedstream), paging,
+  unnesting, casting to the column's type, replacing what Postgres cannot store
+  (NUL, lone surrogates).
+- **Identity**: keys, cursors, merge rules, natural keys in place of unstable
+  row ids, a placeholder in a key column that cannot be null (Health's
+  `source`).
+- **Privacy at the edge**, in the collector only: masking, withholding frames of
+  password managers, sending only address-book names that match a handle. The
+  original never leaves the device.
+- **Added columns** beside the raw ones, never in their place.
+
+Dropping a field is a privacy or size decision, written down with the source's
+allowlist: the collector's column lists for Messages
+(`collector/miroir_collector/sources/apple_messages.py:41-91`) and ScreenMemory
+(`collector/miroir_collector/sources/screenmemory.py:52-61`), the four Health
+collections (`src/integrations/apple_health/source.py:11-16`) and GitHub's
+commit `files` (`src/integrations/github/client.py:131`). A business rule is
+not an added column: the Apple date conversion
+(`src/integrations/apple_messages/source.py:13-34,60-61`), which staging reads
+instead of the raw dates, moves to a dbt macro, and the `*_at` columns keep
+being written. A fix to a file connector reaches old data by re-importing the
+stored files; a fix in the collector or an API connector reaches new rows only.
+
+## Extending Miroir
+
+Each kind of extension is one package plus one line in a registry; nothing in
+the control plane, media or the viewer names a source.
+
+- **Connector**: `src/integrations/<name>/` with its `DEFINITION` (settings,
+  credentials, resources, fetch or file formats, media kinds, check), one line
+  in `src/integrations/registry.py`, its tests and its section in
+  [Writing an integration](../miroir/integrations.md). Its media kind names a
+  profile.
+- **Collector source**: one module in `collector/miroir_collector/sources/`
+  implementing `Source`, one line in `SOURCES`, and the connector whose file
+  format reads its batch.
+- **Analysis package**: one `Package` in `src/analyses/catalog.py`, its models
+  under `dbt/models/<package>/`, and its dashboards by id in `miroir.json`.
+- **Viewer lane**: an input role in the timeline package, one
+  `timeline_<source>` model emitting `events` rows, and one `Lane` in
+  `analyses/views.py`. Lanes, marks, search, day totals and media come from
+  `events` alone. A plugin, named by the lane, is needed only for a screen of
+  its own; an unknown name fails the catalog test.
+
+## Media
+
+Media are the files that rows point at
+([decision 033](../miroir/decisions.md#033--media-files-that-rows-point-at-live-in-object-storage)).
+The word stays, and so do the bucket layout (`prefix/connection/kind/key`, the
+derived `kind.w<width>/key.webp`), the kind names `screenshots` and
+`attachments`, `media_objects`, `media_pending`, `media_backfills`, the
+`<pipeline>_media` pipeline, the `/media` routes, the `media` section and
+`MIROIR_MEDIA_*`. "Artifact" keeps its meaning from
+[decision 008](../miroir/decisions.md#008--content-addressed-artifacts-and-explicit-versioned-imports).
+
+Each layer declares only its part:
+
+- **The connector** declares a `MediaKind`: which resource and column point at
+  files, their extensions, their largest size, and a profile by name. The
+  collector's walker sends files under that kind's name.
+- **Media** owns storage, upload links, confirms, the queue, derive and
+  `media_objects`. A profile is data: decoders by extension, widths, output
+  format and a size bound, in `media/profiles.py`; today's
+  `IMAGE_DECODERS` and `THUMBNAIL_WIDTHS` (`src/core/media.py:20,28-40`) become
+  the `image` profile. A new width adds a `thumbnail_w<width>` column
+  (`src/core/derive.py:81-84`) beside the others. Media ships the dbt macro
+  `media_ref(role, kind, key)`, the only way a model joins `media_objects`.
+- **An analysis or view** refers to files only through `media_ref` columns, and
+  declares `Withhold(kind, model, key, flag)` where some rows hide their files.
+  The viewer builds every media link from the row and asks the views that
+  declare a withhold for that kind; no kind or role is named in its code.
+
+Adding media to a source is a `MediaKind` and a walker; showing it in an
+analysis is a `media_ref` call, plus a `Withhold` if needed. A catalog test
+checks that both name a kind the input's connector declares. Derived files are
+made once per file and shared by every analysis that reads it, so the profile
+sits on the kind, not on the analysis.
 
 ## Runtime
 
@@ -200,7 +287,9 @@ go. It adds rules for libraries:
 
 The subprocess probe becomes one probe per entry point, `serve`, `view`, a flow
 run and a derive run, each asserting which libraries it loads.
-`tests/test_web_static.py` scans both template folders.
+`tests/test_web_static.py` scans both template folders. A test checks that no
+connector's dlt source adds maps or filters, and that each fixture's source
+fields reach the raw table.
 
 ## Order
 
@@ -213,20 +302,28 @@ production working.
 3. kernel: `models.py` and the base errors into `src/kernel/`.
 4. media, files: media, derive, the decoder, its checks, S3, MediaConfig and
    MediaKind into `src/media/`, with a named temporary exception for media
-   importing core.
+   importing core; decoders and widths become profiles, output byte for byte
+   the same.
 5. media, queue: its tables and repository, with identical DDL and no
    `SCHEMA_VERSION` bump; the exception goes.
 6. viewer, files: the reader, its routes, templates and static files into
    `src/viewer/`, with `ViewerSettings` built by `cli`; static URLs unchanged.
-7. viewer, the `/media` view route and its withheld check; `src/web/app.py`
-   stops importing the timeline; an amendment to decision 040.
+7. viewer, the `/media` view route and its withheld check, which reads
+   `Withhold` declarations; `src/web/app.py` stops importing the timeline; an
+   amendment to decision 040.
 8. web shell: login, headers and navigation; a security policy per part.
 9. Rename `src/core` to `src/control`, once media and viewer have left it.
 10. The viewer's own process: a `view` entry point, `serve` without the viewer,
     and in home-ops a viewer Deployment with only the reader credentials and a
     read-only media key, and the path routes.
-11. Lanes from declarations, with the `contract` relation and its version
-    check.
+11. Lanes from declarations: the `contract` relation and its check; search kinds
+    and day totals from `events` and the lane list; `media_ref` in place of the
+    hand-written joins and literal kinds; links from each row's kind; no
+    `screen_only` options; the catalog test.
+12. Raw-data fixes, independent of the split, one pull request per source: the
+    Apple date macro in dbt (the `*_at` columns still written), each allowlist
+    written down after checking what else its source holds, the other Health
+    collections, a `files` summary on GitHub commits, counts of `_value` nulls.
 
 ## What does not move
 
@@ -242,8 +339,11 @@ production working.
 - The cookie name (`miroir_session`) and the environment variable names
   (`MIROIR_TIMELINE_DATABASE*`, `MIROIR_MEDIA_*`, `MIROIR_SECRET_KEY` and the
   rest).
-- The source list `timeline_remove_foreign` gets in `events.sql` for existing
-  builds: a different list deletes rows.
+- The source list `timeline_remove_foreign` gets in
+  `dbt/models/timeline/events.sql:16` keeps every source an existing build
+  has. It deletes only the rows of the roles it names
+  (`dbt/macros/timeline.sql:66-71,87-89`), so a role left out is no longer
+  cleaned when its input is replaced. Adding a role is safe.
 
 ## Rejected
 
