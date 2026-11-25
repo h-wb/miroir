@@ -20,6 +20,7 @@ from src.core.thumbnails import (
 )
 
 JPEG = ("JPEG",)
+HEIF = ("HEIF",)
 
 
 def make(body: bytes, formats: tuple[str, ...]) -> dict[int, bytes]:
@@ -61,7 +62,7 @@ class ThumbnailTests(unittest.TestCase):
         from src.integrations.registry import INTEGRATIONS
 
         kinds = [k for i in INTEGRATIONS.values() for k in i.media if k.thumbnails]
-        self.assertEqual([k.name for k in kinds], ["screenshots"])
+        self.assertEqual([k.name for k in kinds], ["screenshots", "attachments"])
         for kind in kinds:
             self.assertLessEqual(set(kind.thumbnails), set(kind.extensions))
             for extension in kind.thumbnails:
@@ -121,12 +122,54 @@ class ThumbnailTests(unittest.TestCase):
         self.assertEqual(dict(made.getexif()), {})
         self.assertNotIn("exif", made.info)
 
+    def test_a_heic_becomes_two_webp_sizes(self):
+        image = Image.linear_gradient("L").resize((4032, 3024)).convert("RGB")
+        body = encoded(image, "HEIF", quality=60)
+        self.assertEqual(body[4:12], b"ftypheic")
+        made = make(body, HEIF)
+        large, small = opened(made[1280]), opened(made[360])
+        self.assertEqual((large.format, large.size), ("WEBP", (1280, 960)))
+        self.assertEqual((small.format, small.size), ("WEBP", (360, 270)))
+        # Read by the HEIF decoder alone, and it alone reads it.
+        self.assertEqual(self.refusal(body, ("JPEG", "PNG")), "unreadable")
+        self.assertEqual(self.refusal(screen(), HEIF), "unreadable")
+
+    def test_a_heic_rotation_is_applied_exactly_once(self):
+        # Stored 400 x 200 with a blue corner; pillow-heif writes EXIF orientation
+        # 6 as an `irot` box and keeps the EXIF too, as an iPhone does.
+        image = Image.new("RGB", (400, 200), (200, 0, 0))
+        image.paste((0, 0, 200), (0, 0, 40, 40))
+        exif = Image.Exif()
+        exif[0x0112] = 6
+        exif[0x010F] = "A camera maker"
+        body = encoded(image, "HEIF", exif=exif.tobytes(), quality=90)
+        self.assertIn(b"irot", body)
+        jpeg = encoded(image, "JPEG", exif=exif.tobytes(), quality=90)
+        for name, made in (
+            ("heic", opened(make(body, HEIF)[1280])),
+            ("jpeg", opened(make(jpeg, JPEG)[1280])),
+        ):
+            with self.subTest(name):
+                # Shown 200 x 400, the blue corner turned to the top right.
+                self.assertEqual(made.size, (200, 400))
+                red, _, blue = made.convert("RGB").getpixel((190, 10))
+                self.assertGreater(blue, 150)
+                self.assertLess(red, 60)
+                red, _, blue = made.convert("RGB").getpixel((10, 10))
+                self.assertGreater(red, 150)
+                self.assertLess(blue, 60)
+                self.assertEqual(dict(made.getexif()), {})
+                self.assertNotIn("exif", made.info)
+                self.assertNotIn("xmp", made.info)
+
     def test_only_the_decoders_of_the_kind_are_used(self):
         png = encoded(Image.new("RGB", (50, 50)), "PNG")
         self.assertEqual(self.refusal(png, JPEG), "unreadable")
         self.assertEqual(sorted(make(png, ("JPEG", "PNG"))), [360, 1280])
         self.assertEqual(self.refusal(png, ()), "unsupported")
-        self.assertEqual(decoders((".jpeg", ".jpg", ".png", ".heic")), ("JPEG", "PNG"))
+        self.assertEqual(
+            decoders((".jpeg", ".jpg", ".png", ".heic")), ("HEIF", "JPEG", "PNG")
+        )
 
     def test_broken_bytes_are_unreadable(self):
         body = screen(1600, 1000)

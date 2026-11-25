@@ -104,6 +104,22 @@ DEFINITION = IntegrationDefinition(
                 ".zip",
             ),
             5000 * 1024 * 1024,
+            # Images only; video, audio and documents are recorded `unsupported`
+            # (decision 040, phase 2b).
+            thumbnails=(
+                ".heic",
+                ".heif",
+                ".jpeg",
+                ".jpg",
+                ".png",
+                ".gif",
+                ".webp",
+                ".tiff",
+                ".tif",
+                ".bmp",
+            ),
+            # A photo is far smaller; a file above this is not read to be decoded.
+            thumbnail_max_bytes=50 * 1024 * 1024,
         ),
     ),
 )

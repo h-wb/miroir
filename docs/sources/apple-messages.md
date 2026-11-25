@@ -108,6 +108,10 @@ regular files already on disk under `<home>/Library/Messages/Attachments` are
 offered. Paths are resolved before the containment check, so a path or symlink
 pointing outside that folder is rejected. Files are stored by `media_key`; Miroir
 skips an upload when it already holds the same key at the same size.
+Miroir's worker then makes 360 and 1280 pixel thumbnails of HEIC, HEIF, JPEG,
+PNG, GIF, WebP, TIFF and BMP attachments up to 50 MB and records every
+attachment in `media_objects`; video, audio and documents get a row and no
+thumbnail ([Media](../miroir/media.md#thumbnails-and-media_objects)).
 
 The collector only offers files linked to messages in the normal delivery
 scope (`since` and the acknowledged message cursor). It waits for Miroir to

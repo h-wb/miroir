@@ -3,9 +3,9 @@
 A fresh decoder child must make thumbnails of the image of every decoder its
 kinds use before it gets a file, so a Pillow that lost a decoder (a build
 without libjpeg, a broken library) stops the run instead of marking every file
-of that type unreadable. Made with Pillow once, kept as data: nothing here
-decodes. `tests/test_thumbnails.py` checks there is one for every decoder in
-`src.core.media.IMAGE_DECODERS`."""
+of that type unreadable. Made with Pillow (HEIF with pillow-heif) once, kept as
+data: nothing here decodes. `tests/test_thumbnails.py` checks there is one for
+every decoder in `src.core.media.IMAGE_DECODERS`."""
 
 import base64
 
@@ -20,6 +20,18 @@ _IMAGES = {
     "GIF": (
         "R0lGODdhCAAIAIIAAO/v79DQ0LCwsJCQkHBwcFBQUC8vLxAQECwAAAAACAAIAAAIJwAPCBwo"
         "0IDBgwYLKFyokIDDhw4HSJwoUYDFixYDaNyoEYDHjx4DAgA7"
+    ),
+    # Made with pillow-heif (libheif and x265); 8 x 8, HEVC in a HEIC file.
+    "HEIF": (
+        "AAAAHGZ0eXBoZWljAAAAAG1pZjFoZWljbWlhZgAAAXxtZXRhAAAAAAAAACFoZGxyAAAAAAAA"
+        "AABwaWN0AAAAAAAAAAAAAAAAAAAAACJpbG9jAAAAAERAAAEAAQAAAAABoAABAAAAAAAAACoA"
+        "AAAjaWluZgAAAAAAAQAAABVpbmZlAgAAAAABAABodmMxAAAAAA5waXRtAAAAAAABAAAA/Glw"
+        "cnAAAADcaXBjbwAAAHVodmNDAQNwAAAAkAAAAAAAHvAA/P34+AAADwNgAAEAGEABDAH//wNw"
+        "AAADAJAAAAMAAAMAHroCQGEAAQApQgEBA3AAAAMAkAAAAwAAAwAeoCCBBZbqrprm4CGgwIAA"
+        "AAyAAAADAIRiAAEABkQBwXPBiQAAABNjb2xybmNseAABAA0ABoAAAAAUaXNwZQAAAAAAAABA"
+        "AAAAQAAAAChjbGFwAAAACAAAAAEAAAAIAAAAAf///8gAAAAC////yAAAAAIAAAAQcGl4aQAA"
+        "AAADCAgIAAAAGGlwbWEAAAAAAAAAAQABBYECAwWEAAAAMm1kYXQAAAAmKAGvGSE10u4iWqBD"
+        "Pc36+dgy8ZpoosOD2gIO2MiZZQK8QI746XQ="
     ),
     "JPEG": (
         "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9"

@@ -91,6 +91,15 @@ class MediaKind:
     # Extensions the worker makes thumbnails of (decision 040). A kind that
     # names none is not derived: no thumbnails and no `media_objects` rows.
     thumbnails: tuple[str, ...] = ()
+    # The largest file the worker reads to make thumbnails of; a larger one is
+    # recorded `too_large` without being read. None means `max_bytes`.
+    thumbnail_max_bytes: int | None = None
+
+    @property
+    def thumbnail_bound(self) -> int:
+        if self.thumbnail_max_bytes is None:
+            return self.max_bytes
+        return min(self.thumbnail_max_bytes, self.max_bytes)
 
 
 @dataclass(frozen=True)
