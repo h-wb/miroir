@@ -2986,7 +2986,7 @@ Consequences:
 
 ### 040 amendment — Attachment thumbnails (phase 2b)
 
-Status: accepted, 2026-11-25. The Apple Messages `attachments` kind is
+Status: accepted, 2026-11-25, with pull request #55. The Apple Messages `attachments` kind is
 derived like `screenshots`: two WebP thumbnails per image and one
 `media_objects` row per stored file, which the messages models of phase 2a
 already join. How a file is read is in [Media](media.md#thumbnails-and-media_objects).
