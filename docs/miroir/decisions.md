@@ -1309,7 +1309,7 @@ deployment (bucket, key, configuration).
 
 ### 033 amendment — Derive runs on a deployment of their own
 
-Status: accepted, 2026-11-25. Step 2 of
+Status: accepted, 2026-11-25, with pull request #60. Step 2 of
 [the package split](../decisions/2026-11-25-package-split.md). Revises *The
 worker holds the bucket key* in the 040 amendment for phase 1b: the key no
 longer reaches every connector's runs.
