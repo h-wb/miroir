@@ -47,8 +47,9 @@ to the warehouse (decision 040), imports only `src.core.config`,
 `src.core.operations` and `src.core.analysis` (to name the timeline's schema as
 the build does) of the server's code, and only `web` and `cli` import it.
 Nothing in `web` or the timeline module imports an image library: media is never
-decoded in the web process. Only `src/core/thumbnails.py` imports one (Pillow),
-and nothing in `src` imports it: the derive run starts it as a child process. Only
+decoded in the web process. Only `src/core/thumbnails.py` imports one (Pillow,
+and pillow-heif for HEIC), and nothing in `src` imports it: the derive run
+starts it as a child process. Only
 the runner imports the derive module, inside a derive run. A test imports the
 server's modules and the derive module and checks that no image library loaded. The collector imports the Python standard library,
 urllib3, pydantic and a pinned secret scanner, and nothing else; its own parts have import rules too, held

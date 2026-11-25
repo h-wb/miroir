@@ -16,10 +16,12 @@ import threading
 import time
 import unittest
 from contextlib import closing
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import MappingProxyType
 from typing import Any, ClassVar
 from unittest.mock import patch
 
@@ -29,6 +31,7 @@ import psycopg2
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
 from PIL import Image
+from pillow_heif import register_heif_opener
 
 from src.cli.main import main
 from src.core.config import load_miroir
@@ -93,6 +96,18 @@ def png_body() -> bytes:
     out = BytesIO()
     Image.new("RGB", (64, 48)).save(out, "PNG")
     return out.getvalue()
+
+
+@contextlib.contextmanager
+def without_attachment_thumbnails():
+    """The catalog with an `attachments` kind that names no thumbnails."""
+    from src.integrations.registry import INTEGRATIONS
+
+    messages = INTEGRATIONS["apple_messages"]
+    media = tuple(replace(kind, thumbnails=()) for kind in messages.media)
+    catalog = {**INTEGRATIONS, "apple_messages": replace(messages, media=media)}
+    with patch("src.core.config.INTEGRATIONS", MappingProxyType(catalog)):
+        yield
 
 
 class Recorder:
@@ -397,6 +412,9 @@ class DeriveRequestTests(DeriveFixture):
 
     def test_a_kind_without_thumbnails_is_not_queued(self):
         token = self.service.create_delivery_token("messages")
+        catalog = without_attachment_thumbnails()
+        catalog.__enter__()
+        self.addCleanup(catalog.__exit__, None, None, None)
         body = jpeg()
         self.objects.add("site/messages/attachments/g.jpeg", body)
         response = self.client.post(
@@ -740,6 +758,227 @@ class DeriveRunTests(DeriveFixture):
         self.assertEqual(self.rows()["a.jpeg"]["thumbnail_status"], "made")
 
 
+# The tests make HEIC files; the worker reads them only in its decoder child.
+register_heif_opener()
+
+
+def encoded(image: Image.Image, fmt: str, **options: Any) -> bytes:
+    out = BytesIO()
+    image.save(out, fmt, **options)
+    return out.getvalue()
+
+
+class AttachmentDeriveTests(DeriveFixture):
+    """Apple Messages attachments: images get thumbnails, other files a row
+    (decision 040, phase 2b)."""
+
+    def queue_attachments(self, files: dict[str, bytes]) -> None:
+        now = datetime.now(timezone.utc)
+        for key, body in files.items():
+            self.objects.add(f"site/messages/attachments/{key}", body)
+        self.store.add_pending_media(
+            "test",
+            "messages",
+            "attachments",
+            [(key, len(body), now) for key, body in files.items()],
+        )
+
+    def derive_attachments(self) -> str:
+        operation_id = request_derive(
+            self.miroir(),
+            "messages",
+            store=self.store,
+            origin="request",
+            submit=lambda operation: None,
+            join=False,
+        )
+        assert operation_id is not None
+        self.derive(operation_id)
+        return operation_id
+
+    def attachment_rows(self) -> dict[str, dict]:
+        dataset = self.miroir().connections[1].binding.dataset_name
+        with duckdb.connect(str(self.warehouse)) as db:
+            cursor = db.execute(f"SELECT * FROM {dataset}.media_objects")
+            names = [c[0] for c in cursor.description]
+            return {row[2]: dict(zip(names, row)) for row in cursor.fetchall()}
+
+    def thumbnail(self, key: str, width: int) -> Image.Image:
+        body, content_type = self.objects.bodies[
+            f"site/messages/attachments.w{width}/{key}.webp"
+        ]
+        self.assertEqual(content_type, "image/webp")
+        image = Image.open(BytesIO(body))
+        image.load()
+        return image
+
+    def test_confirmed_attachments_are_queued(self):
+        token = self.service.create_delivery_token("messages")
+        body = jpeg()
+        self.objects.add("site/messages/attachments/g.jpeg", body)
+        response = self.client.post(
+            "/api/connections/messages/media/confirm",
+            json={
+                "kind": "attachments",
+                "objects": [{"key": "g.jpeg", "size": len(body)}],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(response.json()["objects"][0]["status"], "stored")
+        self.assertEqual(self.pending(), ["g.jpeg"])
+        self.assertEqual(len(self.executor.submitted), 1)
+
+    def test_images_get_thumbnails_and_other_files_a_row(self):
+        exif = Image.Exif()
+        exif[0x0112] = 6  # stored 400 x 200, shown 200 x 400
+        exif[0x010F] = "A camera maker"
+        rotated = encoded(Image.new("RGB", (400, 200)), "JPEG", exif=exif.tobytes())
+        frames = [Image.new("RGB", (64, 48), (i, 0, 0)) for i in (250, 0, 120)]
+        gif = encoded(frames[0], "GIF", save_all=True, append_images=frames[1:])
+        png = encoded(Image.new("RGBA", (1600, 1200), (0, 90, 0, 255)), "PNG")
+        photo = Image.linear_gradient("L").resize((2016, 1512)).convert("RGB")
+        heic = encoded(photo, "HEIF", quality=60)
+        # Its own rotation (`irot`), and EXIF orientation 6 kept beside it.
+        turned = encoded(Image.new("RGB", (400, 200)), "HEIF", exif=exif.tobytes())
+        self.queue_attachments(
+            {
+                "a/photo.heic": heic,
+                "a/turned.heif": turned,
+                "a/rotated.jpeg": rotated,
+                "a/animated.gif": gif,
+                "a/plain.png": png,
+                "a/clip.mov": b"\x00\x00\x00\x14ftypqt  synthetic video",
+                "a/letter.pdf": b"%PDF-1.4 synthetic",
+                # JPEG bytes under a PNG name: only the PNG decoder reads it.
+                "a/named.png": jpeg(),
+            }
+        )
+        operation_id = self.derive_attachments()
+        rows = self.attachment_rows()
+        self.assertEqual(
+            {
+                key: (
+                    row["thumbnail_status"],
+                    row["thumbnail_w360"],
+                    row["thumbnail_w1280"],
+                )
+                for key, row in rows.items()
+            },
+            {
+                "a/photo.heic": ("made", True, True),
+                "a/turned.heif": ("made", True, True),
+                "a/rotated.jpeg": ("made", True, True),
+                "a/animated.gif": ("made", True, True),
+                "a/plain.png": ("made", True, True),
+                "a/clip.mov": ("unsupported", False, False),
+                "a/letter.pdf": ("unsupported", False, False),
+                "a/named.png": ("unreadable", False, False),
+            },
+        )
+        self.assertEqual(
+            {key: row["content_type"] for key, row in rows.items()},
+            {
+                "a/photo.heic": "image/heic",
+                "a/turned.heif": "image/heif",
+                "a/rotated.jpeg": "image/jpeg",
+                "a/animated.gif": "image/gif",
+                "a/plain.png": "image/png",
+                "a/clip.mov": "video/quicktime",
+                "a/letter.pdf": "application/pdf",
+                "a/named.png": "image/png",
+            },
+        )
+        self.assertEqual(
+            {row["kind"] for row in rows.values()}
+            | {r["connection_id"] for r in rows.values()},
+            {"attachments", "messages"},
+        )
+        self.assertEqual(self.thumbnail("a/photo.heic", 1280).size, (1280, 960))
+        self.assertEqual(self.thumbnail("a/photo.heic", 360).size, (360, 270))
+        heif = self.thumbnail("a/turned.heif", 1280)
+        self.assertEqual(heif.size, (200, 400))
+        self.assertEqual(dict(heif.getexif()), {})
+        # EXIF orientation applied once, no metadata kept.
+        upright = self.thumbnail("a/rotated.jpeg", 1280)
+        self.assertEqual(upright.size, (200, 400))
+        self.assertEqual(dict(upright.getexif()), {})
+        self.assertNotIn("exif", upright.info)
+        # The first frame of an animation, as a still.
+        first = self.thumbnail("a/animated.gif", 360)
+        self.assertEqual(getattr(first, "n_frames", 1), 1)
+        red, green, blue = first.convert("RGB").getpixel((32, 24))
+        self.assertGreater(red, 200)
+        self.assertLess(max(green, blue), 30)
+        self.assertEqual(self.thumbnail("a/plain.png", 1280).size, (1280, 960))
+        self.assertEqual(self.thumbnail("a/plain.png", 360).size, (360, 270))
+        # A type without thumbnails is not even read.
+        read = set(self.objects.gets)
+        self.assertNotIn("site/messages/attachments/a/clip.mov", read)
+        self.assertNotIn("site/messages/attachments/a/letter.pdf", read)
+        self.assertEqual(
+            self.detail(operation_id),
+            "Media: made 5, unreadable 1, unsupported 2; 0 waiting",
+        )
+
+    def test_a_file_over_the_thumbnail_bound_is_too_large_unread(self):
+        kind = self.miroir().connections[1].integration.media[0]
+        self.assertEqual(kind.thumbnail_bound, 50 * 1024 * 1024)
+        self.assertGreater(kind.max_bytes, kind.thumbnail_bound)
+        self.queue_attachments(
+            {
+                "big.jpeg": b"\xff" * (kind.thumbnail_bound + 1),
+                "edge.png": encoded(Image.new("RGB", (8, 8)), "PNG"),
+            }
+        )
+        self.derive_attachments()
+        rows = self.attachment_rows()
+        self.assertEqual(rows["big.jpeg"]["thumbnail_status"], "too_large")
+        self.assertEqual(rows["big.jpeg"]["size"], kind.thumbnail_bound + 1)
+        self.assertEqual(rows["edge.png"]["thumbnail_status"], "made")
+        self.assertEqual(self.objects.gets, ["site/messages/attachments/edge.png"])
+
+    def test_a_file_grown_past_the_bound_is_too_large(self):
+        # Queued with a small size, larger when read: the read stops at the bound.
+        self.queue_attachments({"grown.jpeg": jpeg(400, 300)})
+        with patch.object(
+            self.objects, "get", side_effect=ObjectTooLarge("big")
+        ) as get:
+            self.derive_attachments()
+        self.assertEqual(get.call_args.args[1], 50 * 1024 * 1024)
+        self.assertEqual(
+            self.attachment_rows()["grown.jpeg"]["thumbnail_status"], "too_large"
+        )
+
+    def test_screenshots_are_derived_as_before(self):
+        kind = self.miroir().connections[0].integration.media[0]
+        self.assertEqual(
+            (kind.thumbnails, kind.thumbnail_max_bytes, kind.thumbnail_bound),
+            ((".jpeg", ".jpg", ".png"), None, 20 * 1024 * 1024),
+        )
+        self.queue({"a.jpeg": jpeg(), "b.heic": b"heic bytes"})
+        with patch.object(self.objects, "get", wraps=self.objects.get) as get:
+            self.derive(self.request())
+        self.assertEqual(
+            [call.args for call in get.call_args_list],
+            [("site/screen/screenshots/a.jpeg", 20 * 1024 * 1024)],
+        )
+        rows = self.rows()
+        self.assertEqual(
+            {
+                key: (row["thumbnail_status"], row["derive_version"])
+                for key, row in rows.items()
+            },
+            {"a.jpeg": ("made", 1), "b.heic": ("unsupported", 1)},
+        )
+        # Rows already written are recognised, not derived again.
+        self.objects.gets.clear()
+        self.queue({"a.jpeg": jpeg()})
+        again = self.request()
+        self.derive(again)
+        self.assertEqual(self.objects.gets, [])
+        self.assertIn("known 1", self.detail(again))
+
+
 class DecoderTests(unittest.TestCase):
     """The child process that decodes, with real generated images."""
 
@@ -1077,6 +1316,9 @@ class BackfillTests(DeriveFixture):
 
     def test_the_command_refuses_what_has_no_thumbnails(self):
         err = io.StringIO()
+        catalog = without_attachment_thumbnails()
+        catalog.__enter__()
+        self.addCleanup(catalog.__exit__, None, None, None)
         for kind, limit in (("attachments", "5"), ("screenshots", "0")):
             arguments = [
                 "--config",

@@ -111,6 +111,10 @@ regular files already on disk under `<home>/Library/Messages/Attachments` are
 offered. Paths are resolved before the containment check, so a path or symlink
 pointing outside that folder is rejected. Files are stored by `media_key`; Miroir
 skips an upload when it already holds the same key at the same size.
+Miroir's worker then makes 360 and 1280 pixel thumbnails of HEIC, HEIF, JPEG,
+PNG, GIF, WebP, TIFF and BMP attachments up to 50 MB and records every
+attachment in `media_objects`; video, audio and documents get a row and no
+thumbnail ([Media](../miroir/media.md#thumbnails-and-media_objects)).
 
 The collector only offers files linked to messages in the normal delivery
 scope (`since` and the acknowledged message cursor). It waits for Miroir to
@@ -198,8 +202,8 @@ What it relies on here:
 - A message's attachments have no order in what is sent; the timeline orders them
   by `created_at`, then `transfer_name`, then guid.
 - `media_objects`, written by the derive worker, joins on `media_key` with kind
-  `attachments`. Attachments are not derived today (HOMEL-6), so every
-  attachment's file status is unknown.
+  `attachments`: each attachment carries its file's thumbnail status and sizes,
+  or nulls (unknown) until the worker has recorded it.
 - Builds add indexes to these raw tables when the build's role owns them: load
   ID, `guid`, `chat_guid`, `message_guid`, `attachment_guid`, `media_key` and the
   reaction's target (`associated_message_guid` without its `p:N/` or `bp:`
