@@ -2,19 +2,21 @@
 area: "[[Homelab]]"
 categories:
   - "[[Resources]]"
-reviewed: 2026-11-24
-summary: How the server reads the timeline's tables, the JSON API it answers, how it serves images, and how the Day view and search pages behave.
+reviewed: 2026-11-25
+summary: How the server reads the timeline's tables, the JSON API it answers (screen, browser and conversations), how it serves images, and how the Day view and search pages behave.
 topics:
   - "[[Warehouse]]"
   - "[[Screen activity]]"
   - "[[Browser history]]"
+  - "[[Apple Messages]]"
 created: 2026-11-24T23:30
 ---
 
 # Timeline
 
 The timeline (decision 040) lets you move through a day of screenshots and
-browser visits and search what was on screen. Its tables are built by the
+browser visits and search what was on screen. Its API also reads Apple Messages
+conversations, when the analysis links a `messages` input. Its tables are built by the
 [`timeline` package](analyses.md#the-timeline-package); the server only reads
 them. It is the server's only access to the warehouse, in
 `src/core/timeline.py`, which only `web` and `cli` import.
@@ -61,11 +63,14 @@ it returns. An unknown or repeated parameter is refused.
 
 | Route | Parameters | Answer |
 | --- | --- | --- |
-| `GET /api/timeline/days` | `from`, `to`: days, inclusive, at most 400 apart | `{from, to, days: [{day, screen?: {events, frames}, browser?: {events}}]}`, only days with rows, in order |
+| `GET /api/timeline/days` | `from`, `to`: days, inclusive, at most 400 apart | `{from, to, days: [{day, screen?: {events, frames}, browser?: {events}, messages?: {events}}]}`, only days with rows, in order; `messages` only when the analysis links a `messages` input |
 | `GET /api/timeline/screen/{day}` | none | A day's frames as columns, below |
 | `GET /api/timeline/frames/{key}` | none (`key` is the frame's media key, slashes included) | One frame, below; 404 if unknown |
-| `GET /api/timeline/events` | `from`, `to`: a day or a time with offset (`to` as a day includes it); `source`: `screen`, `browser` or both, comma-separated (default both); `limit` 1–500 (200); `after`: the previous page's `next` | `{events: [...], next}`, events that started in `[from, to)`, oldest first |
-| `POST /api/timeline/search` | A JSON body (`Content-Type: application/json`, else 415; at most 8 KB; each field once). `q`: 1–200 characters, web search syntax (`"a phrase"`, `-word`, `or`), with at least one word to look for in every part (`-word` alone, or `a or -b`, is 400); `kind`: `screen` (default) or `browser`; `app`: a bundle identifier (screen only); `from`, `to`: days, optional; `limit` 1–50 (20); `before`: the previous page's `next`. A `GET` answers 400 "Search with POST" | Moments or visits, newest first, below |
+| `GET /api/timeline/events` | `from`, `to`: a day or a time with offset (`to` as a day includes it); `source`: `screen`, `browser` and, when linked, `messages`, comma-separated (default `screen,browser`); `limit` 1–500 (200); `after`: the previous page's `next` | `{events: [...], next}`, events that started in `[from, to)`, oldest first |
+| `GET /api/timeline/conversations` | `limit` 1–200 (50); `after`: the previous page's `next` | `{conversations: [...], next}`, newest activity first, below |
+| `GET /api/timeline/conversations/{id}` | none (`id` is a `conversation_id`) | One conversation, below; 404 if unknown |
+| `GET /api/timeline/conversations/{id}/messages` | At most one of `before` and `after` (a cursor of a previous answer), `around` (a message's guid) and `at` (a day or a time with offset); `limit` 1–200 (100) | `{conversation_id, messages: [...], before, after}`, below |
+| `POST /api/timeline/search` | A JSON body (`Content-Type: application/json`, else 415; at most 8 KB; each field once). `q`: 1–200 characters, web search syntax (`"a phrase"`, `-word`, `or`), with at least one word to look for in every part (`-word` alone, or `a or -b`, is 400); `kind`: `screen` (default), `browser` or `messages`; `app`: a bundle identifier (screen only); `conversation`: a `conversation_id` (messages only); `from`, `to`: days, optional; `limit` 1–50 (20); `before`: the previous page's `next`. A `GET` answers 400 "Search with POST" | Moments, visits or messages, newest first, below |
 
 The screen index of a day, small enough for about 3,000 frames (about 110 KB,
 15 KB compressed):
@@ -98,21 +103,61 @@ An event: `{source, event_id, started_at, ended_at, kind, title, body, group,
 payload, media}`. For a screen session `kind` is `app_session`, `title` the app,
 `group` its bundle identifier, `payload` `{bundle_id, frames, last_frame}`, and
 `media` its first frame's (`state` `withheld` when that frame is). For a visit
-`kind` is `visit`, `body` the address, `group` the site, `media` null. Title and
-body are cut at 2,000 characters.
+`kind` is `visit`, `body` the address, `group` the site, `media` null. For a
+message `kind` is `message`, `title` its text, `group` its `conversation_id`,
+`payload` `{guid, conversation, display_name, sender, from_me, service,
+attachments, reactions, edited, unsent, audio, reply_to}` (`display_name` the
+conversation's, `sender` the sender's name or null for mine, `attachments` and
+`reactions` counts), and `media` its first attachment's. Title and body are cut
+at 2,000 characters.
+
+A conversation in the list: `{conversation_id, display_name, is_group,
+participant_count, last_message_at, message_count, preview, preview_from_me}`.
+Only conversations with a message are listed; those whose messages are all
+undated come last, with a null `last_message_at`. `message_count` includes
+undated messages. `preview` is the first 200 characters of the last dated
+message, null when it has no text; `preview_from_me` whether I sent it. One
+conversation adds `title` (a group's own), `first_message_at`, `participants:
+[{handle, display_name}]` (never me) and `undated`, how many of its messages have
+no time. An id that is not 32 lower-case hex characters is 404 without a query.
+
+A conversation's messages are its dated ones, oldest first, paged by `(sent_at,
+guid)`: without a parameter the latest page; `before` or `after` the page before
+or after a cursor; `around` a page with that message in the middle (nearer an
+end, the page still fills; 404 if it is not a dated message of this
+conversation); `at` the page starting at that time (a day: its local midnight),
+empty when nothing is that late. The answer's `before` and `after` are the
+neighbouring pages' cursors, null at either end. Undated messages are not paged:
+they have no place on the axis, and the conversation counts them.
+
+A message: `{guid, sent_at, day, from_me, sender: {handle, display_name} | null,
+service, text, text_truncated, text_unreadable, edited, edited_at, unsent, audio,
+reply_to, attachments: [{guid, kind, mime_type, bytes, transfer_name, media}],
+reactions: [{kind, from_me, sender, part, at}]}`. `sender` is null for mine; its
+`display_name` the address book's name, else the handle as the message writes it.
+`text` is whole up to 100,000 characters (`text_truncated` beyond), as the
+collector delivered it. A reaction's `sender` is the person's name, or their handle when the timeline has no one by that handle (someone no longer in the chat), null for mine. An
+attachment's `media` is `{connection, kind: "attachments", key, state, status}`
+as a frame's, `state` `unknown`, `thumbnails` or `stored` (an attachment is never
+withheld), and null for a file with no media key. Names are read from `people`
+and `conversations` at each answer, so a renamed contact shows at the next build.
 
 A screen search answers `{kind: "screen", moment_seconds: 300, apps, moments,
 next}`. A moment is the matching frames of one app in one five-minute window
 (windows start on multiples of five minutes): `{key, connection, at, until, day,
 app, matches, snippet, media}`, `key` and `at` its first match, `until` its last.
 A browser search answers `{kind: "browser", visits: [{event_id, at, title, url,
-site, snippet}], next}`, matching titles and addresses. A `snippet` is a list of
+site, snippet}], next}`, matching titles and addresses. A message search answers `{kind: "messages",
+messages: [{guid, conversation_id, display_name, sent_at, day, from_me, sender,
+snippet}], next}`, dated messages only, matched through the text index of
+`messages` whatever the filters. A `snippet` is a list of
 strings alternating plain text and matches, plain text first: show it as text,
 never as markup. `next` is null on the last page.
 
-Errors are `{"error": "..."}`: 400 for a parameter, 404 for an unknown frame, 503
-when the timeline is not configured, not built yet or unreachable, 504 when a
-query reached the time limit. Every answer but the screen index is
+Errors are `{"error": "..."}`: 400 for a parameter, 404 for an unknown frame,
+conversation or message, 503 when the timeline is not configured, not built yet
+or unreachable (for the conversation routes and a message search, also when the
+analysis has no `messages` input), 504 when a query reached the time limit. Every answer but the screen index is
 `Cache-Control: private, no-store`. Answers over 1 KB are gzip-compressed for a
 client that accepts it.
 

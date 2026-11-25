@@ -1329,8 +1329,9 @@ class TimelinePageTests(TimelineApiFixture):
 
 
 class TimelineWithMessagesTests(TimelineApiFixture):
-    """Linking messages changes nothing the existing pages and routes show until
-    the message pages exist (decision 040, phase 2a)."""
+    """Linking messages changes nothing the pages and the screen and browser
+    routes show (decision 040, phases 2a and 2c): the days answer only gains
+    `messages` counts."""
 
     def answers(self, client):
         answers = {}
@@ -1377,4 +1378,20 @@ class TimelineWithMessagesTests(TimelineApiFixture):
             ),
             [(2,)],
         )
-        self.assertEqual(self.answers(self.client(raw)), before)
+        after = self.answers(self.client(raw))
+        counted = {}
+        for route in [r for r in after if r.startswith("/api/timeline/days")]:
+            status, text = after[route]
+            body = json.loads(text)
+            kept = []
+            for day in body["days"]:
+                if "messages" in day:
+                    counted[day["day"]] = day.pop("messages")
+                if set(day) != {"day"}:
+                    kept.append(day)
+            after[route] = (status, json.dumps({**body, "days": kept}))
+            before[route] = (before[route][0], json.dumps(json.loads(before[route][1])))
+        self.assertEqual(after, before)
+        self.assertEqual(
+            counted, {"2026-11-20": {"events": 1}, "2026-11-22": {"events": 1}}
+        )

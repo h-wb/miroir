@@ -66,6 +66,7 @@ amendment under it. Older entries say "workspace" (renamed Miroir by 014) and
 | | [040 amendment — The media upgrade on the warehouse (2026-11-23)](#040-amendment--the-media-upgrade-on-the-warehouse-2026-11-23) | Accepted |
 | | [040 amendment — Conversations data (phase 2a)](#040-amendment--conversations-data-phase-2a) | Accepted |
 | | [040 amendment — Attachment thumbnails (phase 2b)](#040-amendment--attachment-thumbnails-phase-2b) | Accepted |
+| | [040 amendment — Conversations in the API (phase 2c, part 1)](#040-amendment--conversations-in-the-api-phase-2c-part-1) | Accepted |
 | [041](#041--a-messages-analysis-conversations-by-identifier-no-text) | A messages analysis: conversations by identifier, no text | Accepted |
 | [042](#042--dashboards-read-the-analysis-outputs-run_dbt-is-removed) | Dashboards read the analysis outputs; `run_dbt` is removed | Accepted |
 
@@ -3043,6 +3044,115 @@ Consequences:
   alone: 0.08 to 0.11 s per JPEG, 0.22 to 0.25 s per PNG, 0.34 to 0.43 s per
   HEIC; about 1 s per 40-megapixel HEIC.
 - The flow-run image carries libheif and libde265 in the pillow-heif wheel.
+
+### 040 amendment — Conversations in the API (phase 2c, part 1)
+
+Status: accepted, 2026-11-25, with pull request #56. What reading the phase 2a tables from the server had to decide. Queries
+and JSON only; the pages come in part 2 and build on these routes.
+*(conservative)* marks the choices that touched privacy, correctness or cost.
+The routes and their answers are in [Timeline](timeline.md#the-api).
+
+**Messages is a source where it is linked.** `TimelineSource.sources` is
+`screen` and `browser`, plus `messages` when the analysis links a `messages`
+input. The days answer of the API then counts messages per day, and
+`events?source=messages` pages message events. *(conservative)* Everything the
+screen and the browser answered stays as it was: `events` without `source` still
+means `screen,browser`, the pages ask `days` for those two only (the home page
+never opens a day of messages alone), and a test compares every screen and
+browser answer and page with and without a `messages` input. Without the input,
+`source=messages` is a parameter error (400) and the conversation routes and a
+message search are not configured (503).
+
+**A conversation in an address is its `conversation_id` only**, as phase 2a
+decided. The routes check its shape (32 lower-case hex characters) before any
+query and answer 404 otherwise, so a handle or a number put in its place reaches
+neither the warehouse nor a log line. Search words and the `conversation` filter
+of a search travel in the POST body, as for the screen.
+
+**Names are read at each answer** from `people` and `conversations`: a message's
+sender is the address book's name, else the handle as that message writes it
+(041), a reaction's sender is `people.display_name`, a conversation is its
+`display_name`. A message event's stored payload holds the sender's handle; the
+API replaces it with the name and adds the conversation's `display_name`, so
+the events table keeps no name and a renamed contact rewrites no row.
+
+**The list.** Conversations with at least one message, by `last_message_at`
+newest first, then by id; those whose messages are all undated come last (a null
+time sorts last), with a null `last_message_at`. Keyset paging on
+`(last_message_at, conversation_id)`, the null time written as an empty string in
+the cursor. A conversation with no message (a chat listed but never written to)
+is left out *(revised from 2a's open point)*. The table holds a few hundred rows,
+so it is sorted whole; its `last_message_at` index is not needed.
+
+**The preview** is the first 200 characters of the conversation's last dated
+message (by `(sent_at, guid)`), null when that message has no text, with whether
+I sent it. It is not stored: one backward probe per listed conversation of the
+`(conversation_id, sent_at, guid)` index finds it, which keeps `conversations`
+unchanged and the preview right even when `conversations` is a build behind
+`messages` (a failed build, 2a's finding 7).
+
+**A conversation's messages.** Dated, not deleted, oldest first within a page,
+keyset on `(sent_at, guid)` along the same index, one range per page: ties on
+`sent_at` are ordered by guid, so no message is skipped or repeated at a page
+boundary. One of:
+- nothing: the latest page; `before` or `after` a cursor: the page next to it;
+- `around` a guid: a page with that message in the middle (`(limit - 1) // 2`
+  before it), filled from the other side near an end, so the page a search
+  result opens is always full; 404 if it is not a dated message of this
+  conversation;
+- `at` a time or a day (its local midnight, the timeline's one rule): the page
+  starting there, for a calendar or a month scrubber.
+The answer's `before` and `after` are cursors of the pages next to it, each
+checked with one probe of the index, null at either end, so a client never asks
+for an empty page by following them. A page that is empty (a cursor or `at`
+beyond an end) still points back: its cursor towards the messages that exist is
+exact because guids are never empty and times have microsecond resolution
+(`(t, "")` is before every message at `t`, `(t + 1 µs, "")` after them). Cursors
+are opaque, as for events.
+
+**Undated messages are not paged** *(conservative: correctness)*. They have no
+place on the time axis, and paging them by guid at either end would put them
+beside messages they were not sent with. The conversation's `undated` says how
+many there are; `message_count` includes them.
+
+**Text is data.** A message's text is returned whole up to 100,000 characters,
+as delivered, with `text_truncated`; the answer is JSON, and part 2 shows it as
+text, never as markup. Attachments carry `media` in a frame's shape, with the
+same states but never `withheld` (only screenshots are), and null without a
+media key. The media route is unchanged: a test shows an attachment's key served
+by `/media/{connection}/attachments/{key}` as a screenshot's is.
+
+**Message search reads the text index alone** *(conservative: cost)*. The match
+is a subquery fenced with `OFFSET 0`, which holds only the indexed expression
+(`search_vector('text')`); the conversation, dates, deleted and undated
+conditions and the keyset apply to its rows. Without the fence the planner could
+walk a conversation's messages along the `(conversation_id, sent_at, guid)`
+index in time order and compute every text's vector until it had a page: cheap
+for a small conversation, a read of every text of a large one with a rare word.
+A test checks with `EXPLAIN` that the plan is a bitmap scan of the text index,
+with and without the conversation filter. Results are dated messages, newest
+first, keyset on `(sent_at, guid)`, with the existing snippet format.
+
+**No index added.** Measured on synthetic data (200,000 messages in 300
+conversations drawn with a skew, the busiest holding 30,000, one in ten long;
+one development machine, PostgreSQL 17.11), medians of seven runs: the first
+page of 50 conversations 0.9 ms (all 300 in one page 3.1 ms); one conversation
+0.5 ms; the latest page of 100 messages of the busiest 2.3 ms, the page before
+3.8 ms, around a message in its middle 5.9 ms, at a day 2.7 ms; a search for a
+word on 30% of messages 27 ms, on 1% 4.6 ms, a rare one 1.9 ms, two words that
+are on most messages 38 ms, the common word within a month 22 ms and within one
+conversation 21 to 23 ms. Through the routes, a list of 50 takes 6.3 ms (16 KB,
+4.4 KB gzipped) and a page of 100 12.5 ms (52 KB, 9.7 KB gzipped).
+`tests/test_timeline_benchmark.py` repeats this (`MIROIR_TIMELINE_BENCHMARK=1`).
+The models and their indexes are unchanged; no rebuild is needed.
+
+Known limits:
+- A search filtered to one conversation or a month reads every match of its
+  words first (no index on `sent_at` alone): about the cost of the unfiltered
+  search, as measured above.
+- Undated messages are counted but cannot be read through the API.
+- `around` names a message by its guid in the address; a guid is Apple's random
+  identifier, not a person's handle.
 
 ## 041 — A messages analysis: conversations by identifier, no text
 

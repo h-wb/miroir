@@ -25,8 +25,13 @@ from src.core import timeline
 from src.core.config import ResolvedMiroir
 from src.core.operations import OperationError
 from src.core.timeline import (
+    ALL_SOURCES,
+    MAX_CONVERSATIONS,
     MAX_EVENTS,
+    MAX_GUID,
+    MAX_MESSAGES,
     MAX_SEARCH,
+    MESSAGES,
     NO_ANALYSIS,
     NOT_CONFIGURED,
     SOURCES,
@@ -36,6 +41,7 @@ from src.core.timeline import (
     TimelineUnavailable,
     read_cursor,
     timeline_source,
+    valid_conversation_id,
 )
 
 Page = Callable[..., HTMLResponse]
@@ -215,7 +221,8 @@ def timeline_pages(
     def days(request: Request) -> Response:
         query = _parameters(request, {"from", "to"})
         start, end = _day(query.get("from"), "from"), _day(query.get("to"), "to")
-        return _answer(request, reader().days(start, end))
+        found = reader()
+        return _answer(request, found.days(start, end, found.source.sources))
 
     @api.get("/api/timeline/screen/{day}")
     def screen_day(request: Request, day: str) -> Response:
@@ -237,13 +244,16 @@ def timeline_pages(
     def events(request: Request) -> Response:
         query = _parameters(request, {"from", "to", "source", "limit", "after"})
         start, end = _time(query.get("from"), "from"), _time(query.get("to"), "to")
+        # Messages only when asked for: the default is as before it was a source.
         sources = tuple(query.get("source", ",".join(SOURCES)).split(","))
         if (
             not sources
             or len(set(sources)) != len(sources)
-            or set(sources) - set(SOURCES)
+            or set(sources) - set(ALL_SOURCES)
         ):
-            raise OperationError(f"source must be one or more of {', '.join(SOURCES)}")
+            raise OperationError(
+                f"source must be one or more of {', '.join(ALL_SOURCES)}"
+            )
         after = None
         if "after" in query:
             at, event_id = read_cursor(query["after"], (str, str))
@@ -255,6 +265,56 @@ def timeline_pages(
             ),
         )
 
+    @api.get("/api/timeline/conversations")
+    def conversations(request: Request) -> Response:
+        query = _parameters(request, {"limit", "after"})
+        after = None
+        if "after" in query:
+            at, conversation_id = read_cursor(query["after"], (str, str))
+            if not valid_conversation_id(conversation_id):
+                raise OperationError("Invalid paging cursor")
+            after = (_cursor_time(at) if at else None, conversation_id)
+        limit = _limit(query.get("limit"), 50, MAX_CONVERSATIONS)
+        return _answer(request, reader().conversations(limit, after))
+
+    @api.get("/api/timeline/conversations/{conversation_id}")
+    def conversation(request: Request, conversation_id: str) -> Response:
+        _parameters(request, set())
+        # Not an id: unknown, before any query.
+        if not valid_conversation_id(conversation_id):
+            return _error(UNKNOWN_CONVERSATION, 404)
+        found = reader().conversation(conversation_id)
+        if found is None:
+            return _error(UNKNOWN_CONVERSATION, 404)
+        return _answer(request, found)
+
+    @api.get("/api/timeline/conversations/{conversation_id}/messages")
+    def conversation_messages(request: Request, conversation_id: str) -> Response:
+        query = _parameters(request, {"limit", "before", "after", "around", "at"})
+        if not valid_conversation_id(conversation_id):
+            return _error(UNKNOWN_CONVERSATION, 404)
+        given = [name for name in ("before", "after", "around", "at") if name in query]
+        if len(given) > 1:
+            raise OperationError("Give at most one of before, after, around and at")
+        cursors = {
+            name: _message_cursor(query[name])
+            for name in ("before", "after")
+            if name in query
+        }
+        around = _plain(query.get("around"), "around")
+        if around is not None and not 1 <= len(around) <= MAX_GUID:
+            raise OperationError("around must be a message's guid")
+        at = _time(query["at"], "at") if "at" in query else None
+        limit = _limit(query.get("limit"), 100, MAX_MESSAGES)
+        found = reader().conversation_messages(
+            conversation_id, limit, around=around, at=at, **cursors
+        )
+        if found is None:
+            return _error(
+                UNKNOWN_MESSAGE if around is not None else UNKNOWN_CONVERSATION, 404
+            )
+        return _answer(request, found)
+
     @api.get("/api/timeline/search")
     def search_by_address() -> Response:
         # Search words must never be in an address: logs and history keep it.
@@ -263,7 +323,7 @@ def timeline_pages(
     @api.post("/api/timeline/search")
     async def search(request: Request) -> Response:
         fields = await _json_fields(request)
-        found = await run_in_threadpool(search_fields, reader, fields)
+        found = await run_in_threadpool(search_fields, reader, fields, SEARCH_KINDS)
         return _answer(request, found)
 
     router.include_router(api)
@@ -274,7 +334,12 @@ USE_POST = (
     "Search with POST, the words in the body: search words are never sent in an"
     " address, where logs and the browser's history would keep them."
 )
-SEARCH_FIELDS = {"q", "kind", "app", "from", "to", "limit", "before"}
+SEARCH_FIELDS = {"q", "kind", "app", "conversation", "from", "to", "limit", "before"}
+# The kinds of search: the pages search the screen and the browser only.
+PAGE_KINDS = ("screen", "browser")
+SEARCH_KINDS = (*PAGE_KINDS, MESSAGES)
+UNKNOWN_CONVERSATION = "Unknown conversation"
+UNKNOWN_MESSAGE = "Unknown message in this conversation"
 MAX_SEARCH_BODY = 8192
 
 
@@ -320,9 +385,12 @@ async def _json_fields(request: Request) -> dict[str, str]:
 
 
 def search_fields(
-    reader: Callable[[], TimelineReader], fields: Mapping[str, str]
+    reader: Callable[[], TimelineReader],
+    fields: Mapping[str, str],
+    kinds: tuple[str, ...] = PAGE_KINDS,
 ) -> dict[str, Any]:
-    """A search from its fields (strings), for the JSON route and the page."""
+    """A search from its fields (strings), for the JSON route and the page. A
+    message search needs the analysis's messages input (503 without)."""
     words = _plain(fields.get("q"), "q")
     if words is None:
         raise OperationError("Missing field: q")
@@ -332,6 +400,18 @@ def search_fields(
     limit = _limit(fields.get("limit"), 20, MAX_SEARCH)
     before = fields.get("before") or None
     app = _plain(fields.get("app") or None, "app")
+    conversation = fields.get("conversation") or None
+    if kind not in kinds:
+        raise OperationError(f"kind must be {', '.join(kinds[:-1])} or {kinds[-1]}")
+    if conversation is not None and kind != MESSAGES:
+        raise OperationError("conversation filters message results only")
+    if kind == MESSAGES:
+        if app is not None:
+            raise OperationError("app filters screen results only")
+        if conversation is not None and not valid_conversation_id(conversation):
+            raise OperationError("conversation must be a conversation id")
+        sent = _message_cursor(before) if before else None
+        return reader().search_messages(words, conversation, start, end, limit, sent)
     if kind == "screen":
         if app is not None and not 1 <= len(app) <= 255:
             raise OperationError("app must be a bundle identifier")
@@ -348,7 +428,20 @@ def search_fields(
             at, event_id = read_cursor(before, (str, str))
             visit = (_cursor_time(at), event_id)
         return reader().search_browser(words, start, end, limit, visit)
-    raise OperationError("kind must be screen or browser")
+    raise OperationError(f"kind must be {', '.join(kinds[:-1])} or {kinds[-1]}")
+
+
+def _message_cursor(value: str) -> tuple[datetime, str]:
+    """A message's place, (sent_at, guid), from a cursor this server wrote."""
+    at, guid = read_cursor(value, (str, str))
+    if len(guid) > MAX_GUID:
+        raise OperationError("Invalid paging cursor")
+    moment = _cursor_time(at)
+    # A page's neighbour sits a microsecond past it; the last representable
+    # times have none, and no message is sent there.
+    if moment.year > 9998:
+        raise OperationError("Invalid paging cursor")
+    return moment, guid
 
 
 def _cursor_time(value: str) -> datetime:
