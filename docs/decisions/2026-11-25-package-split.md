@@ -10,7 +10,7 @@ created: 2026-11-25T22:04
 
 # Miroir is split into parts inside one distribution
 
-Status: accepted, 2026-11-25, with the pull request that added this page. Each
+Status: accepted, 2026-11-25, with pull request #58. Each
 step below cites it. [Architecture](../architecture.md) describes the code as it
 is and changes with each step.
 
