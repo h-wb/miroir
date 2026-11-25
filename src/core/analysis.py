@@ -91,7 +91,7 @@ def analyses_linking(
 
 
 def find_analysis(miroir: ResolvedMiroir, analysis_id: str) -> ResolvedAnalysis:
-    from src.core.operations import OperationError
+    from src.kernel.errors import OperationError
 
     for analysis in miroir.analyses:
         if analysis.id == analysis_id:

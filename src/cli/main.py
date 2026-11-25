@@ -336,8 +336,8 @@ def _timeline_database() -> "TimelineDatabase | None":
 def _orchestrate(
     args: argparse.Namespace, miroir: Any, store: Any, secrets: Any
 ) -> int:
-    from src.core.operations import OperationError
     from src.core.service import MiroirService
+    from src.kernel.errors import OperationError
 
     store.migrate()
     orchestrator = _orchestrator(args, store, miroir)
@@ -383,9 +383,9 @@ def _orchestrate(
 def _credentials(args: argparse.Namespace, store: Any, secrets: Any) -> int:
     import getpass
 
-    from src.core.operations import OperationError
     from src.core.secrets import SecretResolutionError
     from src.core.service import InlineExecutor, MiroirService
+    from src.kernel.errors import OperationError
 
     store.migrate()
     if args.command == "rotate-secrets":
@@ -417,7 +417,7 @@ def _credentials(args: argparse.Namespace, store: Any, secrets: Any) -> int:
 def _with_store(
     args: argparse.Namespace, miroir: Any, store: Any, ids: list, secrets: Any
 ) -> int:
-    from src.core.operations import OperationError
+    from src.kernel.errors import OperationError
 
     store.migrate()
     selected = [args.connection] if getattr(args, "connection", None) else ids
@@ -534,8 +534,8 @@ def _backfill_here(
     args: argparse.Namespace, miroir: Any, store: Any, common: dict[str, Any]
 ) -> Any:
     from src.core.media import backfill_options
-    from src.core.operations import OperationError
     from src.core.runner import execute_operation, request_derive
+    from src.kernel.errors import OperationError
 
     if miroir.media is None:
         raise OperationError("Media is not configured")

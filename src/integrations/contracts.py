@@ -10,8 +10,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from src.core.models import StrictModel
 from src.integrations.delivery import DeliveryMethod
+from src.kernel.models import StrictModel
 
 
 @dataclass(frozen=True)

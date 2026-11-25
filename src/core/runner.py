@@ -33,9 +33,9 @@ from src.core.operations import (
     ConnectionBusy,
     MetadataStore,
     Operation,
-    OperationError,
     Origin,
 )
+from src.kernel.errors import OperationError
 
 if TYPE_CHECKING:
     from src.core.media import ObjectStore

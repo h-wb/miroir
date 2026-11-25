@@ -20,6 +20,8 @@ from typing import Any, Literal
 
 import sqlalchemy as sa
 
+from src.kernel.errors import OperationError
+
 SCHEMA_VERSION = 8
 POSTGRES_SCHEMA = "miroir_meta"
 LOCK_POLL_SECONDS = 1.0
@@ -255,10 +257,6 @@ class PendingMedia:
     stored_at: datetime
     attempts: int
     retry: bool = False
-
-
-class OperationError(RuntimeError):
-    """An operation cannot be registered, adopted, or started."""
 
 
 class OrchestratorUnavailable(OperationError):

@@ -23,7 +23,6 @@ from starlette.formparsers import MultiPartException
 
 from src.core import timeline
 from src.core.config import ResolvedMiroir
-from src.core.operations import OperationError
 from src.core.timeline import (
     MAX_QUERY,
     MEDIA_NO_THUMBNAILS,
@@ -41,6 +40,7 @@ from src.core.timeline import (
     timeline_source,
     valid_conversation_id,
 )
+from src.kernel.errors import OperationError
 from src.web.conversations import thread_url
 from src.web.timeline import (
     NO_STORE,

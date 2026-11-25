@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 
 from src.cli.main import main
 from src.core.config import ConfigurationConflict, ConfigurationError, parse_miroir
-from src.core.operations import MetadataStore, OperationError
+from src.core.operations import MetadataStore
 from src.core.runner import IngestionFailed, run_connection
 from src.core.secrets import (
     SecretBox,
@@ -31,6 +31,7 @@ from src.core.secrets import (
     make_resolver,
 )
 from src.core.service import InlineExecutor, MiroirService
+from src.kernel.errors import OperationError
 from src.web.app import create_app
 from tests.test_operations import listens_response
 

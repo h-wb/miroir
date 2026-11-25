@@ -26,7 +26,7 @@ from starlette.concurrency import run_in_threadpool
 
 from src.core import media
 from src.core.config import ConfigurationConflict, ConfigurationError
-from src.core.operations import OperationError, OrchestratorUnavailable
+from src.core.operations import OrchestratorUnavailable
 from src.core.reports import (
     INVALID_REPORT,
     MAX_REPORT_BYTES,
@@ -43,6 +43,7 @@ from src.core.timeline import (
     timeline_source,
 )
 from src.integrations.validation import InvalidArtifact
+from src.kernel.errors import OperationError
 from src.web.metrics import render_metrics
 
 SESSION_COOKIE = "miroir_session"

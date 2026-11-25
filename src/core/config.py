@@ -20,9 +20,9 @@ from pydantic import (
     model_validator,
 )
 
-from src.core.models import DatabaseIdentifier, Identifier, SecretKey, StrictModel
 from src.integrations.contracts import IntegrationDefinition
 from src.integrations.registry import INTEGRATIONS
+from src.kernel.models import DatabaseIdentifier, Identifier, SecretKey, StrictModel
 
 if TYPE_CHECKING:
     from src.analyses.catalog import Package

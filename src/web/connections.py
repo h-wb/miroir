@@ -13,9 +13,9 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from src.core.config import ConfigurationError
-from src.core.operations import OperationError
 from src.core.secrets import SecretResolutionError
 from src.core.service import MiroirService
+from src.kernel.errors import OperationError
 from src.web.app import error_status
 
 Page = Callable[..., HTMLResponse]

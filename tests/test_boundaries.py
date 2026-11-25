@@ -6,21 +6,27 @@ from collections.abc import Iterator
 from importlib.util import resolve_name
 from pathlib import Path
 
+# The kernel is the shared vocabulary (package split, step 3): the standard
+# library and pydantic, and no other part. Connectors and analyses import it in
+# place of the control plane, which they never import.
+_KERNEL = "src.kernel"
+_KERNEL_LIBRARIES = ("pydantic", "pydantic_core", "annotated_types")
 _ALLOWED = {
-    "integrations": ("src.core.models",),
-    "analyses": ("src.core.models",),
-    "core": ("src.integrations", "src.analyses"),
+    "kernel": (),
+    "integrations": (_KERNEL,),
+    "analyses": (_KERNEL,),
+    "core": (_KERNEL, "src.integrations", "src.analyses"),
     # The flow builds the worker's object store from its environment.
-    "pipelines": ("src.core", "src.adapters.s3"),
-    "adapters": ("src.core", "src.pipelines"),
-    "web": ("src.core", "src.integrations"),
-    "cli": ("src.core", "src.integrations", "src.adapters", "src.web"),
+    "pipelines": (_KERNEL, "src.core", "src.adapters.s3"),
+    "adapters": (_KERNEL, "src.core", "src.pipelines"),
+    "web": (_KERNEL, "src.core", "src.integrations"),
+    "cli": (_KERNEL, "src.core", "src.integrations", "src.adapters", "src.web"),
 }
 # The warehouse reader (decision 040): it needs nothing of the write side, and
 # only the server's transports open it; flow runs hold their own credentials.
 # It names the timeline's schema as the build does (src.core.analysis).
 _TIMELINE = "src.core.timeline"
-_TIMELINE_IMPORTS = ("src.core.config", "src.core.operations", "src.core.analysis")
+_TIMELINE_IMPORTS = (_KERNEL, "src.core.config", "src.core.analysis")
 _TIMELINE_IMPORTERS = ("src.web", "src.cli")
 # Media is never decoded in the web process, nor in the worker's own: one module
 # decodes, and it runs as a child process that nothing imports. Only the runner
@@ -40,7 +46,7 @@ def _import_names(node: ast.AST, package: str) -> Iterator[str]:
         yield from (alias.name for alias in node.names)
     elif isinstance(node, ast.ImportFrom):
         module = resolve_name("." * node.level + (node.module or ""), package)
-        # A from-import can name a submodule, e.g. `from src.core import models`.
+        # A from-import can name a submodule, e.g. `from src.kernel import models`.
         yield from (
             module if alias.name == "*" else f"{module}.{alias.name}"
             for alias in node.names
@@ -78,6 +84,13 @@ class BoundaryTests(unittest.TestCase):
                         for prefix in ("miroir_collector", "miroir_agent", "src.agent")
                     ):
                         errors.append(f"{location}: server must not import {name}")
+                    elif (
+                        part == "kernel"
+                        and not name.startswith("src.")
+                        and name.split(".")[0] not in sys.stdlib_module_names
+                        and not any(_within(name, lib) for lib in _KERNEL_LIBRARIES)
+                    ):
+                        errors.append(f"{location}: kernel may not import {name}")
                     elif part in _ALLOWED and name.startswith("src."):
                         allowed = (f"src.{part}", *_ALLOWED[part])
                         if not any(_within(name, prefix) for prefix in allowed):

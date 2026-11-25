@@ -24,15 +24,11 @@ from sqlalchemy.exc import OperationalError
 from src.cli.main import main
 from src.core.artifacts import receive_file, submit_artifact
 from src.core.config import parse_miroir
-from src.core.operations import (
-    SCHEMA_VERSION,
-    MetadataStore,
-    OperationError,
-    schema_info,
-)
+from src.core.operations import SCHEMA_VERSION, MetadataStore, schema_info
 from src.core.runner import AlreadyImported, IngestionFailed, import_artifact
 from src.integrations.registry import INTEGRATIONS
 from src.integrations.validation import InvalidArtifact
+from src.kernel.errors import OperationError
 from tests.test_miroir import example
 
 CUTOFF = "2026-06-04"  # from examples/miroir.json

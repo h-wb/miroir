@@ -18,7 +18,6 @@ from fastapi.testclient import TestClient
 
 from src.core.analysis import analysis_plan
 from src.core.config import parse_miroir
-from src.core.operations import OperationError
 from src.core.service import InlineExecutor, MiroirService
 from src.core.timeline import (
     MAX_EVENT_TEXT,
@@ -32,6 +31,7 @@ from src.core.timeline import (
     TimelineUnavailable,
     timeline_source,
 )
+from src.kernel.errors import OperationError
 from src.web.app import create_app
 from tests.fakes import FakeObjectStore
 from tests.test_messages_models import (

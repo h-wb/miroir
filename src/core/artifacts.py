@@ -16,7 +16,8 @@ from typing import Any
 from pydantic import ValidationError
 
 from src.core.config import ResolvedConnection, ResolvedMiroir
-from src.core.operations import ArtifactOrigin, MetadataStore, OperationError
+from src.core.operations import ArtifactOrigin, MetadataStore
+from src.kernel.errors import OperationError
 
 CHUNK = 1024 * 1024
 

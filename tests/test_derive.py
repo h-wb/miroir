@@ -37,15 +37,10 @@ from src.cli.main import main
 from src.core.config import load_miroir
 from src.core.derive import Decoder, DecoderLost, DecoderUnavailable, _Lost, _write
 from src.core.media import ObjectTooLarge
-from src.core.operations import (
-    ConnectionBusy,
-    MetadataStore,
-    OperationError,
-    media_pending,
-    operations,
-)
+from src.core.operations import ConnectionBusy, MetadataStore, media_pending, operations
 from src.core.runner import IngestionFailed, execute_operation, request_derive
 from src.core.service import MiroirService
+from src.kernel.errors import OperationError
 from src.web.app import create_app
 from tests.fakes import FakeObjectStore
 from tests.postgres import start_postgres

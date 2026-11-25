@@ -16,9 +16,10 @@ from unittest.mock import patch
 from src.adapters.prefect import PrefectOrchestrator
 from src.cli.main import main
 from src.core.config import ConfigurationError, load_miroir, parse_miroir
-from src.core.operations import MetadataStore, OperationError, OrchestratorUnavailable
+from src.core.operations import MetadataStore, OrchestratorUnavailable
 from src.core.runner import request_sync
 from src.core.service import MiroirService
+from src.kernel.errors import OperationError
 from tests.test_miroir import example
 
 POOL = "test-pool"

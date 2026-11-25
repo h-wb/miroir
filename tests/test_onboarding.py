@@ -6,8 +6,8 @@ import re
 from dataclasses import replace
 from unittest.mock import Mock, patch
 
-from src.core.operations import OperationError
 from src.integrations.registry import INTEGRATIONS
+from src.kernel.errors import OperationError
 from tests.test_artifacts import export
 from tests.test_web import BEARER, WebFixture
 

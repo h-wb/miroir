@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from src.core.config import ResolvedConnection
-from src.core.operations import OperationError
+from src.kernel.errors import OperationError
 
 
 def _credentials(connection: ResolvedConnection, credentials: dict[str, str]) -> None:

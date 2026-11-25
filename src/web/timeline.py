@@ -23,7 +23,6 @@ from starlette.concurrency import run_in_threadpool
 
 from src.core import timeline
 from src.core.config import ResolvedMiroir
-from src.core.operations import OperationError
 from src.core.timeline import (
     ALL_SOURCES,
     MAX_CONVERSATIONS,
@@ -43,6 +42,7 @@ from src.core.timeline import (
     timeline_source,
     valid_conversation_id,
 )
+from src.kernel.errors import OperationError
 
 Page = Callable[..., HTMLResponse]
 NO_STORE = "private, no-store"

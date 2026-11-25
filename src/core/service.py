@@ -28,13 +28,9 @@ from src.core.config import (
     load_miroir,
     save_miroir,
 )
-from src.core.operations import (
-    ArtifactOrigin,
-    ConnectionBusy,
-    MetadataStore,
-    OperationError,
-)
+from src.core.operations import ArtifactOrigin, ConnectionBusy, MetadataStore
 from src.core.secrets import SecretResolutionError, SecretStore, make_resolver
+from src.kernel.errors import OperationError
 
 REPO = Path(__file__).resolve().parents[2]
 # A request with no run after this long was never handed to an executor.

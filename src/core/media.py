@@ -12,8 +12,8 @@ from typing import Any, ParamSpec, Protocol, TypeVar
 from unicodedata import category
 
 from src.core.config import MediaConfig, ResolvedConnection
-from src.core.operations import OperationError
 from src.integrations.contracts import MediaKind
+from src.kernel.errors import OperationError
 
 MAX_OBJECTS = 500
 # Thumbnail sizes, by width (decision 040).

@@ -15,11 +15,12 @@ from src.analyses.catalog import PACKAGES
 from src.core.analysis import analysis_plan
 from src.core.artifacts import submit_artifact
 from src.core.config import ConfigurationError, parse_miroir
-from src.core.operations import MetadataStore, OperationError
+from src.core.operations import MetadataStore
 from src.core.sources import open_fetch
 from src.integrations.checks import CheckFailed
 from src.integrations.registry import INTEGRATIONS
 from src.integrations.validation import InvalidArtifact
+from src.kernel.errors import OperationError
 
 SECRET = {"provider": "env", "key": "UNUSED"}
 

@@ -25,7 +25,7 @@ from sqlalchemy.exc import ArgumentError, DBAPIError, SQLAlchemyError
 
 from src.core.analysis import analysis_plan
 from src.core.config import ConfigurationError, ResolvedAnalysis, ResolvedMiroir
-from src.core.operations import OperationError
+from src.kernel.errors import OperationError, Timeout, Unavailable
 
 log = logging.getLogger(__name__)
 
@@ -198,11 +198,11 @@ TIMED_OUT = (
 _SCHEMA = re.compile(r"[a-z][a-z0-9_]{0,62}")
 
 
-class TimelineUnavailable(OperationError):
+class TimelineUnavailable(Unavailable):
     """The timeline cannot answer now: not configured, not built, unreachable."""
 
 
-class TimelineTimeout(OperationError):
+class TimelineTimeout(Timeout):
     """A query reached the session's time limit."""
 
 
