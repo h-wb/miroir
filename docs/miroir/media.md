@@ -2,7 +2,7 @@
 area: "[[Homelab]]"
 categories:
   - "[[Resources]]"
-reviewed: 2026-11-24
+reviewed: 2026-11-25
 summary: How Miroir keeps the files rows point at, signs links to them, makes thumbnails and records them in media_objects, and how earlier files are backfilled.
 topics:
   - "[[Warehouse]]"
@@ -65,14 +65,24 @@ its files are found present.
 
 ## Thumbnails and `media_objects`
 
-For a kind that names extensions to make thumbnails of, so far only
-`screenshots`, the worker makes two WebP copies of each stored image, 360 and
+For a kind that names extensions to make thumbnails of, `screenshots` and
+`attachments`, the worker makes two WebP copies of each stored image, 360 and
 1280 pixels wide, and records every stored file of the kind in the warehouse
-(decision 040). A kind that names none, such as `attachments` today (HOMEL-6), is not
-derived: no thumbnails and no records.
+(decision 040). A kind that names none is not derived: no thumbnails and no
+records.
 
-- **Names.** `prefix / connection / screenshots.w360 / <key>.webp` and
-  `… / screenshots.w1280 / <key>.webp`. An image narrower than a size keeps its
+| Kind | Thumbnails of | Read up to |
+| --- | --- | --- |
+| `screenshots` | `.jpeg`, `.jpg`, `.png` | 20 MB, the kind's size |
+| `attachments` | `.heic`, `.heif`, `.jpeg`, `.jpg`, `.png`, `.gif`, `.webp`, `.tiff`, `.tif`, `.bmp` | 50 MB; the kind accepts 5,000 MB |
+
+Every other file of the kind (a HEIC screenshot; an attachment's video, audio,
+PDF or other document) gets a row with `unsupported` and is not read. A file over the size read is recorded
+`too_large` from the size it was stored with, without being read or decoded
+(`MediaKind.thumbnail_max_bytes`).
+
+- **Names.** `prefix / connection / <kind>.w360 / <key>.webp` and
+  `… / <kind>.w1280 / <key>.webp`. An image narrower than a size keeps its
   width. A thumbnail's kind is not a kind: it can be neither read nor uploaded by
   name.
 - **When.** When the server answers `stored` to a confirmation (or `present` to
@@ -93,10 +103,18 @@ derived: no thumbnails and no records.
   undumpable first, so the child cannot read its environment through `/proc`;
   the child still has the network and the mounted volumes. Each fresh child first
   makes thumbnails of a tiny built-in image for every decoder its kinds use (JPEG
-  and PNG for screenshots) and of the costliest image the bounds accept: about
+  and PNG for screenshots; HEIF, GIF, WebP, TIFF and BMP too for attachments)
+  and of the costliest image the bounds accept: about
   1.4 s and 530 MB, once per run and again after each lost file. If that check
   fails, the run stops as failed ("The image decoder could not start or failed
-  its check") and the files stay queued, uncharged.
+  its check") and the files stay queued, uncharged. A file is read only by the
+  decoder of its key's extension, whatever its bytes claim: JPEG bytes named
+  `.png` are `unreadable`. EXIF orientation is applied and only the first frame
+  of an animation is used; no EXIF or XMP is written into a thumbnail, so a
+  photo's place is not kept. HEIC and HEIF are read by pillow-heif (libheif),
+  registered in the child only, on one thread, primary image only: libheif
+  applies the file's own rotation (`irot`, `imir`) and the EXIF orientation is
+  then ignored, so a photo is turned once.
 - **Records.** One row per stored file in `media_objects`, in the connection's
   own dataset, written by a dlt pipeline of its own (`<pipeline_name>_media`),
   merged on `(connection_id, kind, key)`. Rows are written every 100 files; a run
@@ -109,7 +127,7 @@ derived: no thumbnails and no records.
 | `content_type` | From the key's extension, as when it was uploaded |
 | `stored_at` | When the server confirmed it; for a backfilled file, the bucket's modification time |
 | `thumbnail_w360`, `thumbnail_w1280` | Whether that size exists |
-| `thumbnail_status` | `made`, or why there is none: `unsupported` (a type without thumbnails: video, HEIC, PDF), `too_large` (over the kind's size, 40 million pixels, 16,384 on a side, a side 16 times the other, or the decoder's memory), `unreadable` (truncated, corrupt or not what its name says), `failed` (its decode did not finish three times while the decoder worked) |
+| `thumbnail_status` | `made`, or why there is none: `unsupported` (a type without thumbnails: a HEIC screenshot, video, audio, PDF and other documents), `too_large` (over the size read for the kind, above, 40 million pixels, 16,384 on a side, a side 16 times the other, or the decoder's memory), `unreadable` (truncated, corrupt or not what its name says), `failed` (its decode did not finish three times while the decoder worked) |
 | `derived_at`, `derive_version` | When the row was written, and by which version of the thumbnail code |
 
 A file that has a row is not read again unless queued again, whatever its status.
@@ -141,6 +159,8 @@ Files stored before thumbnails existed are found by walking the bucket under
 ```bash
 # Where flow runs can be requested (needs the deployment section); prints the operation ID.
 uv run --locked pipelines-miroir media-backfill screen screenshots --limit 10000
+# Apple Messages attachments of a connection named `messages`.
+uv run --locked pipelines-miroir media-backfill messages attachments --limit 10000
 ```
 
 `--limit` (default 10,000, at most 1,000,000) is how many stored files this run
@@ -150,7 +170,11 @@ derived are recognised from `media_objects` without being read, and a finished
 walk starts again from the beginning. A backfill always asks for a run of its
 own, so it also unsticks a queue whose run Prefect lost. Measured on a
 development machine: 0.16 to 0.19 s per JPEG screenshot, up to 0.37 s per large
-PNG.
+PNG for a whole run. Decoding alone, on generated 12-megapixel photos (4032 ×
+3024): 0.08 to 0.11 s per JPEG, 0.22 to 0.25 s per PNG, 0.34 to 0.43 s per
+HEIC (tiled in 512-pixel squares as an iPhone writes them, or not), about 1 s
+for a 40-megapixel HEIC at a peak of 310 to 390 MB; a video or document costs
+no decode.
 
 `--retry` also queues the kind's files recorded as `failed`, and
 `--retry failed,unreadable` those recorded as `unreadable` too, to be derived

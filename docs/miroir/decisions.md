@@ -65,6 +65,7 @@ amendment under it. Older entries say "workspace" (renamed Miroir by 014) and
 | | [040 amendment — The Day view and search pages (phase 1c, part 2)](#040-amendment--the-day-view-and-search-pages-phase-1c-part-2) | Accepted |
 | | [040 amendment — The media upgrade on the warehouse (2026-11-23)](#040-amendment--the-media-upgrade-on-the-warehouse-2026-11-23) | Accepted |
 | | [040 amendment — Conversations data (phase 2a)](#040-amendment--conversations-data-phase-2a) | Accepted |
+| | [040 amendment — Attachment thumbnails (phase 2b)](#040-amendment--attachment-thumbnails-phase-2b) | Accepted |
 | | [040 amendment — Conversations in the API (phase 2c, part 1)](#040-amendment--conversations-in-the-api-phase-2c-part-1) | Accepted |
 | | [040 amendment — The conversation pages (phase 2c, part 2)](#040-amendment--the-conversation-pages-phase-2c-part-2) | Accepted |
 | [041](#041--a-messages-analysis-conversations-by-identifier-no-text) | A messages analysis: conversations by identifier, no text | Accepted |
@@ -2985,6 +2986,66 @@ Consequences:
   chats and contacts whole and scan `messages`' indexes, which grow with the
   history (measured above).
 
+### 040 amendment — Attachment thumbnails (phase 2b)
+
+Status: accepted, 2026-11-25, with pull request #55. The Apple Messages `attachments` kind is
+derived like `screenshots`: two WebP thumbnails per image and one
+`media_objects` row per stored file, which the messages models of phase 2a
+already join. How a file is read is in [Media](media.md#thumbnails-and-media_objects).
+
+**Which files.** Thumbnails of `.heic`, `.heif`, `.jpeg`, `.jpg`, `.png`,
+`.gif`, `.webp`, `.tiff`, `.tif` and `.bmp`. Every other attachment (video,
+audio, PDF and other documents) gets a row with `unsupported` and is never read.
+Video keeps the redirect to a signed link *(conservative: a video's first frame
+needs a video decoder, another native library for untrusted input)*.
+
+**HEIC with pillow-heif, in the child only.** Phase 1b left HEIC out because no
+screenshot is one; most photos in Messages are. `pillow-heif` (libheif with
+libde265) is added and its opener is registered in `src/core/thumbnails.py`
+alone, so it runs inside the same sandbox as every decoder and neither the web
+server nor the worker's own process loads it (the boundary tests list it as an
+image library). It reads the primary image only: no embedded thumbnails, depth
+maps or auxiliary images *(conservative: less untrusted data parsed)*, on one
+thread, so its memory under the address-space limit is as predictable as the
+other decoders' (four threads were about 25% faster on a tiled 12-megapixel
+photo). libheif applies the file's own rotation and mirroring (`irot`, `imir`)
+and pillow-heif then reports EXIF orientation 1, so a photo whose EXIF also says
+it is turned is turned once; a test checks that against the same picture as a
+JPEG. The check image of the HEIF decoder is an 8 × 8 HEIC made once with
+pillow-heif. A HEIC screenshot stays `unsupported`: the screenshots kind is not
+changed, so none of its rows is derived again. A 40-megapixel HEIC peaked at
+310 to 390 MB in the child, under the check's 540 MB, so the check still covers
+the costliest image the bounds accept.
+
+**A size bound of its own.** The kind accepts files up to 5,000 MB, for videos.
+The worker reads at most 50 MB of one to make thumbnails
+(`MediaKind.thumbnail_max_bytes`; unset, as for screenshots, it is the kind's
+size). A file queued with a larger size is recorded `too_large` without being
+read; one that grew past it is refused by the read itself. *(Conservative: the
+worker holds a file in memory to hand it to the decoder, and a photo is far
+smaller.)*
+
+**One decoder per file.** A file is read only by the decoder of its key's
+extension, not by every decoder of its kind as in phase 1b: with eight image
+extensions, a file named `.png` would otherwise reach the GIF, TIFF and BMP
+decoders too *(conservative)*. For screenshots this changes nothing but a file
+whose bytes do not match its name, which is now `unreadable`; no row is derived
+again and `DERIVE_VERSION` stays 1.
+
+Consequences:
+
+- Confirmed attachments are queued and derived; earlier ones need a backfill
+  (`media-backfill <connection> attachments`).
+- A derive run of a Messages connection checks seven decoders (HEIF, JPEG,
+  PNG, GIF, WebP, TIFF, BMP) when its child starts: about 0.9 s and 540 MB on
+  the development machine of this slice. Most of it is the costliest image the
+  bounds accept, so seven decoders cost about what two do (phase 1b measured
+  1.4 s and 530 MB for screenshots on another machine).
+- Measured on generated 12-megapixel photos on a development machine, decoding
+  alone: 0.08 to 0.11 s per JPEG, 0.22 to 0.25 s per PNG, 0.34 to 0.43 s per
+  HEIC; about 1 s per 40-megapixel HEIC.
+- The flow-run image carries libheif and libde265 in the pillow-heif wheel.
+
 ### 040 amendment — Conversations in the API (phase 2c, part 1)
 
 Status: accepted, 2026-11-25, with pull request #56. What reading the phase 2a tables from the server had to decide. Queries
@@ -3179,11 +3240,9 @@ emoji for a tapback with its word for assistive technology, "emoji" or
 "sticker" as words (041 has no emoji for them), and who reacted.
 
 Known limits:
-- The worker does not derive attachments yet (phase 1b: `MediaKind.thumbnails`
-  is empty for them), so no attachment has a `media_objects` row: each shows
-  "File state not known yet", and the media route serves none of their
-  thumbnails. The thumbnail and stored tiles are what the page shows once the
-  worker derives them.
+- An attachment the worker has not recorded yet (queued, or stored before a
+  backfill) shows "File state not known yet" until the next timeline build after
+  its derive run (phase 2b).
 - A thread keeps every page it loaded in the page; a very long reading session
   grows it.
 - A reply quotes its message only when that message is on the page as served;

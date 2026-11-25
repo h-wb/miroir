@@ -1,6 +1,7 @@
 """WebP thumbnails of untrusted image bytes (decision 040).
 
-This is the only module that imports an image library, and nothing in `src`
+This is the only module that imports an image library (Pillow, and pillow-heif
+for HEIC), and nothing in `src`
 imports it: the derive run starts it as its own process (`python -m
 src.core.thumbnails`), with an address-space limit and no credentials in its
 environment, and sends it one file at a time. A crash, a kill or a decode that
@@ -17,6 +18,16 @@ from io import BytesIO
 from typing import BinaryIO, Literal
 
 from PIL import Image, ImageOps
+from pillow_heif import register_heif_opener
+
+# HEIC and HEIF (photos from an iPhone), decoded by libheif. Registered here, in
+# the child, and nowhere else (decision 040). Only the primary image is read: no
+# embedded thumbnails, depth maps or auxiliary images. libheif applies the file's
+# own rotation and mirroring (`irot`, `imir`) and pillow-heif then reports EXIF
+# orientation 1, so the image is turned once.
+register_heif_opener(
+    thumbnails=False, depth_images=False, aux_images=False, decode_threads=1
+)
 
 # About an 8K screen with room to spare. A JPEG decodes at a reduced scale.
 MAX_PIXELS = 40_000_000

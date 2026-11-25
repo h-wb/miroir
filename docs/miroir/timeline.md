@@ -262,9 +262,8 @@ scrubber from the API (`static/timeline-core.js`, tested with `node --test`, and
   name, type and size that opens the file from storage, so a video streams from
   there; "File state not known yet" with no record of it; "Not available" for a
   file that was never stored. A thumbnail box has a fixed size, so one that
-  loads late moves nothing. The worker does not derive attachments today (the
-  `attachments` kind names no thumbnail extensions), so no attachment has a
-  record or a thumbnail and each shows "File state not known yet".
+  loads late moves nothing. An attachment shows its thumbnail or tile after the
+  first timeline build that follows its derive run ([Media](media.md)).
 - An htmx request made after the login expired gets `HX-Redirect` to the login.
 - Up to 760 pixels wide everything is one column: the image, the text, the
   lanes, the slider, the calendar; lanes and slider are taller for a finger. A

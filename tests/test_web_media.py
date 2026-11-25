@@ -227,11 +227,37 @@ class WebMediaBytesTests(WebMediaTests):
             + ["screen/screenshots.w1280/dir/a.jpg.webp"] * 5,
         )
 
+    def test_attachment_thumbnails_are_copied_as_screenshots_are(self):
+        self.objects.add("phone/attachments.w360/m/photo.jpeg.webp", b"small")
+        self.objects.add("phone/attachments.w1280/m/photo.jpeg.webp", b"larger")
+        for size, body in (("360", b"small"), ("1280", b"larger")):
+            with self.subTest(size=size):
+                response = self.client.get(
+                    f"/media/phone/attachments/m/photo.jpeg?size={size}",
+                    headers=self.admin,
+                )
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.content, body)
+                self.assertEqual(response.headers["content-type"], "image/webp")
+                self.assertEqual(response.headers["x-content-type-options"], "nosniff")
+                self.assertEqual(
+                    response.headers["cache-control"],
+                    "private, max-age=31536000, immutable",
+                )
+                self.assertEqual(response.headers["etag"], f'"{len(body)}"')
+        self.assertEqual(
+            self.objects.gets,
+            [
+                "phone/attachments.w360/m/photo.jpeg.webp",
+                "phone/attachments.w1280/m/photo.jpeg.webp",
+            ],
+        )
+
     def test_a_missing_thumbnail_is_404_and_bad_requests_are_refused(self):
         for url, status in (
             ("/media/screen/screenshots/dir/b.jpg?size=360", 404),
-            # A kind without thumbnails (attachments, until the conversations phase).
-            ("/media/phone/attachments/a.jpg?size=360", 404),
+            # An attachment the worker made no thumbnail of (a video, say).
+            ("/media/phone/attachments/clip.mov?size=360", 404),
             # The derived kind is not a kind: neither read nor written by name.
             ("/media/screen/screenshots.w360/dir/a.jpg.webp", 404),
             ("/media/screen/screenshots.w360/dir/a.jpg.webp?size=360", 404),
