@@ -3157,7 +3157,7 @@ Known limits:
 
 ### 040 amendment — The conversation pages (phase 2c, part 2)
 
-Status: accepted, 2026-11-25. What the pages on part 1's routes had to decide:
+Status: accepted, 2026-11-25, with pull request #57. What the pages on part 1's routes had to decide:
 the conversation list and a thread, the Messages kind of search and the Day
 view's Messages lane. *(conservative)* marks the choices that touched privacy,
 correctness or cost. How to use them is in [Timeline](timeline.md#the-pages).
