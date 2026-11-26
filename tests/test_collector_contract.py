@@ -22,6 +22,7 @@ import sqlalchemy as sa
 import uvicorn
 
 from src.control.operations import MetadataStore, collector_reports
+from src.control.reports import parse_report
 from src.control.service import InlineExecutor, MiroirService
 from src.integrations.apple_messages import DEFINITION as APPLE_MESSAGES
 from src.integrations.apple_messages import formats as apple_formats
@@ -321,6 +322,39 @@ class AppleMessagesContractTests(unittest.TestCase):
             )
             self.assertEqual(second.counts["masked"], {"assignment": 1, "token": 2})
             self.assertNotIn(token, gzip.decompress(path.read_bytes()).decode())
+
+
+@unittest.skipIf(sys.version_info < (3, 12), "collector requires Python 3.12")
+class CollectorReportContractTests(unittest.TestCase):
+    def test_a_report_with_many_blanked_columns_is_accepted(self):
+        collector = Path(__file__).resolve().parents[1] / "collector"
+        with patch.object(sys, "path", [str(collector), *sys.path]):
+            from miroir_collector.runner import Outcome, Result
+
+        blanked = {f"message_column_{n:02}": n + 1 for n in range(50)}
+        rows = Result(Outcome.DELIVERED, {"message": 1, "blanked": blanked}).report()
+        report = parse_report(
+            json.dumps(
+                {
+                    "version": 1,
+                    "collector": "0.0.0",
+                    "source": "apple_messages",
+                    "started_at": "2026-01-20T00:00:00Z",
+                    "finished_at": "2026-01-20T00:00:01Z",
+                    "rows": rows,
+                    "media": None,
+                    "pending": False,
+                    "unreported": 0,
+                }
+            ).encode()
+        )
+        counted = report["rows"]["counts"]["blanked"]
+        # The 39 largest, and the other eleven summed.
+        self.assertEqual(len(counted), 40)
+        self.assertEqual(counted["message_column_49"], 50)
+        self.assertNotIn("message_column_10", counted)
+        self.assertEqual(counted["other"], sum(range(1, 12)))
+        self.assertEqual(sum(counted.values()), sum(blanked.values()))
 
 
 @unittest.skipIf(sys.version_info < (3, 12), "collector requires Python 3.12")

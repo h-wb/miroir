@@ -19,6 +19,24 @@ from .sources.base import Collected, Cursor, Media, Window
 from .state import Pending, Section, State, StateError, StatusEntry
 from .transport import Client, Receipt, ReportStatus
 
+# Miroir refuses a report holding a count map of more entries than this.
+_REPORT_ENTRIES = 40
+
+
+def _bounded(counts: dict[str, Any]) -> dict[str, Any]:
+    """Counts as a report holds them: a nested map of more than _REPORT_ENTRIES
+    keeps its largest entries and sums the rest under `other`."""
+    bounded: dict[str, Any] = {}
+    for key, value in counts.items():
+        if isinstance(value, dict) and len(value) > _REPORT_ENTRIES:
+            ranked = sorted(value.items(), key=lambda item: (-item[1], item[0]))
+            kept = dict(ranked[: _REPORT_ENTRIES - 1])
+            rest = sum(n for _, n in ranked[_REPORT_ENTRIES - 1 :])
+            # A count of its own named `other` (a masking label can be) adds in.
+            value = {**kept, "other": kept.get("other", 0) + rest}
+        bounded[key] = value
+    return bounded
+
 
 class Outcome(StrEnum):
     DELIVERED = "delivered"
@@ -41,7 +59,8 @@ class Result:
             if self.failure is not None
             else dict(step=None, reason=None, http_status=self.http_status)
         )
-        return {"outcome": self.outcome.value, "counts": self.counts, **details}
+        counts = _bounded(self.counts)
+        return {"outcome": self.outcome.value, "counts": counts, **details}
 
 
 @dataclass

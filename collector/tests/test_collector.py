@@ -1203,3 +1203,15 @@ class ConfigurationMessageTests(unittest.TestCase):
             self.assertNotIn("/nowhere", output)
             self.assertNotIn("marker-value", output)
             self.assertNotIn("200001", output)
+
+
+class ReportBoundTests(unittest.TestCase):
+    def test_a_count_named_other_keeps_its_own_count(self):
+        from miroir_collector.runner import _REPORT_ENTRIES, _bounded
+
+        masked = {f"rule_{i:02d}": 1 for i in range(_REPORT_ENTRIES + 5)}
+        masked["other"] = 100
+        bounded = _bounded({"masked": masked})["masked"]
+        self.assertLessEqual(len(bounded), _REPORT_ENTRIES)
+        self.assertEqual(sum(bounded.values()), sum(masked.values()))
+        self.assertGreaterEqual(bounded["other"], 100)

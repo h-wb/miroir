@@ -2,7 +2,7 @@
 area: "[[Homelab]]"
 categories:
   - "[[Resources]]"
-reviewed: 2026-11-24
+reviewed: 2026-11-26
 summary: What the collector reads from Apple Messages on the Mac, what it sends, masks or never sends, and how Miroir merges messages, contacts and attachments.
 topics:
   - "[[Messages]]"
@@ -58,6 +58,13 @@ The collector sends gzip JSON Lines (`apple_messages_batch`, version 1). A trail
 counts the eight record kinds, unreadable
 text archives and masking replacements. The connector rejects incomplete batches
 and record counts that do not match.
+
+A value of the wrong kind is sent as null: a flag that is not 0 or 1, an integer
+column holding text or a real, a text column holding a blob. The pass counts
+these in `blanked`, by table and column (`message_date_edited`, for example), in
+its log line and its report, not in the batch's trailer. A null in the database
+is not counted. A report holds at most 40 of them; past that, the largest are
+kept and the rest are summed under `other`.
 
 Normal passes send new messages from `since` (if set), at most `max_rows`
 (default 20,000) per batch, as soon as a pass sees them. With `settle_seconds`
@@ -160,11 +167,108 @@ with another row. The connector refuses a batch holding U+0000 or a lone surroga
 Masking is not anonymisation: addresses and ordinary message text can still be
 present. Treat these tables as sensitive.
 
+## What the collector reads, and what it leaves
+
+The collector reads a fixed list of columns from each of the four tables
+(`_MESSAGE`, `_CHAT`, `_HANDLE` and `_ATTACHMENT` in
+[the source](../../collector/miroir_collector/sources/apple_messages.py)) and
+leaves out the rest. Apple does not document the layout. The columns left out
+below are the ones commonly described by open-source readers of `chat.db`. They
+change between macOS versions; a column a later version adds is left out
+unread until it is added here, and the layout fingerprint says when one
+appears. Each column left out falls under one of these reasons:
+
+- **privacy**: it holds content or a path that cannot be masked as it is;
+- **size**: what it holds is sent another way, smaller;
+- **not needed**: no model reads it, and it says nothing about a message
+  the sent columns do not;
+- **unknown**: what it means is not known.
+
+Every table's `ROWID`, and the join tables' row numbers, are read and never
+sent (they change when the database is rebuilt): links are sent as guids and
+handles.
+
+**`message`**
+
+- Sent: `guid`, `text`, `subject`, `service`, `is_from_me`, `date`,
+  `date_read`, `date_delivered`, `date_edited`, `date_retracted`, `is_read`,
+  `is_delivered`, `is_sent`, `error`, `item_type`, `group_action_type`,
+  `group_title`, `associated_message_guid`, `associated_message_type`,
+  `thread_originator_guid`, `reply_to_guid`, `balloon_bundle_id`,
+  `expressive_send_style_id`, `cache_has_attachments`, `is_audio_message`,
+  `destination_caller_id`, `was_downgraded`, `part_count`. `handle_id` is read
+  and sent as the handle's `handle` and `handle_service`.
+- Read, not sent: `attributedBody` (**size**: the archive is decoded into
+  `text` when `text` is empty; its length, with `text`'s, goes into the edit
+  digest).
+- Left out for **privacy**: `message_summary_info` (every earlier version of
+  an edited message, as archives that cannot be masked) and `payload_data`
+  (an app's or a link preview's archive: links, titles, content).
+- Left out as **not needed**: `account` and `account_guid` (which of my
+  accounts, said by `destination_caller_id`), `service_center`, `country`,
+  `version`, `type`, `replace`, `other_handle`, `cache_roomnames`,
+  `share_status`, `share_direction`, `message_action_type`, `message_source`,
+  `sort_id`, `thread_originator_part` (`associated_message_guid` names the
+  part a reaction aims at), `associated_message_range_location`,
+  `associated_message_range_length`, `associated_message_emoji`, the playback
+  columns (`is_played`, `date_played`, `time_expressive_send_played`), the
+  state flags (`is_finished`, `is_emote`, `is_empty`, `is_delayed`,
+  `is_auto_reply`, `is_prepared`, `is_system_message`, `is_service_message`,
+  `is_forward`, `is_archive`, `is_corrupt`, `is_spam`, `has_unseen_mention`,
+  `has_dd_results`, `was_data_detected`, `was_deduplicated`,
+  `was_delivered_quietly`, `did_notify_recipient`, `is_expirable`,
+  `expire_state`, `was_detonated`), the scheduling columns (`schedule_type`,
+  `schedule_state`), `syndication_ranges`, `synced_syndication_ranges` and the
+  CloudKit sync columns (`ck_sync_state`, `ck_record_id`,
+  `ck_record_change_tag`).
+- Left out as **unknown**: `is_stewie`, `is_sos`, `is_critical`,
+  `is_kt_verified`, `bia_reference_id`, `fallback_hash`,
+  `is_pending_satellite_send`, `needs_relay`, `sent_or_received_off_grid`.
+
+**`chat`**
+
+- Sent: `guid`, `chat_identifier`, `service_name`, `display_name`, `style`,
+  `room_name`, `is_archived`.
+- Left out for **privacy**: `properties` (a binary property list of the
+  chat's settings, which cannot be masked as it is).
+- Left out as **not needed**: `state`, `account_id`, `account_login`,
+  `last_addressed_handle` and `last_addressed_sim_id` (my own addresses),
+  `group_id` and `original_group_id` (`chat_identifier` names a group),
+  `is_filtered`, `successful_query`, `engram_id`, `server_change_token`,
+  `last_read_message_timestamp`, `is_blackholed`, `is_recovered`,
+  `is_deleting_incoming_messages`, `syndication_date`, `syndication_type`, and
+  the CloudKit sync columns (`ck_sync_state`, `cloudkit_record_id`).
+
+**`handle`**
+
+- Sent: `id`, `service`, `country`, `uncanonicalized_id`, `person_centric_id`.
+  That is every column but `ROWID`.
+
+**`attachment`**
+
+- Sent: `guid`, `original_guid`, `transfer_name`, `mime_type`, `uti`,
+  `total_bytes`, `is_outgoing`, `is_sticker`, `created_date`,
+  `hide_attachment`.
+- Read, not sent: `filename` (**privacy**: a path in the home folder, with
+  the user's name; it gives `media_key` its extension and the media walk its
+  file).
+- Left out for **privacy**: `user_info`, `sticker_user_info` and
+  `attribution_info` (binary archives about the file, a sticker or the app it
+  came from, which cannot be masked as they are).
+- Left out as **not needed**: `transfer_state` (whether the file is on disk;
+  the media walk looks at the disk), `start_date`, `is_commsafety_sensitive`,
+  `preview_generation_state`, `emoji_image_content_identifier`,
+  `emoji_image_short_description`, and the CloudKit sync columns
+  (`ck_sync_state`, `ck_server_change_token_blob`, `ck_record_id`).
+
+The join tables are read for their two row numbers only; `chat_message_join`'s
+`message_date` is **not needed** (the message has its date).
+
 ## Tables
 
 | Table | Key | Rows |
 |---|---|---|
-| `messages` | `guid` | Message text and metadata, raw Apple dates, and UTC `sent_at`, `read_at`, `delivered_at`, `edited_at`, `retracted_at` |
+| `messages` | `guid` | Message text and metadata, raw Apple dates, and UTC `sent_at`, `read_at`, `delivered_at`, `edited_at`, `retracted_at` (below) |
 | `chats` | `guid` | Chat identity and metadata |
 | `handles` | `id`, `service` | Addresses and services |
 | `attachments` | `guid` | Attachment metadata, with raw `created_date`, UTC `created_at`, and `media_key`, the name the file will be stored under (null when no extension is found) |
@@ -172,6 +276,16 @@ present. Treat these tables as sensitive.
 | `message_attachments` | `message_guid`, `attachment_guid` | Attachments on messages |
 | `chat_handles` | `chat_guid`, `handle`, `handle_service` | Chat participants |
 | `contacts` | `handle` | Matched address book names: `first_name`, `last_name`, `nickname`, `organization` |
+
+The raw dates are the database's own integers: seconds since 2001-01-01, or
+nanoseconds when 10^12 or more either side of 0 (an attachment's
+`created_date` is always seconds), 0 meaning no time. The connector writes the
+`*_at` columns beside them by that rule, cutting nanoseconds to microseconds,
+and leaves a time outside years 1 to 9999 null. The packages do not read those
+columns: they read the raw dates through the dbt macro `apple_time`
+(`dbt/macros/messages.sql`), the same rule, so a change to it reaches every
+row at the next build. The `*_at` columns stay for other readers (decision 038,
+amendment of 2026-11-26).
 
 One connection stands for the account. All eight tables merge on Apple's keys,
 so messages, attachments, handles and the links between messages and
@@ -200,7 +314,7 @@ What it relies on here:
 - The `handles` table is not read: a sender's address is on its message and a
   chat's people are in `chat_handles`.
 - A message's attachments have no order in what is sent; the timeline orders them
-  by `created_at`, then `transfer_name`, then guid.
+  by creation time (`created_date`), then `transfer_name`, then guid.
 - `media_objects`, written by the derive worker, joins on `media_key` with kind
   `attachments`: each attachment carries its file's thumbnail status and sizes,
   or nulls (unknown) until the worker has recorded it.

@@ -81,9 +81,12 @@ A person is a number or an address, compared the way the collector matches
 contacts: an address in lower case, a number by its digits with a leading 1
 dropped from eleven. So `Quinn@Example.com` and `quinn@example.com`, or
 `5555550113` and `+15555550113`, are one person; `handle` and `sender_handle`
-hold that form. A time before 2001-01-02 (Apple's epoch, a missing date) is no
-time: such a message has no `sent_at`, counts in its conversation's totals, and
-is absent from `daily`, from first and last times and from reply times.
+hold that form. Times are the raw Apple dates as UTC (`apple_time`: seconds or
+nanoseconds since 2001-01-01, 0 meaning none), not the connector's `*_at`
+columns ([Apple Messages](../sources/apple-messages.md#tables)). A time before
+2001-01-02 (Apple's epoch, a missing date) is no time: such a message has no
+`sent_at`, counts in its conversation's totals, and is absent from `daily`,
+from first and last times and from reply times.
 
 - **conversations**: one row per conversation. A direct conversation is its
   person, so one person over iMessage, SMS and RCS, or the same chat seen from
