@@ -5,7 +5,8 @@ The reader (`reader`, `database`), the timeline's routes and pages
 withheld check (`media`, step 7), their templates and their static files. It reads what it needs of the installation as one
 `ViewerSettings` (`settings`), built by the composition root, and imports
 nothing of the control plane. Its pages extend the base template by name; its
-static files are served under the same `/static/` paths as the shell's.
+static files are served under a prefix of their own, `/static/viewer/`
+(`part.STATIC_URL`), so a gateway can send them to the `view` process.
 """
 
 from pathlib import Path

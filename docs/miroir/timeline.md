@@ -28,7 +28,8 @@ nothing of the configuration itself: the server hands it a `ViewerSettings`
 (`settings.py`) with the reader database and, as the configuration is when it
 answers, the timeline analyses (their schema, time zone and linked inputs) and
 each connection's media kinds. Its pages extend the server's base template, and
-its scripts are served under the same `/static/` addresses as before.
+its scripts and stylesheet are served under `/static/viewer/`. `serve` runs it
+with the control plane; `view` runs it alone ([below](#running-it-alone)).
 
 ## Turning it on
 
@@ -58,6 +59,41 @@ Searches never put words in an address. They are sent with POST, on the page and
 in the API; an address with `q` is refused (400), and the server's access log
 drops every query string. Proxies in front log what they receive, which with POST
 is no longer the words.
+
+## Running it alone
+
+`view` serves the viewer in a process of its own, beside `serve
+--without-viewer`, which serves the control plane without it
+([package split](../decisions/2026-11-25-package-split.md#runtime), step 10):
+
+```bash
+uv run --locked pipelines-miroir --config miroir.json view --port 8766
+# In a container: /app/.venv/bin/python -m src.cli --config miroir.json view --host 0.0.0.0
+```
+
+It needs:
+
+- the configuration file, read only, when it answers: the `timeline` analyses,
+  their inputs, each connection's media kinds and the `media` section. A missing
+  file stops it (2); it never creates one;
+- the reader database, `MIROIR_TIMELINE_DATABASE_URL` or
+  `MIROIR_TIMELINE_DATABASE__*` as [above](#turning-it-on); without it `view`
+  stops (2);
+- `MIROIR_API_TOKEN`, the same as `serve`'s, so the `miroir_session` cookie and
+  the bearer token open both;
+- with a `media` section, `MIROIR_MEDIA_ACCESS_KEY_ID` and
+  `MIROIR_MEDIA_SECRET_ACCESS_KEY`: the same names, a read-only key in the
+  cluster.
+
+It never opens the metadata store and needs neither `MIROIR_SECRET_KEY`,
+Prefect nor the warehouse's writer. It answers `/timeline`, `/api/timeline`,
+`/media` (the view route), `/static/viewer`, and `/login`, `/logout`,
+`/healthz` and the shell's `/static` files; every admin path is 404. A login on
+it lands on `/timeline`. The gateway sends it `/timeline`, `/api/timeline`,
+`/media` and `/static/viewer`, and everything else to `serve`
+([architecture](../architecture.md#processes)). `serve --without-viewer` never
+reads `MIROIR_TIMELINE_DATABASE*`, and its header still links the timeline, from
+the configuration alone. `serve` with no option keeps running both.
 
 ## The API
 
@@ -209,7 +245,8 @@ when the analysis links a `messages` input. Every page needs the login and is
 scrubber from the API (`src/viewer/static/timeline-core.js`, tested with
 `node --test`, and `timeline.js`) and pages a conversation as you scroll
 (`conversations-core.js`, tested the same way, and `conversations.js`); the rest
-of each page works without it. All four are served at `/static/<name>`.
+of each page works without it. All four, and `conversations.css`, are served at
+`/static/viewer/<name>`.
 
 - `/timeline` opens the latest day with frames or visits in the last 400 days, or
   today. Without a reader or a timeline analysis it says why (503), as every

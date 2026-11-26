@@ -1,7 +1,7 @@
 """The viewer's functions over a configuration, as the composition root calls
 them: the viewer itself reads only its settings (package split, step 6)."""
 
-from src.cli.compose import viewer_configuration
+from src.cli.view import viewer_configuration
 from src.control.config import ResolvedMiroir
 from src.viewer import reader
 from src.viewer.database import TimelineDatabase

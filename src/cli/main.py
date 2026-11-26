@@ -3,7 +3,10 @@
 `integrations`, `validate`, and `connections` are read-only: no network, credential
 lookup, or runtime imports. `status` and `artifacts` read the metadata store.
 `submit` stores and registers a file without loading it. `run` and `import` load
-into a local DuckDB file, never into the production warehouse.
+into a local DuckDB file, never into the production warehouse. `serve` serves
+the control plane's interface and API with the viewer, or without it
+(`--without-viewer`); `view` serves the viewer alone, reading the configuration
+and the warehouse and writing nothing (package split, step 10).
 """
 
 import argparse
@@ -95,6 +98,19 @@ def main(argv: list[str] | None = None) -> int:
         default=Path(os.environ.get("MIROIR_ARTIFACT_DIR", DEFAULT_ARTIFACTS)),
         help="Directory for retained original files",
     )
+    serve.add_argument(
+        "--without-viewer",
+        action="store_true",
+        help="Serve the control plane alone, without the timeline or the reader"
+        " database; `view` serves them",
+    )
+    view = commands.add_parser(
+        "view",
+        help="The timeline alone, read-only (needs MIROIR_API_TOKEN and"
+        " MIROIR_TIMELINE_DATABASE*)",
+    )
+    view.add_argument("--host", default="127.0.0.1")
+    view.add_argument("--port", type=int, default=8766)
     commands.add_parser(
         "generate-key", help="Print a new MIROIR_SECRET_KEY (Fernet key)"
     )
@@ -237,6 +253,8 @@ def main(argv: list[str] | None = None) -> int:
             }
         elif args.command == "connections":
             result = [connection.summary() for connection in miroir.connections]
+        elif args.command == "view":
+            return _view(args, miroir)
         else:
             return _operate(args, miroir)
     print(json.dumps(result, indent=2))
@@ -605,21 +623,25 @@ def _absolute_sqlite(url: str) -> str:
     )
 
 
-def _serve(args: argparse.Namespace, miroir: Any, store: Any, secrets: Any) -> int:
-    import uvicorn
-
-    from src.cli.compose import viewer_settings, web_app
-    from src.control.service import MiroirService, SubprocessExecutor
-    from src.viewer.database import TimelineConfigurationError
-    from src.web.app import METRICS_TOKEN_REUSED
-
+def _api_token() -> str | None:
     token = os.environ.get("MIROIR_API_TOKEN", "")
     if len(token) < 16:
         print("Set MIROIR_API_TOKEN (16+ characters) to serve", file=sys.stderr)
-        return 2
-    metrics_token = os.environ.get("MIROIR_METRICS_TOKEN") or None
-    if metrics_token == token:
-        print(METRICS_TOKEN_REUSED, file=sys.stderr)
+        return None
+    return token
+
+
+def _view(args: argparse.Namespace, miroir: "ResolvedMiroir") -> int:
+    """The viewer alone: the configuration read when it answers, the reader
+    database and the media key from the environment, the API token for the
+    same login as `serve`'s. No metadata store, master key or Prefect."""
+    import uvicorn
+
+    from src.cli.view import viewer_app, viewer_settings
+    from src.viewer.database import NOT_CONFIGURED, TimelineConfigurationError
+
+    token = _api_token()
+    if token is None:
         return 2
     try:
         object_store = _object_store(miroir)
@@ -627,6 +649,45 @@ def _serve(args: argparse.Namespace, miroir: Any, store: Any, secrets: Any) -> i
     except (ConfigurationError, TimelineConfigurationError) as error:
         print(error, file=sys.stderr)
         return 2
+    if timeline is None:
+        print(NOT_CONFIGURED, file=sys.stderr)
+        return 2
+    config = args.config.resolve()
+    settings = viewer_settings(
+        timeline, lambda: load_miroir(config), lambda: object_store
+    )
+    uvicorn.run(viewer_app(token, settings), host=args.host, port=args.port)
+    return 0
+
+
+def _serve(args: argparse.Namespace, miroir: Any, store: Any, secrets: Any) -> int:
+    import uvicorn
+
+    from src.control.service import MiroirService, SubprocessExecutor
+    from src.web.app import METRICS_TOKEN_REUSED
+
+    token = _api_token()
+    if token is None:
+        return 2
+    metrics_token = os.environ.get("MIROIR_METRICS_TOKEN") or None
+    if metrics_token == token:
+        print(METRICS_TOKEN_REUSED, file=sys.stderr)
+        return 2
+    try:
+        object_store = _object_store(miroir)
+    except ConfigurationError as error:
+        print(error, file=sys.stderr)
+        return 2
+    timeline = None
+    if not args.without_viewer:
+        # Without the viewer, the reader's settings are never read.
+        from src.viewer.database import TimelineConfigurationError
+
+        try:
+            timeline = _timeline_database()
+        except TimelineConfigurationError as error:
+            print(error, file=sys.stderr)
+            return 2
     store.migrate()
     orchestrator = _orchestrator(args, store, miroir)
     if orchestrator is None and args.duckdb is None:
@@ -663,9 +724,18 @@ def _serve(args: argparse.Namespace, miroir: Any, store: Any, secrets: Any) -> i
         orchestrator=orchestrator,
         object_store=object_store,
     )
-    # The shell, the admin part and the viewer, with what the viewer reads of
-    # the installation (package split, steps 6 and 8).
-    viewer = viewer_settings(timeline, service.miroir, lambda: object_store)
-    app = web_app(service, token, metrics_token=metrics_token, viewer=viewer)
+    if args.without_viewer:
+        from src.cli.compose import admin_app
+
+        # The admin part alone; `view` serves the viewer (package split, step 10).
+        app = admin_app(service, token, metrics_token=metrics_token)
+    else:
+        from src.cli.compose import web_app
+        from src.cli.view import viewer_settings
+
+        # The shell, the admin part and the viewer, with what the viewer reads
+        # of the installation (package split, steps 6 and 8).
+        viewer = viewer_settings(timeline, service.miroir, lambda: object_store)
+        app = web_app(service, token, metrics_token=metrics_token, viewer=viewer)
     uvicorn.run(app, host=args.host, port=args.port)
     return 0

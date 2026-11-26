@@ -3,8 +3,8 @@ conversation pages are in `conversations.py`; the Day view's Messages lane and
 the search's Messages kind are here, where those pages live (phase 2c).
 
 Rendered on the server from the same reader the JSON API uses; the Day view's
-scrubber and lanes are filled in the browser by `/static/timeline.js` from that
-API. Every page is `Cache-Control: private, no-store`. Data reaches templates
+scrubber and lanes are filled in the browser by `/static/viewer/timeline.js`
+from that API. Every page is `Cache-Control: private, no-store`. Data reaches templates
 as values, so Jinja escapes it; nothing from the warehouse is markup.
 """
 
