@@ -664,7 +664,7 @@ def _serve(args: argparse.Namespace, miroir: Any, store: Any, secrets: Any) -> i
         object_store=object_store,
     )
     # What the viewer reads of the installation, built here (package split, step 6).
-    viewer = viewer_settings(timeline, service.miroir)
+    viewer = viewer_settings(timeline, service.miroir, lambda: object_store)
     app = create_app(service, token, metrics_token=metrics_token, viewer=viewer)
     uvicorn.run(app, host=args.host, port=args.port)
     return 0

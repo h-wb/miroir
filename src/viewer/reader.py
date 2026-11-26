@@ -11,7 +11,7 @@ import json
 import logging
 import re
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, cast
@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
+from src.analyses.views import SCREEN_FRAMES
 from src.kernel.errors import OperationError, Timeout, Unavailable
 from src.viewer.database import (
     NOT_CONFIGURED,
@@ -73,9 +74,10 @@ def status(
 # The package whose analyses the viewer shows; the composition root hands it
 # their settings (src.viewer.settings).
 PACKAGE = "timeline"
-SCREEN_ROLE = "screen"
 MESSAGES_ROLE = "messages"
-SCREENSHOTS = "screenshots"
+# The kind of the files a screen frame points at, as the view that hides some of
+# them declares it (package split, step 7); each row names its own in step 11.
+FRAMES_KIND = SCREEN_FRAMES.kind
 ATTACHMENTS = "attachments"
 NO_ANALYSIS = (
     "The timeline is not configured: no analysis of the timeline package is set up."
@@ -88,7 +90,7 @@ TIMED_OUT = (
     f"The timeline query took longer than {STATEMENT_TIMEOUT_MS // 1000} seconds; "
     "narrow it (a shorter range, more words) and try again."
 )
-_SCHEMA = re.compile(r"[a-z][a-z0-9_]{0,62}")
+SCHEMA_NAME = re.compile(r"[a-z][a-z0-9_]{0,62}")
 
 
 class TimelineUnavailable(Unavailable):
@@ -149,7 +151,7 @@ def timeline_source(configuration: ViewerConfiguration) -> TimelineSource | None
 
 
 def _source(analysis: TimelineAnalysis, ignored: tuple[str, ...]) -> TimelineSource:
-    if not _SCHEMA.fullmatch(analysis.schema):  # from validated IDs; kept honest
+    if not SCHEMA_NAME.fullmatch(analysis.schema):  # from validated IDs; kept honest
         raise TimelineUnavailable("The timeline analysis has an unexpected schema")
     return TimelineSource(
         analysis.id,
@@ -158,50 +160,6 @@ def _source(analysis: TimelineAnalysis, ignored: tuple[str, ...]) -> TimelineSou
         ignored,
         analysis.inputs.get(MESSAGES_ROLE),
     )
-
-
-def media_withheld(
-    database: TimelineDatabase | None,
-    configuration: ViewerConfiguration,
-    connection_id: str,
-    kind: str,
-    key: str,
-) -> bool | None:
-    """Whether a file belongs to a withheld frame, for the media route.
-
-    None when no timeline analysis reads this connection's screenshots: there is
-    nothing to ask. Otherwise the analyses that can answer are asked: those with
-    a reader role whose tables are built. One answer is enough; withheld in any
-    that answers is withheld; a key none knows (no frame yet) is not. Fails
-    closed: when none can answer, it raises as the timeline routes do, so the
-    file is never served unchecked.
-    """
-    if kind != SCREENSHOTS:
-        return None
-    analyses = [
-        a for a in configuration.analyses if a.inputs.get(SCREEN_ROLE) == connection_id
-    ]
-    if not analyses:
-        return None
-    if database is None:
-        raise TimelineUnavailable(NOT_CONFIGURED)
-    readable = [_source(a, ()) for a in analyses if a.readable]
-    answered = False
-    refusal: TimelineUnavailable | TimelineTimeout = TimelineUnavailable(NOT_BUILT)
-    for source in readable:
-        try:
-            if TimelineReader(database, source).withheld(key):
-                return True
-        except TimelineTimeout as error:
-            refusal = error
-        except TimelineUnavailable as error:
-            if not isinstance(refusal, TimelineTimeout):
-                refusal = error
-        else:
-            answered = True
-    if not answered:
-        raise refusal
-    return False
 
 
 # ---- Reading --------------------------------------------------------------------
@@ -369,6 +327,29 @@ def _local_day_sql(column: str) -> str:
     )
 
 
+@contextmanager
+def session(database: TimelineDatabase, lookup: bool = False) -> Iterator[Any]:
+    """One read-only, time-limited session; `lookup` takes the connection kept
+    for single-row lookups, so they never wait behind searches. Errors become
+    TimelineTimeout or TimelineUnavailable."""
+    engine = database.lookup_engine if lookup else database.engine
+    try:
+        with engine.connect() as db:
+            yield db
+    except DBAPIError as error:
+        code = getattr(error.orig, "pgcode", None)
+        if code == "57014":  # query_canceled: the statement time limit
+            raise TimelineTimeout(TIMED_OUT) from None
+        log.warning("Timeline query failed: %s %s", type(error).__name__, code)
+        if code in ("42P01", "3F000", "42501", "42703"):
+            # No table, schema or column yet, or no privilege on them.
+            raise TimelineUnavailable(NOT_BUILT) from None
+        raise TimelineUnavailable(UNAVAILABLE) from None
+    except SQLAlchemyError as error:
+        log.warning("Timeline query failed: %s", type(error).__name__)
+        raise TimelineUnavailable(UNAVAILABLE) from None
+
+
 class TimelineReader:
     """The timeline's queries, each through one read-only, time-limited session."""
 
@@ -376,24 +357,8 @@ class TimelineReader:
         self.database = database
         self.source = source
 
-    @contextmanager
-    def _session(self, lookup: bool = False) -> Iterator[Any]:
-        engine = self.database.lookup_engine if lookup else self.database.engine
-        try:
-            with engine.connect() as db:
-                yield db
-        except DBAPIError as error:
-            code = getattr(error.orig, "pgcode", None)
-            if code == "57014":  # query_canceled: the statement time limit
-                raise TimelineTimeout(TIMED_OUT) from None
-            log.warning("Timeline query failed: %s %s", type(error).__name__, code)
-            if code in ("42P01", "3F000", "42501", "42703"):
-                # No table, schema or column yet, or no privilege on them.
-                raise TimelineUnavailable(NOT_BUILT) from None
-            raise TimelineUnavailable(UNAVAILABLE) from None
-        except SQLAlchemyError as error:
-            log.warning("Timeline query failed: %s", type(error).__name__)
-            raise TimelineUnavailable(UNAVAILABLE) from None
+    def _session(self, lookup: bool = False) -> AbstractContextManager[Any]:
+        return session(self.database, lookup)
 
     def days(
         self, start: date, end: date, sources: tuple[str, ...] = SOURCES
@@ -471,26 +436,12 @@ class TimelineReader:
             "start": _iso(bounds[0], zone),
             "end": _iso(bounds[1], zone),
             "connection": rows[0][7] if rows else None,
-            "media_kind": SCREENSHOTS,
+            "media_kind": FRAMES_KIND,
             "count": len(rows),
             "truncated": truncated,
             "apps": described,
             "frames": columns,
         }
-
-    def withheld(self, key: str) -> bool:
-        """Whether the frame with this media key is withheld; False if unknown.
-        Through the lookup connection, so it never waits behind searches."""
-        with self._session(lookup=True) as db:
-            found = db.execute(
-                sa.text(
-                    "SELECT withheld IS NOT NULL"
-                    f" FROM {self.source.table('screen_frames')}"
-                    " WHERE image_path = :key"
-                ),
-                {"key": key},
-            ).scalar_one_or_none()
-        return bool(found)
 
     def frame(self, key: str) -> dict[str, Any] | None:
         """One frame: time, app, text, what was masked or withheld, its media."""
@@ -532,7 +483,7 @@ class TimelineReader:
             "text_truncated": bool(cut),
             "withheld": withheld,
             "masked": masked,
-            "media": _media(connection, SCREENSHOTS, key, code, status),
+            "media": _media(connection, FRAMES_KIND, key, code, status),
         }
 
     def _instant(self, db: Any, value: datetime | date, end: bool) -> datetime:

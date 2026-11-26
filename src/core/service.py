@@ -30,10 +30,10 @@ from src.core.config import (
 from src.core.operations import ArtifactOrigin, ConnectionBusy, MetadataStore
 from src.core.secrets import SecretResolutionError, SecretStore, make_resolver
 from src.kernel.errors import OperationError
-from src.media import links, uploads
+from src.media import uploads
 from src.media.backfill import backfill_options
 from src.media.kinds import derived_kind
-from src.media.store import ObjectStore, StoredObject
+from src.media.store import ObjectStore
 
 REPO = Path(__file__).resolve().parents[2]
 # A request with no run after this long was never handed to an executor.
@@ -231,33 +231,6 @@ class MiroirService:
         operation_id = self._request_derive(miroir, connection_id, "request", options)
         assert operation_id is not None  # a backfill never joins
         return operation_id
-
-    def media_view_url(self, connection_id: str, kind: str, key: str) -> str:
-        miroir = self.miroir()
-        connection = self._connection(miroir, connection_id)
-        return links.view_url(
-            miroir.media, self.object_store, connection.media, kind, key
-        )
-
-    def media_thumbnail(
-        self, connection_id: str, kind: str, key: str, width: int
-    ) -> StoredObject | None:
-        """A thumbnail to copy to the browser (decision 040); None if none was made."""
-        miroir = self.miroir()
-        connection = self._connection(miroir, connection_id)
-        return links.read_thumbnail(
-            miroir.media, self.object_store, connection.media, kind, key, width
-        )
-
-    def media_image(
-        self, connection_id: str, kind: str, key: str
-    ) -> StoredObject | None:
-        """An original image to copy to the browser; links.NotStreamed otherwise."""
-        miroir = self.miroir()
-        connection = self._connection(miroir, connection_id)
-        return links.read_image(
-            miroir.media, self.object_store, connection.media, kind, key
-        )
 
     def _dashboards(
         self, miroir: ResolvedMiroir, analysis: ResolvedAnalysis

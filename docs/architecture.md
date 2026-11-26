@@ -24,10 +24,10 @@ towards its parts, one step at a time, and this page says where it is now.
 |---|---|---|
 | `src/kernel/` | The shared vocabulary: `models.py` (`StrictModel`, `Identifier`, `DatabaseIdentifier`, `SecretKey`) and `errors.py` (`OperationError`, the product error the interface and the CLI show, and its bases `Unavailable` and `Timeout`) | Import anything but the standard library and pydantic |
 | `src/integrations/` (connectors) | Know one source: what it can read (a fetch, file formats) and how to turn it into tables | Know how a file arrived, when anything runs, or where it is stored |
-| `src/analyses/` | Catalog of analysis packages (dbt models and dashboards) and the inputs they need | Load data |
+| `src/analyses/` | Catalog of analysis packages (dbt models and dashboards) and the inputs they need; what the viewer shows of them, as data (`views.py`: `Withhold`, where rows hide their files) | Load data |
 | `src/media/` | The files rows point at: the object store and its S3 client, names, upload and view links, the `media` section, media kinds and profiles, the derive queue's tables and repository, the derive run and its decoder | Have routes, or know about HTTP, the scheduler, the viewer or the connector registry |
 | `src/core/` | Configuration, receiving and storing files, opening a connection's inputs, running and recording loads, secrets | Know about HTTP, the command line or the scheduler |
-| `src/viewer/` | Reading the warehouse and showing it (decision 040): the reader and its read-only sessions, the timeline's API, Day view, search and conversation pages, their templates and static files, and `ViewerSettings`, what it reads of the installation | Import the control plane, web, the connectors, dlt, prefect, Pillow or boto3, or read the configuration file |
+| `src/viewer/` | Reading the warehouse and showing it (decision 040): the reader and its read-only sessions, the timeline's API, Day view, search and conversation pages, the `/media` view route and its withheld check, their templates and static files, and `ViewerSettings`, what it reads of the installation | Import the control plane, web, the connectors, dlt, prefect, Pillow or boto3, or read the configuration file |
 | `src/pipelines/` | The flow entry points the scheduler runs | Hold product logic; they call core |
 | `src/adapters/` | Talk to the scheduler (Prefect): plan and apply deployments, submit, observe | Decide what a load is |
 | `src/web/`, `src/cli/` | Transport and presentation; both call the same core services | Contain logic of their own |
@@ -44,8 +44,8 @@ towards its parts, one step at a time, and this page says where it is now.
 | `core` | `kernel`, `integrations`, `analyses`, `media` |
 | `pipelines` | `kernel`, `core`, `media` (the flow builds the worker's bucket client) |
 | `adapters` | `kernel`, `core`, `pipelines` |
-| `viewer` | `kernel`, `media` |
-| `web` | `kernel`, `core`, `integrations`, `media`, and named parts of `viewer` (below) |
+| `viewer` | `kernel`, `media`, `analyses.views` |
+| `web` | `kernel`, `core`, `integrations`, `analyses`, `media`, and named parts of `viewer` (below) |
 | `cli` | `kernel`, `core`, `integrations`, `adapters`, `web`, `media`, `viewer` |
 
 Connectors and analyses take their base types and errors from the kernel, never
@@ -66,10 +66,15 @@ is handed a `ViewerSettings` (`src/viewer/settings.py`), the reader database
 opened from `MIROIR_TIMELINE_DATABASE*` and a function that gives the
 configuration as the viewer reads it when it answers: the timeline analyses
 with their schema (named as the build names it, by `analysis_plan`), time zone,
-linked inputs and whether the build grants the reader role, and each
-connection's media kinds. `serve` builds it (`src/cli/main.py`, through
-`src/web/viewer.py`); `create_app` builds the same when given only the reader
-database. Its templates and static files are its own (`src/viewer/templates/`,
+linked inputs and whether the build grants the reader role, each connection's
+media kinds, the `media` section, and the analyses whose package declares a
+`Withhold` (`src/analyses/views.py`); and the media object store `serve` built.
+`serve` builds it (`src/cli/main.py`, through `src/web/viewer.py`); `create_app`
+builds the same when given only the reader database. The `/media` view route is
+the viewer's (`src/viewer/media.py`, step 7): it asks those declarations whether
+a row hides the file, then calls media's view side (`src/media/links.py`); the
+control plane's service has no viewing reads, and the collector's media routes
+stay in the control plane. Its templates and static files are its own (`src/viewer/templates/`,
 `src/viewer/static/`): the app's template loader reads both folders, its pages
 extend `base.html` by name, and `/static/` serves both folders at the same
 addresses as before. A test imports every viewer module in a fresh interpreter
@@ -79,11 +84,10 @@ Web imports the viewer only by the names `tests/test_boundaries.py` lists as
 debt (`_WEB_VIEWER_DEBT`), each with the step that removes it; a name no longer
 imported fails the test until it is struck off:
 
-- Step 7: `src/web/app.py` serves the `/media` view route and asks the viewer's
-  withheld check (`media_withheld`, `TimelineTimeout`, `TimelineUnavailable`).
-- Step 8: `src/web/app.py` mounts the viewer's routers, adds its template
-  folder (`TEMPLATES_DIR`), links the header to it (`timeline_source`) and
-  takes `TimelineDatabase` and `ViewerSettings`; `src/web/viewer.py` builds the
+- Step 8: `src/web/app.py` mounts the viewer's routers (the `/media` view
+  route's, `media_routes`, among them), adds its template folder
+  (`TEMPLATES_DIR`), links the header to it (`timeline_source`) and takes
+  `TimelineDatabase` and `ViewerSettings`; `src/web/viewer.py` builds the
   settings from the configuration, and moves to the composition root.
 
 Also: nothing under `src/` imports the collector, and a connector's `formats.py` and
