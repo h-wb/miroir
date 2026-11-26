@@ -3310,7 +3310,7 @@ Known limits:
 
 ### 040 amendment — The withheld check reads declarations
 
-Status: accepted, 2026-11-26. Step 7 of
+Status: accepted, 2026-11-26, with pull request #64. Step 7 of
 [the package split](../decisions/2026-11-25-package-split.md). Revises *The
 media route asks the timeline too* in the amendment for phase 1c, part 1, and
 its *second look*: the rule is the same, where it is written is not.
