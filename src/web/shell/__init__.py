@@ -187,6 +187,10 @@ class Shell:
         routers it hands over, in their order."""
         if self._finished:
             raise RuntimeError("The shell is finished: mount every part before")
+        if part.policy and not part.paths:
+            raise ValueError("A part that widens the policy names the paths it answers")
+        if any(prefix.rstrip("/") == "" for prefix in part.paths):
+            raise ValueError("A part cannot widen the policy of every page")
         self._parts.append(part)
         if part.policy:
             self._policies.append((part.paths, content_security_policy(part.policy)))

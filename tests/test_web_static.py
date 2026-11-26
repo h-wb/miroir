@@ -3,6 +3,7 @@
 import hashlib
 import json
 import re
+import unittest
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -302,3 +303,14 @@ class RouteTableTests(WebFixture):
         self.assertGreater(len(seen), 40)
         self.assertIn(("/api/timeline/search", "POST"), seen)
         self.assertEqual({k: n for k, n in seen.items() if n > 1}, {})
+
+
+class ShellMountGuardTests(unittest.TestCase):
+    def test_a_part_cannot_widen_the_policy_without_paths_or_for_every_page(self):
+        from src.web.shell import Part, Shell
+
+        for paths in ((), ("/",), ("",)):
+            with self.subTest(paths=paths):
+                shell = Shell("synthetic-token-0123456789")
+                with self.assertRaises(ValueError):
+                    shell.mount(Part(paths=paths, policy={"img-src": ("blob:",)}))
