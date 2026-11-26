@@ -281,8 +281,10 @@ Every other collection under `data` loads into one generic table,
 JSON), `record_key` (SHA-256 of the object's canonical JSON), and the import it
 last came from, `file_sha256` and `role`. The key is `(collection, record_key)`,
 so a replay or an overlapping export merges the same object instead of adding
-it twice. No schema is invented per collection: a collection that analyses need
-gets a table of its own later, and dbt reads `other_records` until then.
+it twice. An object that changes between exports gets a new row and the old row
+stays, as in any raw table; models that read it dedupe. No schema is invented
+per collection: a collection that analyses need gets a table of its own later,
+and dbt reads `other_records` until then.
 
 **The cutoff applies where a date is.** An object with a `start` or `date`
 (the fields the known collections are dated by) is loaded by the role on its
@@ -295,10 +297,19 @@ held, those loaded for that role, and those that are not objects
 (`unreadable`, counted, not loaded). Its key is
 `(file_sha256, role, collection)`, so a replay rewrites the same row.
 
-**Old exports.** The parser version goes to 2. Stored exports are imported
-again by a plain import, without `--replay`, and a watched folder re-imports the
-files still in it on its next sync. An export holding only other collections is
-now accepted; one with an empty `data` is still refused.
+**What is an export.** A file is accepted only if `data` holds at least one
+collection Health Auto Export documents: the four, `symptoms`, `ecg`,
+`heartRateNotifications` or `cycleTracking`
+(`src/integrations/apple_health/formats.py`). Another JSON file with a `data`
+object is refused; unknown collections beside a documented one load.
+
+**Old exports.** The parser version goes to 2. A plain import, without
+`--replay`, loads an export again: a watched folder does it on its next sync,
+one load per file still in it; exports that came only through the receiving URL
+are imported one by one from the connection's page, with no bulk path. Server,
+worker and flow-run image run the same version, or an import requested by one
+and run by another is refused and the export stays unloaded until imported
+again by hand.
 
 ## 009 — n8n is a temporary receiver for Health Auto Export
 

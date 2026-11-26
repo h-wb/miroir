@@ -117,6 +117,10 @@ class ArtifactTests(unittest.TestCase):
             {"data": {}},
             {"data": {"metrics": [1]}},
             {"data": {"workouts": {"id": "w"}}},
+            # Another JSON file with a `data` object is not an export.
+            {"data": {"foo": 1}},
+            {"data": {"foo": []}},
+            {"data": {"symptoms": 1}},
         ):
             with self.subTest(content=content), self.assertRaises(InvalidArtifact):
                 self.submit(self.write("bad.json", content))
@@ -396,13 +400,28 @@ class ArtifactTests(unittest.TestCase):
         self.assertIsNone(self.table("other_records", plain))
         self.assertEqual(len(self.table("other_records")), 1)
 
-    def test_an_export_of_other_collections_only_is_accepted(self):
+    def test_an_export_of_a_documented_other_collection_only_is_accepted(self):
         document = {"data": {"symptoms": [{"name": "Fatigue"}]}}
         artifact, created = self.submit(self.write("symptoms.json", document))
         self.assertTrue(created)
         self.load(artifact)
         self.assertEqual(len(self.table("other_records")), 1)
         self.assertIsNone(self.table("metrics"))
+
+    def test_an_unknown_collection_beside_a_documented_one_loads_both(self):
+        document = export(("2026-06-05", 1))
+        document["data"]["foo"] = [{"bar": 1}]
+        artifact, created = self.submit(self.write("foo.json", document))
+        self.assertTrue(created)
+        self.load(artifact)
+        self.assertEqual(len(self.metrics()), 1)
+        records = self.table(
+            "other_records", columns="collection, CAST(item AS VARCHAR) AS item"
+        )
+        self.assertEqual(
+            [(r["collection"], json.loads(r["item"])) for r in records],
+            [("foo", {"bar": 1})],
+        )
 
 
 class ArtifactCliTests(unittest.TestCase):
