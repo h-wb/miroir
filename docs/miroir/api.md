@@ -81,10 +81,11 @@ Every response carries
 `Content-Security-Policy: default-src 'self'; img-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`,
 `Referrer-Policy: same-origin` (no address of a Miroir page reaches another
 host) and `X-Content-Type-Options: nosniff`. The policy refuses inline styles and
-scripts, so templates load them from `src/web/static/` (served at `/static/`
-without the login, revalidated on each load): `miroir.css`, `miroir.js`, the
-timeline's scripts and the vendored `htmx.min.js`, whose version and SHA-256 are
-in [VENDORED.md](../../src/web/static/VENDORED.md). A template with a `style`
-attribute, a `<style>` element or an `on…=` handler fails
-`tests/test_web_static.py`. The server's access log keeps each request's path and
+scripts, so templates load them from files served at `/static/` (without the
+login, revalidated on each load): from `src/web/static/`, `miroir.css`,
+`miroir.js` and the vendored `htmx.min.js`, whose version and SHA-256 are in
+[VENDORED.md](../../src/web/static/VENDORED.md); from `src/viewer/static/`, the
+timeline's scripts and stylesheet. A template in `src/web/templates/` or
+`src/viewer/templates/` with a `style` attribute, a `<style>` element or an
+`on…=` handler fails `tests/test_web_static.py`. The server's access log keeps each request's path and
 drops its query string.

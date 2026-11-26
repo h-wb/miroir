@@ -12,6 +12,7 @@ from pathlib import Path
 _KERNEL = "src.kernel"
 _KERNEL_LIBRARIES = ("pydantic", "pydantic_core", "annotated_types")
 _MEDIA = "src.media"
+_VIEWER = "src.viewer"
 _ALLOWED = {
     "kernel": (),
     # A connector declares its media kinds, and knows nothing else of media.
@@ -24,11 +25,27 @@ _ALLOWED = {
     "core": (_KERNEL, "src.integrations", "src.analyses", _MEDIA),
     "pipelines": (_KERNEL, "src.core", _MEDIA),
     "adapters": (_KERNEL, "src.core", "src.pipelines"),
+    # Web imports the viewer only by the names of _WEB_VIEWER_DEBT.
     "web": (_KERNEL, "src.core", "src.integrations", _MEDIA),
-    "cli": (_KERNEL, "src.core", "src.integrations", "src.adapters", "src.web", _MEDIA),
+    "cli": (
+        _KERNEL,
+        "src.core",
+        "src.integrations",
+        "src.adapters",
+        "src.web",
+        _MEDIA,
+        _VIEWER,
+    ),
+    # Reading the warehouse and showing it (package split, step 6): the kernel
+    # and media, never the control plane, web, the connectors or the loading
+    # stack. Its settings arrive as one value (src.viewer.settings).
+    "viewer": (_KERNEL, _MEDIA),
 }
 # Libraries a part never imports, and those only one module may import.
-_NEVER = {"media": ("fastapi", "starlette", "prefect")}
+_NEVER = {
+    "media": ("fastapi", "starlette", "prefect"),
+    "viewer": ("dlt", "prefect"),
+}
 _ONLY = {
     # Media is never decoded in the web process, nor in the worker's own: one
     # module decodes, and it runs as a child process that nothing imports.
@@ -37,12 +54,31 @@ _ONLY = {
     "boto3": f"{_MEDIA}.s3",
     "botocore": f"{_MEDIA}.s3",
 }
-# The warehouse reader (decision 040): it needs nothing of the write side, and
-# only the server's transports open it; flow runs hold their own credentials.
-# It names the timeline's schema as the build does (src.core.analysis).
-_TIMELINE = "src.core.timeline"
-_TIMELINE_IMPORTS = (_KERNEL, "src.core.config", "src.core.analysis")
-_TIMELINE_IMPORTERS = ("src.web", "src.cli")
+# Debt of package split step 6, name by name: web mounts the viewer and serves
+# its `/media` view route until step 7 moves that route and its withheld check
+# into the viewer, and step 8 the mounting, the navigation links, the template
+# and static folders and the building of its settings (`src.web.viewer`).
+_WEB_VIEWER_DEBT = {
+    "src.web.app": {
+        f"{_VIEWER}.TEMPLATES_DIR": 8,
+        f"{_VIEWER}.conversations.conversation_pages": 8,
+        f"{_VIEWER}.database.TimelineDatabase": 8,
+        f"{_VIEWER}.reader.TimelineTimeout": 7,
+        f"{_VIEWER}.reader.TimelineUnavailable": 7,
+        f"{_VIEWER}.reader.media_withheld": 7,
+        f"{_VIEWER}.reader.timeline_source": 8,
+        f"{_VIEWER}.settings.ViewerSettings": 8,
+        f"{_VIEWER}.timeline.timeline_pages": 8,
+        f"{_VIEWER}.timeline_pages.timeline_page_routes": 8,
+    },
+    "src.web.viewer": {
+        f"{_VIEWER}.database.TimelineDatabase": 8,
+        f"{_VIEWER}.reader.PACKAGE": 8,
+        f"{_VIEWER}.settings.TimelineAnalysis": 8,
+        f"{_VIEWER}.settings.ViewerConfiguration": 8,
+        f"{_VIEWER}.settings.ViewerSettings": 8,
+    },
+}
 _IMAGE_LIBRARIES = ("PIL", "pillow_heif")
 _DECODER = f"{_MEDIA}.decoder"
 # Only the runner imports the derive run that starts the decoder, inside the run.
@@ -77,6 +113,7 @@ class BoundaryTests(unittest.TestCase):
     def test_server_import_boundaries(self) -> None:
         src = Path(__file__).resolve().parents[1] / "src"
         errors: list[str] = []
+        debt_used: set[tuple[str, str]] = set()
         for folder in sorted(src.iterdir()):
             if folder.is_dir() and folder.name not in (*_ALLOWED, "__pycache__"):
                 errors.append(f"src/{folder.name}:1: part has no import rule")
@@ -104,6 +141,8 @@ class BoundaryTests(unittest.TestCase):
                         and not any(_within(name, lib) for lib in _KERNEL_LIBRARIES)
                     ):
                         errors.append(f"{location}: kernel may not import {name}")
+                    elif name in _WEB_VIEWER_DEBT.get(module, {}):
+                        debt_used.add((module, name))
                     elif part in _ALLOWED and name.startswith("src."):
                         allowed = (f"src.{part}", *_ALLOWED[part])
                         if not any(_within(name, prefix) for prefix in allowed):
@@ -113,16 +152,6 @@ class BoundaryTests(unittest.TestCase):
                     for library, owner in _ONLY.items():
                         if _within(name, library) and module != owner:
                             errors.append(f"{location}: only {owner} imports {name}")
-                    if (
-                        module == _TIMELINE
-                        and name.startswith("src.")
-                        and not any(_within(name, p) for p in _TIMELINE_IMPORTS)
-                    ):
-                        errors.append(f"{location}: timeline may not import {name}")
-                    if _within(name, _TIMELINE) and not any(
-                        _within(module, p) for p in (_TIMELINE, *_TIMELINE_IMPORTERS)
-                    ):
-                        errors.append(f"{location}: only web and cli import {name}")
                     if _within(name, _DECODER) and module != _DECODER:
                         errors.append(f"{location}: {name} runs as its own process")
                     if _within(name, _DERIVE) and module not in (
@@ -150,6 +179,12 @@ class BoundaryTests(unittest.TestCase):
                             "formats.py and contracts.py may not import dlt at module level"
                         )
 
+        # A paid debt is struck off, so the table says what is still owed.
+        for module, names in _WEB_VIEWER_DEBT.items():
+            for name, step in names.items():
+                if (module, name) not in debt_used:
+                    errors.append(f"{module}: debt of step {step} unused: {name}")
+
         self.assertFalse(errors, "\n".join(errors))
 
     def test_the_server_and_the_worker_load_no_image_library(self) -> None:
@@ -158,11 +193,12 @@ class BoundaryTests(unittest.TestCase):
         modules = (
             "src.web.app",
             "src.web.connections",
-            "src.web.timeline",
-            "src.web.timeline_pages",
+            "src.viewer.timeline",
+            "src.viewer.timeline_pages",
+            "src.viewer.conversations",
             "src.core.service",
             "src.core.runner",
-            "src.core.timeline",
+            "src.viewer.reader",
             "src.adapters.prefect",
             "src.media.backfill",
             "src.media.config",
@@ -190,6 +226,33 @@ class BoundaryTests(unittest.TestCase):
         result = subprocess.run(
             [sys.executable, "-c", probe],
             cwd=root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertEqual(result.stdout.strip(), "[]")
+
+    def test_the_viewer_loads_no_loading_stack_scheduler_or_media_library(self) -> None:
+        # Importing every viewer module, in a fresh interpreter, loads none of
+        # what the control plane and media's write side need.
+        src = Path(__file__).resolve().parents[1] / "src"
+        modules = sorted(
+            ".".join(("src", *p.relative_to(src).with_suffix("").parts)).removesuffix(
+                ".__init__"
+            )
+            for p in (src / "viewer").rglob("*.py")
+        )
+        self.assertIn(f"{_VIEWER}.reader", modules)
+        libraries = ("dlt", "prefect", "PIL", "pillow_heif", "boto3", "botocore")
+        probe = (
+            "import importlib, sys\n"
+            f"for name in {modules!r}: importlib.import_module(name)\n"
+            "print(sorted({m.split('.')[0] for m in sys.modules} &"
+            f" set({libraries!r})))"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", probe],
+            cwd=src.parent,
             capture_output=True,
             text=True,
             check=True,

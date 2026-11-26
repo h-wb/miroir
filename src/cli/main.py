@@ -19,8 +19,8 @@ from src.integrations.registry import INTEGRATIONS
 
 if TYPE_CHECKING:
     from src.core.config import ResolvedMiroir
-    from src.core.timeline import TimelineDatabase
     from src.media.store import ObjectStore
+    from src.viewer.database import TimelineDatabase
 
 DEFAULT_METADATA = "sqlite:///.miroir/metadata.sqlite"
 DEFAULT_ARTIFACTS = ".miroir/artifacts"
@@ -327,7 +327,7 @@ def _timeline_database() -> "TimelineDatabase | None":
     Opening it connects nothing: a warehouse that is down shows on the timeline
     page, and the rest of the server starts as before.
     """
-    from src.core.timeline import TimelineDatabase, timeline_database_url
+    from src.viewer.database import TimelineDatabase, timeline_database_url
 
     url = timeline_database_url()
     return None if url is None else TimelineDatabase(url)
@@ -609,7 +609,9 @@ def _serve(args: argparse.Namespace, miroir: Any, store: Any, secrets: Any) -> i
     import uvicorn
 
     from src.core.service import MiroirService, SubprocessExecutor
+    from src.viewer.database import TimelineConfigurationError
     from src.web.app import METRICS_TOKEN_REUSED, create_app
+    from src.web.viewer import viewer_settings
 
     token = os.environ.get("MIROIR_API_TOKEN", "")
     if len(token) < 16:
@@ -622,7 +624,7 @@ def _serve(args: argparse.Namespace, miroir: Any, store: Any, secrets: Any) -> i
     try:
         object_store = _object_store(miroir)
         timeline = _timeline_database()
-    except ConfigurationError as error:
+    except (ConfigurationError, TimelineConfigurationError) as error:
         print(error, file=sys.stderr)
         return 2
     store.migrate()
@@ -661,6 +663,8 @@ def _serve(args: argparse.Namespace, miroir: Any, store: Any, secrets: Any) -> i
         orchestrator=orchestrator,
         object_store=object_store,
     )
-    app = create_app(service, token, metrics_token=metrics_token, timeline=timeline)
+    # What the viewer reads of the installation, built here (package split, step 6).
+    viewer = viewer_settings(timeline, service.miroir)
+    app = create_app(service, token, metrics_token=metrics_token, viewer=viewer)
     uvicorn.run(app, host=args.host, port=args.port)
     return 0

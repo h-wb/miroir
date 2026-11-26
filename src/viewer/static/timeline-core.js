@@ -1,7 +1,7 @@
 // The timeline's logic that needs no page: tested on its own with `node --test`
 // (tests/js/). Nothing here touches the DOM or the network.
 
-// What a day index's `media` codes mean (src/core/timeline.py).
+// What a day index's `media` codes mean (src/viewer/reader.py).
 export const MEDIA_UNKNOWN = 0;
 export const MEDIA_THUMBNAILS = 1;
 export const MEDIA_NO_THUMBNAILS = 2;

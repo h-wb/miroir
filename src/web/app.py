@@ -34,19 +34,22 @@ from src.core.reports import (
 )
 from src.core.secrets import SecretKeyError, SecretResolutionError
 from src.core.service import MiroirService
-from src.core.timeline import (
-    TimelineDatabase,
-    TimelineTimeout,
-    TimelineUnavailable,
-    media_withheld,
-    timeline_source,
-)
 from src.integrations.validation import InvalidArtifact
 from src.kernel.errors import OperationError
 from src.media.links import NotStreamed
 from src.media.names import image_type, valid_key
 from src.media.store import StorageUnavailable
+from src.viewer import TEMPLATES_DIR as VIEWER_TEMPLATES
+from src.viewer.database import TimelineDatabase
+from src.viewer.reader import (
+    TimelineTimeout,
+    TimelineUnavailable,
+    media_withheld,
+    timeline_source,
+)
+from src.viewer.settings import ViewerSettings
 from src.web.metrics import render_metrics
+from src.web.viewer import viewer_settings
 
 SESSION_COOKIE = "miroir_session"
 DEFAULT_MAX_UPLOAD = 512 * 1024 * 1024
@@ -77,6 +80,9 @@ SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
 }
 STATIC_DIR = Path(__file__).parent / "static"
+# The viewer's static files are served under the same `/static/` paths: its
+# pages and `timeline-core.js` build them (package split, step 6).
+VIEWER_STATIC = ("src.viewer", "static")
 # Thumbnails and images copied through the server (decision 040).
 IMMUTABLE = "private, max-age=31536000, immutable"
 # Query parameters of the upload API that are not import options.
@@ -101,7 +107,10 @@ NOTICES = {
     "analysis_removed": "Analysis removed. Its built tables were kept.",
 }
 
-templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+# The viewer's pages extend this base template by name (package split, step 6).
+templates = Jinja2Templates(
+    directory=[str(Path(__file__).parent / "templates"), str(VIEWER_TEMPLATES)]
+)
 
 
 class UploadTooLarge(ValueError):
@@ -171,11 +180,14 @@ def create_app(
     max_upload_bytes: int = DEFAULT_MAX_UPLOAD,
     metrics_token: str | None = None,
     timeline: TimelineDatabase | None = None,
+    viewer: ViewerSettings | None = None,
 ) -> FastAPI:
     """`metrics_token` enables `/metrics` for a scraper that holds only it.
 
-    `timeline` is the read-only warehouse connection; without it the timeline
-    routes say it is not configured.
+    `viewer` is what the viewer reads of the installation, built by the
+    composition root. Without it, it is built from `timeline`, the read-only
+    warehouse connection, and the service's configuration; without either the
+    timeline routes say it is not configured.
     """
     if len(token) < 16:
         raise ValueError("MIROIR_API_TOKEN must be at least 16 characters")
@@ -183,6 +195,8 @@ def create_app(
         metrics_token.encode(), token.encode()
     ):
         raise ValueError(METRICS_TOKEN_REUSED)
+    if viewer is None:
+        viewer = viewer_settings(timeline, service.miroir)
     session = hmac.new(token.encode(), b"miroir-session", hashlib.sha256).hexdigest()
     quiet_access_log()
     app = FastAPI(title="Miroir", docs_url=None, redoc_url=None)
@@ -562,7 +576,7 @@ def create_app(
         no_store = {"Cache-Control": "private, no-store"}
         try:
             withheld = media_withheld(
-                timeline, service.miroir(), connection_id, kind, key
+                viewer.database, viewer.configuration(), connection_id, kind, key
             )
         except TimelineTimeout as error:
             return JSONResponse({"error": str(error)}, 504, headers=no_store)
@@ -749,10 +763,10 @@ def create_app(
     def timeline_links() -> tuple[bool, bool]:
         """The header links the timeline only where there is one to see, and its
         conversations where it reads a `messages` input."""
-        if timeline is None:
+        if viewer.database is None:
             return False, False
         try:
-            source = timeline_source(service.miroir())
+            source = timeline_source(viewer.configuration())
         except (ConfigurationError, OperationError):
             return False, False
         return source is not None, bool(source and source.messages)
@@ -793,19 +807,23 @@ def create_app(
         response.headers["Clear-Site-Data"] = '"cache", "storage"'
         return response
 
+    from src.viewer.conversations import conversation_pages
+    from src.viewer.timeline import timeline_pages
+    from src.viewer.timeline_pages import timeline_page_routes
     from src.web.analyses import analysis_pages
     from src.web.connections import connection_pages
-    from src.web.conversations import conversation_pages
-    from src.web.timeline import timeline_pages
-    from src.web.timeline_pages import timeline_page_routes
 
     app.include_router(connection_pages(service, page))
     app.include_router(analysis_pages(service, page))
-    app.include_router(timeline_pages(timeline, page, service.miroir))
+    app.include_router(timeline_pages(viewer, page))
     # Before the Day view's `/timeline/{day}`, which would take the path.
-    app.include_router(conversation_pages(timeline, page, service.miroir))
-    app.include_router(timeline_page_routes(timeline, page, service.miroir))
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    app.include_router(conversation_pages(viewer, page))
+    app.include_router(timeline_page_routes(viewer, page))
+    app.mount(
+        "/static",
+        StaticFiles(directory=STATIC_DIR, packages=[VIEWER_STATIC]),
+        name="static",
+    )
 
     @app.get("/", response_class=HTMLResponse)
     def overview(request: Request) -> HTMLResponse:

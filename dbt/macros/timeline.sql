@@ -270,7 +270,7 @@
    bounds hold it, a day running from (day::timestamp at time zone tz) to the
    next. Where clocks go back at midnight Postgres reads the repeated midnight as
    the later one, so the hour before it belongs to the previous day; elsewhere
-   this is the local date. The server uses the same rule (src/core/timeline.py). #}
+   this is the local date. The server uses the same rule (src/viewer/reader.py). #}
 {% macro timeline_local_day(column) -%}
     {%- set tz = var('timezone') | replace("'", "''") -%}
     (case when {{ column }} < (({{ column }} at time zone '{{ tz }}')::date::timestamp at time zone '{{ tz }}')
@@ -453,7 +453,7 @@
 {%- endmacro %}
 
 {# What text search indexes: the first 100,000 characters of a frame's or a
-   message's text (src/core/timeline.py SEARCH_CHARACTERS, the same number). A
+   message's text (src/viewer/reader.py SEARCH_CHARACTERS, the same number). A
    tsvector holds at most 1 MB of words, and one longer text would fail every
    build; 100,000 characters are at most 400 KB. The text is stored whole; words
    after that are not found by search. Queries must use this expression to use

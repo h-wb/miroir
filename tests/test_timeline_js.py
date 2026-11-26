@@ -1,4 +1,4 @@
-"""The timeline pages' JavaScript logic (src/web/static/timeline-core.js).
+"""The timeline pages' JavaScript logic (src/viewer/static/timeline-core.js).
 
 Run with Node's built-in test runner when a `node` is on PATH (GitHub's runners
 and the development pod have one); no package is installed for it. Skipped

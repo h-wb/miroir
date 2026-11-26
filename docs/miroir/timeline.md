@@ -2,7 +2,7 @@
 area: "[[Homelab]]"
 categories:
   - "[[Resources]]"
-reviewed: 2026-11-25
+reviewed: 2026-11-26
 summary: How the server reads the timeline's tables, the JSON API it answers (screen, browser and conversations), how it serves images, and how the Day view, search and conversation pages behave.
 topics:
   - "[[Warehouse]]"
@@ -19,8 +19,16 @@ browser visits and search what was on screen. When the analysis links a
 `messages` input, it also reads Apple Messages: conversations to open and
 search, and a lane of messages on the Day view. Its tables are built by the
 [`timeline` package](analyses.md#the-timeline-package); the server only reads
-them. It is the server's only access to the warehouse, in
-`src/core/timeline.py`, which only `web` and `cli` import.
+them. It is the server's only access to the warehouse, and its code is the
+viewer part, `src/viewer/` ([architecture](../architecture.md)): the reader
+(`reader.py`, its sessions in `database.py`), the API (`timeline.py`), the Day
+view and search (`timeline_pages.py`), the conversation pages
+(`conversations.py`), and its own `templates/` and `static/` folders. It reads
+nothing of the configuration itself: the server hands it a `ViewerSettings`
+(`settings.py`) with the reader database and, as the configuration is when it
+answers, the timeline analyses (their schema, time zone and linked inputs) and
+each connection's media kinds. Its pages extend the server's base template, and
+its scripts are served under the same `/static/` addresses as before.
 
 ## Turning it on
 
@@ -193,10 +201,10 @@ affected. The file stays in the bucket: it is hidden, not deleted.
 With a timeline configured, the header links **Timeline**, and **Conversations**
 when the analysis links a `messages` input. Every page needs the login and is
 `Cache-Control: private, no-store`. JavaScript fills the Day view's lanes and
-scrubber from the API (`static/timeline-core.js`, tested with `node --test`, and
-`static/timeline.js`) and pages a conversation as you scroll
-(`static/conversations-core.js`, tested the same way, and
-`static/conversations.js`); the rest of each page works without it.
+scrubber from the API (`src/viewer/static/timeline-core.js`, tested with
+`node --test`, and `timeline.js`) and pages a conversation as you scroll
+(`conversations-core.js`, tested the same way, and `conversations.js`); the rest
+of each page works without it. All four are served at `/static/<name>`.
 
 - `/timeline` opens the latest day with frames or visits in the last 400 days, or
   today. Without a reader or a timeline analysis it says why (503), as every

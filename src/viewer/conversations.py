@@ -8,8 +8,8 @@ page is `Cache-Control: private, no-store`. A conversation is named in an
 address only by its id; text, names and file names reach templates as values,
 so Jinja escapes them, and only `http` and `https` addresses become links.
 
-Kept apart from the Day view's routes so the timeline's pages can move into a
-package of their own (HOMEL-153) as they are.
+Kept apart from the Day view's routes: the thread plugin's pages, beside the
+generic ones (package split).
 """
 
 import re
@@ -22,14 +22,13 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, Response
 
-from src.core.config import ResolvedMiroir
-from src.core.timeline import (
+from src.kernel.errors import OperationError
+from src.viewer.reader import (
     ATTACHMENTS,
     MAX_GUID,
     NO_ANALYSIS,
     NO_MESSAGES,
     NOT_CONFIGURED,
-    TimelineDatabase,
     TimelineReader,
     TimelineTimeout,
     TimelineUnavailable,
@@ -37,8 +36,8 @@ from src.core.timeline import (
     timeline_source,
     valid_conversation_id,
 )
-from src.kernel.errors import OperationError
-from src.web.timeline import (
+from src.viewer.settings import ViewerSettings
+from src.viewer.timeline import (
     NO_STORE,
     UNKNOWN_CONVERSATION,
     _cursor_time,
@@ -308,11 +307,8 @@ def _list_cursor(value: str | None) -> tuple[datetime | None, str] | None:
     return (_cursor_time(at) if at else None, conversation_id)
 
 
-def conversation_pages(
-    database: TimelineDatabase | None,
-    page: Page,
-    miroir: Callable[[], ResolvedMiroir],
-) -> APIRouter:
+def conversation_pages(settings: ViewerSettings, page: Page) -> APIRouter:
+    database = settings.database
     router = APIRouter()
 
     def unavailable(request: Request, message: str, status: int) -> Response:
@@ -329,7 +325,7 @@ def conversation_pages(
     ) -> Response:
         if database is None:
             return unavailable(request, NOT_CONFIGURED, 503)
-        source = timeline_source(miroir())
+        source = timeline_source(settings.configuration())
         if source is None:
             return unavailable(request, NO_ANALYSIS, 503)
         if not source.messages:

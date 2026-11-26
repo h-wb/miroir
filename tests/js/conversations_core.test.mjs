@@ -12,7 +12,7 @@ import {
   seam,
   threadUrl,
   wanted,
-} from "../../src/web/static/conversations-core.js";
+} from "../../src/viewer/static/conversations-core.js";
 
 const ID = "0123456789abcdef0123456789abcdef";
 

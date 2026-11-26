@@ -7,6 +7,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from src.viewer import TEMPLATES_DIR as VIEWER_TEMPLATES
 from src.web.app import SECURITY_HEADERS, STATIC_DIR, create_app
 from tests.test_web import BEARER, TOKEN, WebFixture
 
@@ -74,7 +75,11 @@ class StaticFileTests(WebFixture):
         self.assertIn("Log in", self.client.get("/staticx").text)
 
     def test_templates_hold_no_inline_style_or_script(self):
-        for template in sorted(TEMPLATES.glob("*.html")):
+        templates = sorted(
+            [*TEMPLATES.glob("*.html"), *VIEWER_TEMPLATES.glob("*.html")]
+        )
+        self.assertIn(VIEWER_TEMPLATES / "timeline_day.html", templates)
+        for template in templates:
             with self.subTest(template=template.name):
                 self.assertIsNone(INLINE.search(template.read_text()))
 
