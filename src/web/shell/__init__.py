@@ -161,7 +161,9 @@ class Shell:
         self.templates.env.globals["navigation"] = self.navigation
         self._finished = False
         quiet_access_log()
-        self.app = FastAPI(title="Miroir", docs_url=None, redoc_url=None)
+        self.app = FastAPI(
+            title="Miroir", docs_url=None, redoc_url=None, openapi_url=None
+        )
         self._routes()
 
     def accepts(self, token: str) -> bool:

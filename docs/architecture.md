@@ -137,7 +137,8 @@ viewer's are declared in `src/viewer/navigation.py`, which needs no reader:
 `view` asks it over its settings, `serve --without-viewer` over the
 configuration alone. Both answer `/login` and `/logout`; the session cookie is
 an HMAC of the same token, so a login on one is a login on both. `serve`'s login
-lands on `/`, `view`'s on `/timeline`.
+lands on `/`, `view`'s on `/timeline` when it is reached directly. Behind the
+gateway `/login` is `serve`'s, so a login lands on `/`.
 
 The paths each process answers, for the gateway's routes. A prefix is itself
 and every path below it (`/timeline` and `/timeline/2026-11-20`, not

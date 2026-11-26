@@ -4,7 +4,7 @@ split, step 10).
 `view` serves the viewer's pages and `serve --without-viewer` the admin pages,
 in two processes; both headers carry the same links. The viewer's part asks this
 over its settings; the admin process asks it over the configuration it reads
-(`src.cli.navigation`) and loads nothing else of the viewer. Standard library
+(`src.cli.compose.viewer_links`) and loads nothing else of the viewer. Standard library
 only.
 """
 

@@ -89,7 +89,8 @@ It never opens the metadata store and needs neither `MIROIR_SECRET_KEY`,
 Prefect nor the warehouse's writer. It answers `/timeline`, `/api/timeline`,
 `/media` (the view route), `/static/viewer`, and `/login`, `/logout`,
 `/healthz` and the shell's `/static` files; every admin path is 404. A login on
-it lands on `/timeline`. The gateway sends it `/timeline`, `/api/timeline`,
+it lands on `/timeline` when it is reached directly; behind the gateway `/login`
+is `serve`'s and lands on `/`. The gateway sends it `/timeline`, `/api/timeline`,
 `/media` and `/static/viewer`, and everything else to `serve`
 ([architecture](../architecture.md#processes)). `serve --without-viewer` never
 reads `MIROIR_TIMELINE_DATABASE*`, and its header still links the timeline, from
