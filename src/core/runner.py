@@ -38,7 +38,7 @@ from src.core.operations import (
 from src.kernel.errors import OperationError
 
 if TYPE_CHECKING:
-    from src.core.media import ObjectStore
+    from src.media.store import ObjectStore
 
 log = logging.getLogger(__name__)
 
@@ -1122,7 +1122,7 @@ def _derive(
     and otherwise carries on itself. The outcome is a transformation: nothing
     of the connection's own data is loaded, so its status is unchanged.
     """
-    from src.core.derive import derive_media
+    from src.media.derive import derive_media
 
     store = run.store
     if miroir.media is None or run.object_store is None:

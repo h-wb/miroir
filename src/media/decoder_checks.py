@@ -5,7 +5,7 @@ kinds use before it gets a file, so a Pillow that lost a decoder (a build
 without libjpeg, a broken library) stops the run instead of marking every file
 of that type unreadable. Made with Pillow (HEIF with pillow-heif) once, kept as
 data: nothing here decodes. `tests/test_thumbnails.py` checks there is one for
-every decoder in `src.core.media.IMAGE_DECODERS`."""
+every decoder a profile in `src.media.profiles` uses."""
 
 import base64
 

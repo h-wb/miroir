@@ -19,8 +19,8 @@ from src.integrations.registry import INTEGRATIONS
 
 if TYPE_CHECKING:
     from src.core.config import ResolvedMiroir
-    from src.core.media import ObjectStore
     from src.core.timeline import TimelineDatabase
+    from src.media.store import ObjectStore
 
 DEFAULT_METADATA = "sqlite:///.miroir/metadata.sqlite"
 DEFAULT_ARTIFACTS = ".miroir/artifacts"
@@ -302,7 +302,7 @@ def _orchestrator(args: argparse.Namespace, store: Any, miroir: Any) -> Any:
 def _object_store(miroir: "ResolvedMiroir") -> "ObjectStore | None":
     if miroir.media is None:
         return None
-    from src.adapters.s3 import from_environment
+    from src.media.s3 import from_environment
 
     store = from_environment(miroir.media)
     if store is None:
@@ -316,7 +316,7 @@ def _worker_object_store(miroir: "ResolvedMiroir") -> "ObjectStore | None":
     """The bucket for derive runs; without a key they are blocked, not the CLI."""
     if miroir.media is None:
         return None
-    from src.adapters.s3 import from_environment
+    from src.media.s3 import from_environment
 
     return from_environment(miroir.media)
 
@@ -533,9 +533,9 @@ def _with_store(
 def _backfill_here(
     args: argparse.Namespace, miroir: Any, store: Any, common: dict[str, Any]
 ) -> Any:
-    from src.core.media import backfill_options
     from src.core.runner import execute_operation, request_derive
     from src.kernel.errors import OperationError
+    from src.media.backfill import backfill_options
 
     if miroir.media is None:
         raise OperationError("Media is not configured")
@@ -551,7 +551,7 @@ def _backfill_here(
         origin="local",
         submit=lambda operation: None,
         backfill=backfill_options(
-            connection, args.kind, args.limit, _statuses(args.retry)
+            connection.integration.media, args.kind, args.limit, _statuses(args.retry)
         ),
         join=False,
     )

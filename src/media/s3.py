@@ -7,8 +7,8 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
-from src.core.config import MediaConfig
-from src.core.media import ListedObject, Listing, ObjectTooLarge, StoredObject
+from src.media.config import MediaConfig
+from src.media.store import ListedObject, Listing, ObjectTooLarge, StoredObject
 
 MISSING = {"404", "NoSuchKey", "NotFound"}
 ACCESS_KEY_VARIABLE = "MIROIR_MEDIA_ACCESS_KEY_ID"

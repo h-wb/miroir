@@ -1,9 +1,9 @@
 """Thumbnails and the stored-media table, made by the worker (decision 040).
 
 A derive run drains the queue of confirmed files (`media_pending`): for each, it
-makes thumbnails where the kind has them and writes one `media_objects` row to
-the connection's dataset, also for a file that gets none, so it is not tried
-again. A backfill first walks the bucket from where its last walk stopped and
+makes thumbnails where the kind's profile reads it (`src.media.profiles`) and
+writes one `media_objects` row to the connection's dataset, also for a file
+that gets none, so it is not tried again. A backfill first walks the bucket from where its last walk stopped and
 queues what it finds. Only the runner imports this module, inside the run.
 
 Images are decoded in a child process (`Decoder`), never here.
@@ -23,28 +23,25 @@ from collections.abc import Callable
 from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any, TypeVar, cast
 
-from src.core.config import MediaConfig, ResolvedConnection, ResolvedMiroir
-from src.core.decoder_checks import check_image
-from src.core.media import (
-    CONTENT_TYPES,
-    IMAGE_DECODERS,
-    MAX_THUMBNAIL_BYTES,
-    THUMBNAIL_WIDTHS,
-    ObjectStore,
-    ObjectTooLarge,
-    StoredObject,
-    image_decoders,
+from src.core.config import ResolvedConnection, ResolvedMiroir
+from src.core.operations import MetadataStore, PendingMedia
+from src.kernel.errors import OperationError
+from src.media.config import MediaConfig
+from src.media.decoder_checks import check_image
+from src.media.kinds import MediaKind
+from src.media.names import (
+    content_type,
+    extension,
     kind_prefix,
     object_name,
     thumbnail_name,
     valid_key,
 )
-from src.core.operations import MetadataStore, PendingMedia
-from src.integrations.contracts import MediaKind
-from src.kernel.errors import OperationError
+from src.media.profiles import PROFILES, Profile, formats
+from src.media.store import ObjectStore, ObjectTooLarge, StoredObject
 
 if TYPE_CHECKING:
     from dlt.common.schema.typing import TTableSchemaColumns
@@ -68,10 +65,12 @@ DECODE_CPU_SECONDS = 25
 # The decoder's address space. The worst accepted image measured 480 MB above
 # the child's own 32 MB (a 40-megapixel PNG with grey and alpha).
 DECODE_MEMORY = 1024 * 1024 * 1024
-WIDTHS = THUMBNAIL_WIDTHS
 STATUSES = ("made", "unsupported", "too_large", "unreadable")
 REPO = Path(__file__).resolve().parents[2]
 
+# Whether each size exists, by width. A profile makes only widths that have a
+# column here; a new width is a new column, added beside these.
+THUMBNAIL_COLUMNS = {360: "thumbnail_w360", 1280: "thumbnail_w1280"}
 COLUMNS: dict[str, dict[str, Any]] = {
     "connection_id": {"data_type": "text", "nullable": False},
     "kind": {"data_type": "text", "nullable": False},
@@ -80,8 +79,8 @@ COLUMNS: dict[str, dict[str, Any]] = {
     "content_type": {"data_type": "text", "nullable": False},
     "stored_at": {"data_type": "timestamp", "nullable": False},
     **{
-        f"thumbnail_w{width}": {"data_type": "bool", "nullable": False}
-        for width in WIDTHS
+        column: {"data_type": "bool", "nullable": False}
+        for column in THUMBNAIL_COLUMNS.values()
     },
     "thumbnail_status": {"data_type": "text", "nullable": False},
     "derived_at": {"data_type": "timestamp", "nullable": False},
@@ -111,8 +110,17 @@ class _Lost(Exception):
     pass
 
 
+# A fresh decoder's check makes every width a profile makes.
+_CHECK = Profile(
+    "check",
+    {},
+    widths=tuple(sorted({w for profile in PROFILES.values() for w in profile.widths})),
+    max_output_bytes=max(profile.max_output_bytes for profile in PROFILES.values()),
+)
+
+
 class Decoder:
-    """Thumbnails made by `python -m src.core.thumbnails` in a child process.
+    """Thumbnails made by `python -m src.media.decoder` in a child process.
 
     One child serves a run, one file at a time. It has an address-space limit, a
     CPU limit per file, a wall-clock timeout per file enforced here (reading and
@@ -131,7 +139,7 @@ class Decoder:
         timeout: float = DECODE_TIMEOUT,
         memory: int = DECODE_MEMORY,
         cpu_seconds: int = DECODE_CPU_SECONDS,
-        decoders: tuple[str, ...] = tuple(sorted(set(IMAGE_DECODERS.values()))),
+        decoders: tuple[str, ...] = formats(PROFILES.values()),
     ):
         self.timeout = timeout
         self.memory = memory
@@ -165,7 +173,7 @@ class Decoder:
                 [
                     sys.executable,
                     "-m",
-                    "src.core.thumbnails",
+                    "src.media.decoder",
                     str(self.memory),
                     str(self.cpu_seconds),
                 ],
@@ -183,8 +191,8 @@ class Decoder:
             raise DecoderUnavailable() from None
         self._child = child
         try:
-            for body, formats in _checks(self.decoders):
-                if self._exchange(body, formats, PROBE_TIMEOUT)[0] != "made":
+            for body, decoders in _checks(self.decoders):
+                if self._exchange(body, decoders, _CHECK, PROBE_TIMEOUT)[0] != "made":
                     raise _Lost()
         except _Lost:
             self._kill()
@@ -197,12 +205,12 @@ class Decoder:
         self.close()
 
     def thumbnails(
-        self, body: bytes, formats: tuple[str, ...]
+        self, body: bytes, decoders: tuple[str, ...], profile: Profile
     ) -> tuple[str, dict[int, bytes]]:
         """(status, thumbnails by width), DecoderLost or DecoderUnavailable."""
         self._start()
         try:
-            return self._exchange(body, formats, self.timeout)
+            return self._exchange(body, decoders, profile, self.timeout)
         except _Lost:
             self._kill()
         # Which was it, the file or the decoder? A fresh child answers.
@@ -210,13 +218,17 @@ class Decoder:
         raise DecoderLost()
 
     def _exchange(
-        self, body: bytes, formats: tuple[str, ...], timeout: float
+        self,
+        body: bytes,
+        decoders: tuple[str, ...],
+        profile: Profile,
+        timeout: float,
     ) -> tuple[str, dict[int, bytes]]:
         child = self._child
         assert child is not None and child.stdin is not None
         assert child.stdout is not None
         request = json.dumps(
-            {"formats": formats, "widths": WIDTHS, "size": len(body)}
+            {"formats": decoders, "widths": profile.widths, "size": len(body)}
         ).encode()
         deadline = time.monotonic() + timeout
         try:
@@ -231,8 +243,8 @@ class Decoder:
             sizes = [(int(width), int(size)) for width, size in answer["sizes"]]
             if status not in STATUSES or (status == "made") != bool(sizes):
                 raise ValueError("unexpected answer")
-            if not {width for width, _ in sizes} <= set(WIDTHS) or any(
-                not 0 < size <= MAX_THUMBNAIL_BYTES for _, size in sizes
+            if not {width for width, _ in sizes} <= set(profile.widths) or any(
+                not 0 < size <= profile.max_output_bytes for _, size in sizes
             ):
                 raise ValueError("unexpected thumbnails")
             made = {width: _read(child.stdout, size, deadline) for width, size in sizes}
@@ -366,15 +378,15 @@ def derive_media(
     lock_wait: float,
     backfill: dict[str, Any] | None,
 ) -> DeriveSummary:
-    """One batch per kind with thumbnails. A storage failure ends the run after
+    """One batch per kind with a profile. A storage failure ends the run after
     recording what was finished; the rest stays queued."""
     config = miroir.media
     assert config is not None
     summary = DeriveSummary()
     writer = _Writer(connection, destination, pipelines_dir, store, lock_wait)
-    kinds = [kind for kind in connection.integration.media if kind.thumbnails]
-    used = {d for kind in kinds for d in image_decoders(kind.thumbnails)}
-    with closing(Decoder(decoders=tuple(sorted(used)))) as decoder:
+    kinds = [kind for kind in connection.integration.media if kind.profile]
+    used = formats(kind.derive_profile for kind in kinds if kind.derive_profile)
+    with closing(Decoder(decoders=used)) as decoder:
         for kind in kinds:
             if backfill is not None and backfill["kind"] == kind.name:
                 if backfill.get("retry"):
@@ -497,16 +509,17 @@ class _Batch:
         """The file's row; None when it is no longer stored; _INTERRUPTED when
         the decoder was lost on it."""
         config, connection, kind = self.config, self.connection, self.kind
+        profile = kind.derive_profile
+        assert profile is not None  # only kinds with a profile are derived
         scope = (connection.miroir_id, connection.config.id, kind.name, entry.key)
-        extension = PurePosixPath(entry.key).suffix.lower()
         size = entry.size
         thumbnails: dict[int, bytes] = {}
-        decoders = image_decoders([extension])
-        if extension not in kind.thumbnails or not decoders:
+        reader = profile.decoder(extension(entry.key))
+        if reader is None:
             status = "unsupported"
         elif entry.attempts >= MAX_ATTEMPTS:
             status = "failed"
-        elif entry.size > kind.thumbnail_bound:
+        elif entry.size > kind.derive_bound:
             # The size it was stored with says enough: not read at all.
             status = "too_large"
         else:
@@ -514,7 +527,7 @@ class _Batch:
                 config.prefix, connection.config.id, kind.name, entry.key
             )
             try:
-                stored = _get(self.object_store, name, kind.thumbnail_bound)
+                stored = _get(self.object_store, name, kind.derive_bound)
             except ObjectTooLarge:
                 status = "too_large"
             else:
@@ -524,7 +537,9 @@ class _Batch:
                 self.store.begin_media_attempt(*scope)
                 try:
                     # Only the decoder of the key's extension reads the file.
-                    status, thumbnails = self.decoder.thumbnails(stored.body, decoders)
+                    status, thumbnails = self.decoder.thumbnails(
+                        stored.body, (reader,), profile
+                    )
                 except DecoderLost:
                     return _INTERRUPTED
                 except DecoderUnavailable:
@@ -534,17 +549,25 @@ class _Batch:
                 self.store.end_media_attempt(*scope)
             for width, body in thumbnails.items():
                 target = thumbnail_name(
-                    config.prefix, connection.config.id, kind.name, entry.key, width
+                    config.prefix,
+                    connection.config.id,
+                    kind.name,
+                    entry.key,
+                    width,
+                    profile.output,
                 )
-                _storage(self.object_store.put, target, body, "image/webp")
+                _storage(self.object_store.put, target, body, profile.content_type)
         return {
             "connection_id": connection.config.id,
             "kind": kind.name,
             "key": entry.key,
             "size": size,
-            "content_type": CONTENT_TYPES.get(extension, "application/octet-stream"),
+            "content_type": content_type(entry.key),
             "stored_at": entry.stored_at,
-            **{f"thumbnail_w{width}": width in thumbnails for width in WIDTHS},
+            **{
+                column: width in thumbnails
+                for width, column in THUMBNAIL_COLUMNS.items()
+            },
             "thumbnail_status": status,
             "derived_at": datetime.now(timezone.utc),
             "derive_version": DERIVE_VERSION,

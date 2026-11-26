@@ -11,16 +11,41 @@ from pathlib import Path
 # place of the control plane, which they never import.
 _KERNEL = "src.kernel"
 _KERNEL_LIBRARIES = ("pydantic", "pydantic_core", "annotated_types")
+_MEDIA = "src.media"
 _ALLOWED = {
     "kernel": (),
-    "integrations": (_KERNEL,),
+    # A connector declares its media kinds, and knows nothing else of media.
+    "integrations": (_KERNEL, f"{_MEDIA}.kinds"),
     "analyses": (_KERNEL,),
-    "core": (_KERNEL, "src.integrations", "src.analyses"),
-    # The flow builds the worker's object store from its environment.
-    "pipelines": (_KERNEL, "src.core", "src.adapters.s3"),
+    # Files that rows point at (package split, step 4): so never web, cli, the
+    # viewer (src.core.timeline) or the connector registry; see _MEDIA_DEBT.
+    "media": (_KERNEL,),
+    "core": (_KERNEL, "src.integrations", "src.analyses", _MEDIA),
+    "pipelines": (_KERNEL, "src.core", _MEDIA),
     "adapters": (_KERNEL, "src.core", "src.pipelines"),
-    "web": (_KERNEL, "src.core", "src.integrations"),
-    "cli": (_KERNEL, "src.core", "src.integrations", "src.adapters", "src.web"),
+    "web": (_KERNEL, "src.core", "src.integrations", _MEDIA),
+    "cli": (_KERNEL, "src.core", "src.integrations", "src.adapters", "src.web", _MEDIA),
+}
+# Media's named debt to the control plane: the resolved configuration it is
+# handed and the queue's tables and store in `src.core.operations`. Step 5 moves
+# the queue into media and removes every line; none may be added.
+_MEDIA_DEBT = {
+    ("src.media.derive", "src.core.config.ResolvedConnection"),
+    ("src.media.derive", "src.core.config.ResolvedMiroir"),
+    ("src.media.derive", "src.core.operations.MetadataStore"),
+    ("src.media.derive", "src.core.operations.PendingMedia"),
+    ("src.media.links", "src.core.config.ResolvedConnection"),
+    ("src.media.uploads", "src.core.config.ResolvedConnection"),
+}
+# Libraries a part never imports, and those only one module may import.
+_NEVER = {"media": ("fastapi", "starlette", "prefect")}
+_ONLY = {
+    # Media is never decoded in the web process, nor in the worker's own: one
+    # module decodes, and it runs as a child process that nothing imports.
+    "PIL": f"{_MEDIA}.decoder",
+    "pillow_heif": f"{_MEDIA}.decoder",
+    "boto3": f"{_MEDIA}.s3",
+    "botocore": f"{_MEDIA}.s3",
 }
 # The warehouse reader (decision 040): it needs nothing of the write side, and
 # only the server's transports open it; flow runs hold their own credentials.
@@ -28,12 +53,10 @@ _ALLOWED = {
 _TIMELINE = "src.core.timeline"
 _TIMELINE_IMPORTS = (_KERNEL, "src.core.config", "src.core.analysis")
 _TIMELINE_IMPORTERS = ("src.web", "src.cli")
-# Media is never decoded in the web process, nor in the worker's own: one module
-# decodes, and it runs as a child process that nothing imports. Only the runner
-# imports the derive run that starts it, inside the run.
 _IMAGE_LIBRARIES = ("PIL", "pillow_heif")
-_DECODER = "src.core.thumbnails"
-_DERIVE = "src.core.derive"
+_DECODER = f"{_MEDIA}.decoder"
+# Only the runner imports the derive run that starts the decoder, inside the run.
+_DERIVE = f"{_MEDIA}.derive"
 _DERIVE_IMPORTER = "src.core.runner"
 
 
@@ -64,6 +87,7 @@ class BoundaryTests(unittest.TestCase):
     def test_server_import_boundaries(self) -> None:
         src = Path(__file__).resolve().parents[1] / "src"
         errors: list[str] = []
+        debts: set[tuple[str, str]] = set()
         for folder in sorted(src.iterdir()):
             if folder.is_dir() and folder.name not in (*_ALLOWED, "__pycache__"):
                 errors.append(f"src/{folder.name}:1: part has no import rule")
@@ -93,8 +117,15 @@ class BoundaryTests(unittest.TestCase):
                         errors.append(f"{location}: kernel may not import {name}")
                     elif part in _ALLOWED and name.startswith("src."):
                         allowed = (f"src.{part}", *_ALLOWED[part])
-                        if not any(_within(name, prefix) for prefix in allowed):
+                        if (module, name) in _MEDIA_DEBT:
+                            debts.add((module, name))
+                        elif not any(_within(name, prefix) for prefix in allowed):
                             errors.append(f"{location}: {part} may not import {name}")
+                    if any(_within(name, lib) for lib in _NEVER.get(part, ())):
+                        errors.append(f"{location}: {part} may not import {name}")
+                    for library, owner in _ONLY.items():
+                        if _within(name, library) and module != owner:
+                            errors.append(f"{location}: only {owner} imports {name}")
                     if (
                         module == _TIMELINE
                         and name.startswith("src.")
@@ -105,14 +136,6 @@ class BoundaryTests(unittest.TestCase):
                         _within(module, p) for p in (_TIMELINE, *_TIMELINE_IMPORTERS)
                     ):
                         errors.append(f"{location}: only web and cli import {name}")
-                    if (part == "web" or module == _TIMELINE) and any(
-                        _within(name, library) for library in _IMAGE_LIBRARIES
-                    ):
-                        errors.append(f"{location}: {module} may not decode images")
-                    elif module != _DECODER and any(
-                        _within(name, library) for library in _IMAGE_LIBRARIES
-                    ):
-                        errors.append(f"{location}: only {_DECODER} imports {name}")
                     if _within(name, _DECODER) and module != _DECODER:
                         errors.append(f"{location}: {name} runs as its own process")
                     if _within(name, _DERIVE) and module not in (
@@ -140,6 +163,8 @@ class BoundaryTests(unittest.TestCase):
                             "formats.py and contracts.py may not import dlt at module level"
                         )
 
+        for module, name in sorted(_MEDIA_DEBT - debts):
+            errors.append(f"{module}: no longer imports {name}; remove its debt line")
         self.assertFalse(errors, "\n".join(errors))
 
     def test_the_server_and_the_worker_load_no_image_library(self) -> None:
@@ -152,10 +177,17 @@ class BoundaryTests(unittest.TestCase):
             "src.web.timeline_pages",
             "src.core.service",
             "src.core.runner",
-            "src.core.media",
             "src.core.timeline",
             "src.adapters.prefect",
-            "src.adapters.s3",
+            "src.media.backfill",
+            "src.media.config",
+            "src.media.kinds",
+            "src.media.links",
+            "src.media.names",
+            "src.media.profiles",
+            "src.media.s3",
+            "src.media.store",
+            "src.media.uploads",
         )
         probe = (
             "import importlib, sys\n"

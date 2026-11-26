@@ -26,9 +26,9 @@ from src.analyses.catalog import PACKAGES
 from src.core.analysis import analysis_plan
 from src.core.artifacts import submit_artifact
 from src.core.config import ConfigurationError, parse_miroir
-from src.core.derive import DERIVE_VERSION, _Writer
 from src.core.operations import MetadataStore
 from src.core.runner import import_artifact
+from src.media.derive import DERIVE_VERSION, _Writer
 from src.pipelines.transform import build_connection_models
 from tests.postgres import start_postgres
 from tests.test_miroir import example

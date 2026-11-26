@@ -1,12 +1,12 @@
 """WebP thumbnails of untrusted image bytes (decision 040).
 
 This is the only module that imports an image library (Pillow, and pillow-heif
-for HEIC), and nothing in `src`
-imports it: the derive run starts it as its own process (`python -m
-src.core.thumbnails`), with an address-space limit and no credentials in its
-environment, and sends it one file at a time. A crash, a kill or a decode that
+for HEIC), and nothing in `src` imports it: the derive run starts it as its own
+process (`python -m src.media.decoder`), with an address-space limit and no
+credentials in its environment, and sends it one file at a time. A crash, a kill or a decode that
 takes too long then costs that file, not the run. It imports nothing of Miroir,
-so the child starts quickly and holds nothing else.
+so the child starts quickly and holds nothing else: the decoders and widths of
+a file's profile (`src.media.profiles`) come with each request.
 """
 
 import json

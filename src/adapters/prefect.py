@@ -151,7 +151,7 @@ class PrefectOrchestrator:
         # Only while some connection has a kind the worker makes thumbnails of:
         # without one, no derive run is ever requested.
         if any(
-            kind.thumbnails
+            kind.profile
             for connection in miroir.connections
             for kind in connection.integration.media
         ):
