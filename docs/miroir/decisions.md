@@ -3365,7 +3365,7 @@ are unchanged, so no page's policy is wider than before.
 
 ### 040 amendment — Lanes come from declarations
 
-Status: accepted, 2026-11-26. Step 11 of
+Status: accepted, 2026-11-26, with pull request #68. Step 11 of
 [the package split](../decisions/2026-11-25-package-split.md). Revises where the
 timeline's sources are named: in the Day view's lanes and their pages (phase 1c,
 part 2), the source list of `events` and `days` (phase 1a), messages as a source
