@@ -22,7 +22,7 @@ import {
   textOn,
   timeForX,
   xForTime,
-} from "../../src/web/static/timeline-core.js";
+} from "../../src/viewer/static/timeline-core.js";
 
 const times = [0, 60, 120, 3600, 3700, 7200, 7200, 86390];
 

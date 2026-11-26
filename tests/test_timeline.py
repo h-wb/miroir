@@ -13,13 +13,15 @@ from unittest.mock import patch
 import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError
 
-from src.core import timeline
-from src.core.config import ConfigurationError
-from src.core.timeline import (
+from src.viewer import reader as timeline
+from src.viewer.database import (
     NOT_CONFIGURED,
     STATEMENT_TIMEOUT_MS,
     TimelineDatabase,
     timeline_database_url,
+)
+from src.viewer.database import (
+    TimelineConfigurationError as ConfigurationError,
 )
 from tests.postgres import start_postgres
 
@@ -82,7 +84,7 @@ class TimelineSettingTests(unittest.TestCase):
         # Nothing listens on port 1; the URL's password must not reach the answer.
         database = TimelineDatabase("postgresql://reader:SECRET@127.0.0.1:1/warehouse")
         self.addCleanup(database.close)
-        with self.assertLogs("src.core.timeline", "WARNING") as logs:
+        with self.assertLogs("src.viewer.database", "WARNING") as logs:
             state = timeline.status(database)
         self.assertEqual(
             state,

@@ -23,11 +23,13 @@ import psycopg2
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
 
-from src.core import timeline as timeline_module
 from src.core.analysis import analysis_plan
 from src.core.config import parse_miroir
 from src.core.service import InlineExecutor, MiroirService
-from src.core.timeline import (
+from src.kernel.errors import OperationError
+from src.viewer import STATIC_DIR
+from src.viewer import reader as timeline_module
+from src.viewer.reader import (
     MEDIA_NO_THUMBNAILS,
     MEDIA_THUMBNAILS,
     MEDIA_UNKNOWN,
@@ -41,12 +43,9 @@ from src.core.timeline import (
     TimelineUnavailable,
     read_cursor,
     snippet,
-    status,
-    timeline_source,
 )
-from src.kernel.errors import OperationError
-from src.web.app import STATIC_DIR, create_app
-from src.web.timeline_pages import MEDIA_LABELS
+from src.viewer.timeline_pages import MEDIA_LABELS
+from src.web.app import create_app
 from tests import test_messages_models as apple_messages
 from tests.fakes import FakeObjectStore
 from tests.test_timeline_models import (
@@ -68,6 +67,7 @@ from tests.test_timeline_models import (
 )
 from tests.test_web import BEARER, TOKEN
 from tests.test_web_static import INLINE
+from tests.viewer_settings import status, timeline_source
 
 MAIL = "com.apple.mail"
 MIROIR_ID = "timeline_api"
@@ -322,7 +322,7 @@ class TimelineQueryTests(TimelineApiFixture):
         self.assertEqual(
             (empty["count"], empty["apps"], empty["frames"]["t"]), (0, [], [])
         )
-        with patch("src.core.timeline.MAX_DAY_FRAMES", 3):
+        with patch("src.viewer.reader.MAX_DAY_FRAMES", 3):
             cut = self.reader.screen_day(datetime(2026, 11, 20).date())
         self.assertEqual(
             (cut["count"], cut["truncated"], len(cut["frames"]["key"])), (3, True, 3)
@@ -358,7 +358,7 @@ class TimelineQueryTests(TimelineApiFixture):
         self.assertEqual(withheld["media"]["state"], "withheld")
         self.assertEqual(self.reader.frame(path(-10))["t"], 86390)
         self.assertIsNone(self.reader.frame("2026/11/20/unknown.jpeg"))
-        with patch("src.core.timeline.MAX_TEXT", 7):
+        with patch("src.viewer.reader.MAX_TEXT", 7):
             cut = self.reader.frame(path(0))
         self.assertEqual((cut["text"], cut["text_truncated"]), ("Morning", True))
 
@@ -578,7 +578,7 @@ class TimelineQueryTests(TimelineApiFixture):
         other = client.get(route, headers={**BEARER, "If-None-Match": 'W/"other"'})
         self.assertEqual(other.status_code, 200)
         # Compressed for a client that accepts it; the tag is the content's.
-        compress = patch("src.web.timeline.COMPRESS_FROM", 1)
+        compress = patch("src.viewer.timeline.COMPRESS_FROM", 1)
         compress.start()
         self.addCleanup(compress.stop)
         raw = client.get(
@@ -1211,7 +1211,7 @@ class TimelinePageTests(TimelineApiFixture):
 
     def test_older_results_post_their_fields_in_the_body(self):
         client = self.client()
-        with patch("src.web.timeline_pages.SEARCH_PAGE", 2):
+        with patch("src.viewer.timeline_pages.SEARCH_PAGE", 2):
             first = self.search(client, {"q": "invoice", "kind": "screen"})
             more = re.search(
                 r'<form class="more"([^>]*)>(.*?)</form>', first.text, re.DOTALL

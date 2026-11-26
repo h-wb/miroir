@@ -13,8 +13,8 @@ from datetime import date
 from unittest.mock import patch
 from urllib.parse import quote
 
-from src.core.timeline import NO_MESSAGES, TimelineReader, TimelineTimeout
-from src.web.app import STATIC_DIR
+from src.viewer import STATIC_DIR
+from src.viewer.reader import NO_MESSAGES, TimelineReader, TimelineTimeout
 from tests import test_timeline_conversations as part_one
 from tests.test_messages_models import ALEX, KAI, NOBODY, ROBIN, SAM, message
 from tests.test_timeline_conversations import (
@@ -142,7 +142,7 @@ class ConversationPageTests(ConversationsFixture):
 
     def test_the_list_loads_more_rows_as_it_scrolls(self):
         client = self.client()
-        with patch("src.web.conversations.LIST_PAGE", 1):
+        with patch("src.viewer.conversations.LIST_PAGE", 1):
             page = self.get(client, "/timeline/conversations").text
             seen = re.findall(r'data-conversation="([0-9a-f]{32})"', page)
             more = re.search(r'hx-get="([^"]+)" hx-trigger="intersect once"', page)
@@ -277,7 +277,7 @@ class ConversationPageTests(ConversationsFixture):
     def test_around_marks_a_message_and_at_opens_a_day(self):
         client = self.client()
         dated = self.dated(self.alex)
-        with patch("src.web.conversations.MESSAGE_PAGE", 5):
+        with patch("src.viewer.conversations.MESSAGE_PAGE", 5):
             page = self.thread(client, self.alex, around="a19").text
             self.assertIn('data-opened="around"', page)
             shown = guids(page)
@@ -325,7 +325,7 @@ class ConversationPageTests(ConversationsFixture):
     def test_fragments_page_both_ways_without_gap_or_repeat(self):
         client = self.client()
         dated = self.dated(self.alex)
-        with patch("src.web.conversations.MESSAGE_PAGE", 4):
+        with patch("src.viewer.conversations.MESSAGE_PAGE", 4):
             latest = self.thread(client, self.alex).text
             seen = guids(latest)
             self.assertEqual(seen, dated[-4:])
@@ -362,7 +362,7 @@ class ConversationPageTests(ConversationsFixture):
         # A day after the last message: an empty page, its placeholder marked
         # for the script to remove when the older page arrives, and that page
         # brings none of its own.
-        with patch("src.web.conversations.MESSAGE_PAGE", 4):
+        with patch("src.viewer.conversations.MESSAGE_PAGE", 4):
             late = self.thread(client, self.alex, at="2099-01-01").text
             self.assertEqual(guids(late), [])
             self.assertIn('<li class="empty-page">No dated messages here.</li>', late)
@@ -447,7 +447,7 @@ class ConversationPageTests(ConversationsFixture):
             found,
         )
         # The filter goes with the next page, in the body.
-        with patch("src.web.timeline_pages.SEARCH_PAGE", 1):
+        with patch("src.viewer.timeline_pages.SEARCH_PAGE", 1):
             first = self.search(
                 client, {"q": "invoice", "kind": "messages", "conversation": self.book}
             )
@@ -575,7 +575,7 @@ class ConversationPageTests(ConversationsFixture):
     def test_no_handle_or_search_words_in_any_address(self):
         client = self.client()
         pages = [self.get(client, "/timeline/conversations").text]
-        with patch("src.web.conversations.MESSAGE_PAGE", 4):
+        with patch("src.viewer.conversations.MESSAGE_PAGE", 4):
             for conversation_id in (self.alex, self.book, self.sam):
                 pages.append(self.thread(client, conversation_id).text)
                 pages.append(self.thread(client, conversation_id, at="2026-01-09").text)

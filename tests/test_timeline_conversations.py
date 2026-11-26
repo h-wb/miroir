@@ -19,7 +19,8 @@ from fastapi.testclient import TestClient
 from src.core.analysis import analysis_plan
 from src.core.config import parse_miroir
 from src.core.service import InlineExecutor, MiroirService
-from src.core.timeline import (
+from src.kernel.errors import OperationError
+from src.viewer.reader import (
     MAX_EVENT_TEXT,
     MAX_TEXT,
     NO_MESSAGES,
@@ -29,9 +30,7 @@ from src.core.timeline import (
     TimelineSource,
     TimelineTimeout,
     TimelineUnavailable,
-    timeline_source,
 )
-from src.kernel.errors import OperationError
 from src.web.app import create_app
 from tests.fakes import FakeObjectStore
 from tests.test_messages_models import (
@@ -55,6 +54,7 @@ from tests.test_messages_models import (
 from tests.test_timeline_messages import TimelineMessagesFixture
 from tests.test_timeline_models import READER
 from tests.test_web import BEARER, TOKEN
+from tests.viewer_settings import timeline_source
 
 MIROIR_ID = "timeline_conversations"
 ZONE = "America/Toronto"

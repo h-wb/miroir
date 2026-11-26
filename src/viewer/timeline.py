@@ -21,9 +21,9 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.routing import APIRoute
 from starlette.concurrency import run_in_threadpool
 
-from src.core import timeline
-from src.core.config import ResolvedMiroir
-from src.core.timeline import (
+from src.kernel.errors import OperationError
+from src.viewer import reader as timeline
+from src.viewer.reader import (
     ALL_SOURCES,
     MAX_CONVERSATIONS,
     MAX_EVENTS,
@@ -34,7 +34,6 @@ from src.core.timeline import (
     NO_ANALYSIS,
     NOT_CONFIGURED,
     SOURCES,
-    TimelineDatabase,
     TimelineReader,
     TimelineTimeout,
     TimelineUnavailable,
@@ -42,7 +41,7 @@ from src.core.timeline import (
     timeline_source,
     valid_conversation_id,
 )
-from src.kernel.errors import OperationError
+from src.viewer.settings import ViewerSettings
 
 Page = Callable[..., HTMLResponse]
 NO_STORE = "private, no-store"
@@ -192,25 +191,24 @@ def _tags(header: str) -> set[str]:
     return tags | {f"W/{tag}" for tag in tags if not tag.startswith("W/")}
 
 
-def timeline_pages(
-    database: TimelineDatabase | None,
-    page: Page,
-    miroir: Callable[[], ResolvedMiroir],
-) -> APIRouter:
+def timeline_pages(settings: ViewerSettings, page: Page) -> APIRouter:
+    database = settings.database
     router = APIRouter()
     api = APIRouter(route_class=_TimelineRoute)
 
     def reader() -> TimelineReader:
         if database is None:
             raise _NotConfigured(NOT_CONFIGURED)
-        source = timeline_source(miroir())
+        source = timeline_source(settings.configuration())
         if source is None:
             raise _NotConfigured(NO_ANALYSIS)
         return TimelineReader(database, source)
 
     @router.get("/api/timeline/health")
     def timeline_health() -> JSONResponse:
-        state = timeline.status(database, miroir() if database else None)
+        state = timeline.status(
+            database, settings.configuration() if database else None
+        )
         return JSONResponse(
             state,
             status_code=200 if state["ready"] else 503,

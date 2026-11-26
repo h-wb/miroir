@@ -20,9 +20,9 @@ from fastapi.testclient import TestClient
 from src.core.analysis import analysis_plan
 from src.core.config import parse_miroir
 from src.core.service import InlineExecutor, MiroirService
-from src.core.timeline import TimelineDatabase, TimelineReader, timeline_source
+from src.viewer.reader import TimelineDatabase, TimelineReader
+from src.viewer.timeline import _encoded
 from src.web.app import create_app
-from src.web.timeline import _encoded
 from tests.test_messages_models import chat, message
 from tests.test_timeline_messages import (
     TimelineMessagesFixture,
@@ -39,6 +39,7 @@ from tests.test_timeline_models import (
     timeline,
 )
 from tests.test_web import BEARER, TOKEN
+from tests.viewer_settings import timeline_source
 
 YEAR_FRAMES = 300_000
 DAY = date(2026, 11, 20)

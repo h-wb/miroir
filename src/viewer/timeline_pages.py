@@ -21,9 +21,10 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 from starlette.formparsers import MultiPartException
 
-from src.core import timeline
-from src.core.config import ResolvedMiroir
-from src.core.timeline import (
+from src.kernel.errors import OperationError
+from src.viewer import reader as timeline
+from src.viewer.conversations import thread_url
+from src.viewer.reader import (
     MAX_QUERY,
     MEDIA_NO_THUMBNAILS,
     MEDIA_THUMBNAILS,
@@ -33,16 +34,14 @@ from src.core.timeline import (
     NO_ANALYSIS,
     NOT_CONFIGURED,
     SCREENSHOTS,
-    TimelineDatabase,
     TimelineReader,
     TimelineTimeout,
     TimelineUnavailable,
     timeline_source,
     valid_conversation_id,
 )
-from src.kernel.errors import OperationError
-from src.web.conversations import thread_url
-from src.web.timeline import (
+from src.viewer.settings import ViewerSettings
+from src.viewer.timeline import (
     NO_STORE,
     PAGE_KINDS,
     SEARCH_KINDS,
@@ -126,11 +125,8 @@ def _month(reader: TimelineReader, day: date) -> list[list[dict[str, Any]]]:
     return weeks
 
 
-def timeline_page_routes(
-    database: TimelineDatabase | None,
-    page: Page,
-    miroir: Callable[[], ResolvedMiroir],
-) -> APIRouter:
+def timeline_page_routes(settings: ViewerSettings, page: Page) -> APIRouter:
+    database = settings.database
     router = APIRouter()
 
     def unavailable(request: Request, message: str, status: int) -> Response:
@@ -142,7 +138,7 @@ def timeline_page_routes(
     def reader_or_none() -> TimelineReader | None:
         if database is None:
             return None
-        source = timeline_source(miroir())
+        source = timeline_source(settings.configuration())
         return TimelineReader(database, source) if source else None
 
     def guarded(
@@ -163,7 +159,9 @@ def timeline_page_routes(
     @router.get("/timeline", response_class=HTMLResponse)
     def timeline_home(request: Request) -> Response:
         """The latest day with data, or the status when there is no timeline."""
-        state = timeline.status(database, miroir() if database else None)
+        state = timeline.status(
+            database, settings.configuration() if database else None
+        )
         if not state["ready"]:
             return _no_store(page(request, "timeline.html", timeline=state), 503)
 

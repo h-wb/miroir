@@ -28,9 +28,9 @@ from src.core.analysis import analysis_plan
 from src.core.artifacts import submit_artifact
 from src.core.config import parse_miroir
 from src.core.runner import import_artifact
-from src.core.timeline import SEARCH_CHARACTERS, search_vector
 from src.media.config import MediaConfig
 from src.media.derive import DERIVE_VERSION, MediaWriter
+from src.viewer.reader import SEARCH_CHARACTERS, search_vector
 from tests.test_messages_models import (
     ALEX,
     BOOK,
