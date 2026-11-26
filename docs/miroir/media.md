@@ -100,9 +100,11 @@ PDF or other document) gets a row with `unsupported` and is not read. A file ove
   name.
 - **When.** When the server answers `stored` to a confirmation (or `present` to
   an upload request), it queues the file in the metadata store (`media_pending`,
-  whose definition and repository are media's, `src/media/queue.py`) before answering and asks for a `derive` operation on the Miroir's media
-  deployment ([Prefect](runs.md#prefect)), due `derive_delay_seconds` later. Confirmations before it starts
-  join it, so a collector confirming thousands of files in a pass causes one run.
+  whose definition and repository are media's, `src/media/queue.py`) before
+  answering and asks for a `derive` operation on the Miroir's media deployment
+  ([Prefect](runs.md#prefect)), due `derive_delay_seconds` later. Confirmations
+  before it starts join it, so a collector confirming thousands of files in a
+  pass causes one run.
   A run handles at most `derive_batch` files of each kind and, if more wait and
   it made progress, schedules the next at once; loads of the connection take
   turns with it by lock. Without Prefect the run starts at once and empties the queue
