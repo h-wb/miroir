@@ -25,13 +25,18 @@ _ALLOWED = {
     "core": (_KERNEL, "src.integrations", "src.analyses", _MEDIA),
     "pipelines": (_KERNEL, "src.core", _MEDIA),
     "adapters": (_KERNEL, "src.core", "src.pipelines"),
-    # Web imports the viewer only by the names of _WEB_VIEWER_DEBT; it reads the
-    # analyses' view declarations to build the viewer's settings.
+    # The control plane's admin part, mounted into the shell; never the viewer.
     "web": (_KERNEL, "src.core", "src.integrations", "src.analyses", _MEDIA),
+    # One HTTP surface (package split, step 8): login, headers, static files,
+    # the base page and the navigation; both web and the viewer mount it.
+    "web.shell": (_KERNEL,),
+    # The composition roots: `serve` composes the shell, the admin part and the
+    # viewer, and reads the analyses' view declarations for the viewer's settings.
     "cli": (
         _KERNEL,
         "src.core",
         "src.integrations",
+        "src.analyses",
         "src.adapters",
         "src.web",
         _MEDIA,
@@ -55,30 +60,6 @@ _ONLY = {
     "pillow_heif": f"{_MEDIA}.decoder",
     "boto3": f"{_MEDIA}.s3",
     "botocore": f"{_MEDIA}.s3",
-}
-# Debt of package split steps 6 and 7, name by name: web mounts the viewer's
-# routers, the `/media` view route among them, until step 8 moves the mounting,
-# the navigation links, the template and static folders and the building of its
-# settings (`src.web.viewer`).
-_WEB_VIEWER_DEBT = {
-    "src.web.app": {
-        f"{_VIEWER}.TEMPLATES_DIR": 8,
-        f"{_VIEWER}.conversations.conversation_pages": 8,
-        f"{_VIEWER}.database.TimelineDatabase": 8,
-        f"{_VIEWER}.media.media_routes": 8,
-        f"{_VIEWER}.reader.timeline_source": 8,
-        f"{_VIEWER}.settings.ViewerSettings": 8,
-        f"{_VIEWER}.timeline.timeline_pages": 8,
-        f"{_VIEWER}.timeline_pages.timeline_page_routes": 8,
-    },
-    "src.web.viewer": {
-        f"{_VIEWER}.database.TimelineDatabase": 8,
-        f"{_VIEWER}.reader.PACKAGE": 8,
-        f"{_VIEWER}.settings.TimelineAnalysis": 8,
-        f"{_VIEWER}.settings.ViewerConfiguration": 8,
-        f"{_VIEWER}.settings.ViewerSettings": 8,
-        f"{_VIEWER}.settings.WithholdingAnalysis": 8,
-    },
 }
 _IMAGE_LIBRARIES = ("PIL", "pillow_heif")
 _DECODER = f"{_MEDIA}.decoder"
@@ -114,7 +95,6 @@ class BoundaryTests(unittest.TestCase):
     def test_server_import_boundaries(self) -> None:
         src = Path(__file__).resolve().parents[1] / "src"
         errors: list[str] = []
-        debt_used: set[tuple[str, str]] = set()
         for folder in sorted(src.iterdir()):
             if folder.is_dir() and folder.name not in (*_ALLOWED, "__pycache__"):
                 errors.append(f"src/{folder.name}:1: part has no import rule")
@@ -122,6 +102,8 @@ class BoundaryTests(unittest.TestCase):
         for path in sorted(src.rglob("*.py")):
             relative = path.relative_to(src)
             part = relative.parts[0] if len(relative.parts) > 1 else ""
+            if relative.parts[:2] == ("web", "shell"):
+                part = "web.shell"
             package = ".".join(("src", *relative.parts[:-1]))
             module = ".".join(("src", *relative.with_suffix("").parts))
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -142,8 +124,6 @@ class BoundaryTests(unittest.TestCase):
                         and not any(_within(name, lib) for lib in _KERNEL_LIBRARIES)
                     ):
                         errors.append(f"{location}: kernel may not import {name}")
-                    elif name in _WEB_VIEWER_DEBT.get(module, {}):
-                        debt_used.add((module, name))
                     elif part in _ALLOWED and name.startswith("src."):
                         allowed = (f"src.{part}", *_ALLOWED[part])
                         if not any(_within(name, prefix) for prefix in allowed):
@@ -180,18 +160,14 @@ class BoundaryTests(unittest.TestCase):
                             "formats.py and contracts.py may not import dlt at module level"
                         )
 
-        # A paid debt is struck off, so the table says what is still owed.
-        for module, names in _WEB_VIEWER_DEBT.items():
-            for name, step in names.items():
-                if (module, name) not in debt_used:
-                    errors.append(f"{module}: debt of step {step} unused: {name}")
-
         self.assertFalse(errors, "\n".join(errors))
 
     def test_the_server_and_the_worker_load_no_image_library(self) -> None:
         # What `serve` imports, what its routes import while answering, and the
         # worker's derive run, whose decoding happens in a child process.
         modules = (
+            "src.cli.compose",
+            "src.web.shell",
             "src.web.app",
             "src.web.connections",
             "src.viewer.timeline",

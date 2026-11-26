@@ -11,8 +11,10 @@ created: 2026-11-24T23:30
 
 # Interface and API
 
-One FastAPI app (`src/web/`) serves the pages and the JSON API over the same
-services as the CLI (decision 010). Pages are rendered on the server with htmx
+One FastAPI app serves the pages and the JSON API over the same services as the
+CLI (decision 010): the web shell (`src/web/shell/`, the login, the headers,
+`/static/` and the base page), into which `serve` mounts the control plane's
+admin part (`src/web/app.py`) and the viewer (`src/viewer/`). Pages are rendered on the server with htmx
 for small swaps.
 
 ```bash
@@ -78,14 +80,17 @@ the file changed meanwhile.
 ## Headers and pages
 
 Every response carries
-`Content-Security-Policy: default-src 'self'; img-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`,
+`Content-Security-Policy: default-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`,
 `Referrer-Policy: same-origin` (no address of a Miroir page reaches another
-host) and `X-Content-Type-Options: nosniff`. The policy refuses inline styles and
+host) and `X-Content-Type-Options: nosniff`. The shell sets them, with the policy
+of the part that answers the path: the viewer's paths (`/timeline` and below,
+`/api/timeline/…`, `/media/…`) allow `img-src 'self' blob:`, for the images the
+timeline makes from fetched frames; nothing else does. The policy refuses inline styles and
 scripts, so templates load them from files served at `/static/` (without the
-login, revalidated on each load): from `src/web/static/`, `miroir.css`,
+login, revalidated on each load): from `src/web/shell/static/`, `miroir.css`,
 `miroir.js` and the vendored `htmx.min.js`, whose version and SHA-256 are in
-[VENDORED.md](../../src/web/static/VENDORED.md); from `src/viewer/static/`, the
-timeline's scripts and stylesheet. A template in `src/web/templates/` or
-`src/viewer/templates/` with a `style` attribute, a `<style>` element or an
+[VENDORED.md](../../src/web/shell/static/VENDORED.md); from `src/viewer/static/`, the
+timeline's scripts and stylesheet. A template in `src/web/shell/templates/`,
+`src/web/templates/` or `src/viewer/templates/` with a `style` attribute, a `<style>` element or an
 `on…=` handler fails `tests/test_web_static.py`. The server's access log keeps each request's path and
 drops its query string.

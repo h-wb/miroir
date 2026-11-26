@@ -16,6 +16,7 @@ from unittest.mock import patch
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
 
+from src.cli.compose import web_app
 from src.core.analysis import analysis_plan
 from src.core.config import parse_miroir
 from src.core.service import InlineExecutor, MiroirService
@@ -31,7 +32,6 @@ from src.viewer.reader import (
     TimelineTimeout,
     TimelineUnavailable,
 )
-from src.web.app import create_app
 from tests.fakes import FakeObjectStore
 from tests.test_messages_models import (
     ALEX,
@@ -196,7 +196,7 @@ class ConversationsFixture(TimelineMessagesFixture):
         )
         if database is True:
             database = self.database
-        return TestClient(create_app(service, TOKEN, timeline=database or None))
+        return TestClient(web_app(service, TOKEN, timeline=database or None))
 
     def dated(self, conversation_id):
         """The conversation's dated messages in order, read as the owner."""

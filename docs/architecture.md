@@ -30,7 +30,8 @@ towards its parts, one step at a time, and this page says where it is now.
 | `src/viewer/` | Reading the warehouse and showing it (decision 040): the reader and its read-only sessions, the timeline's API, Day view, search and conversation pages, the `/media` view route and its withheld check, their templates and static files, and `ViewerSettings`, what it reads of the installation | Import the control plane, web, the connectors, dlt, prefect, Pillow or boto3, or read the configuration file |
 | `src/pipelines/` | The flow entry points the scheduler runs | Hold product logic; they call core |
 | `src/adapters/` | Talk to the scheduler (Prefect): plan and apply deployments, submit, observe | Decide what a load is |
-| `src/web/`, `src/cli/` | Transport and presentation; both call the same core services | Contain logic of their own |
+| `src/web/`, `src/cli/` | Transport and presentation; both call the same core services. `src/web/app.py` is the control plane's admin part (its API and pages); `src/cli/compose.py` is the web server's composition root | Contain logic of their own; web never imports the viewer |
+| `src/web/shell/` (the web shell) | One HTTP surface both the admin part and the viewer mount: the token and session checks, `/login` and `/logout`, the security headers with a content security policy per mounted part, `/static/`, the template loader with `base.html`, `login.html` and `error.html`, and the header's navigation, to which each part adds its links | Import anything of Miroir but the kernel |
 | `collector/` (`miroir-collector`) | On a personal machine: read a local source, withhold secrets, deliver to a receiving URL, remember what was acknowledged | Parse or load anything, or import any server code |
 
 ## Who may import whom
@@ -45,8 +46,9 @@ towards its parts, one step at a time, and this page says where it is now.
 | `pipelines` | `kernel`, `core`, `media` (the flow builds the worker's bucket client) |
 | `adapters` | `kernel`, `core`, `pipelines` |
 | `viewer` | `kernel`, `media`, `analyses.views` |
-| `web` | `kernel`, `core`, `integrations`, `analyses`, `media`, and named parts of `viewer` (below) |
-| `cli` | `kernel`, `core`, `integrations`, `adapters`, `web`, `media`, `viewer` |
+| `web` | `kernel`, `core`, `integrations`, `analyses`, `media`, the shell |
+| `web.shell` | `kernel` only (and fastapi, starlette, jinja2) |
+| `cli` | `kernel`, `core`, `integrations`, `analyses`, `adapters`, `web` (the shell included), `media`, `viewer` |
 
 Connectors and analyses take their base types and errors from the kernel, never
 from `core`.
@@ -69,26 +71,31 @@ with their schema (named as the build names it, by `analysis_plan`), time zone,
 linked inputs and whether the build grants the reader role, each connection's
 media kinds, the `media` section, and the analyses whose package declares a
 `Withhold` (`src/analyses/views.py`); and the media object store `serve` built.
-`serve` builds it (`src/cli/main.py`, through `src/web/viewer.py`); `create_app`
+`serve` builds it (`src/cli/main.py`, through `src/cli/compose.py`); `web_app`
 builds the same when given only the reader database. The `/media` view route is
 the viewer's (`src/viewer/media.py`, step 7): it asks those declarations whether
 a row hides the file, then calls media's view side (`src/media/links.py`); the
 control plane's service has no viewing reads, and the collector's media routes
 stay in the control plane. Its templates and static files are its own (`src/viewer/templates/`,
-`src/viewer/static/`): the app's template loader reads both folders, its pages
-extend `base.html` by name, and `/static/` serves both folders at the same
-addresses as before. A test imports every viewer module in a fresh interpreter
+`src/viewer/static/`): the shell's template loader reads them after its own and
+the admin part's, its pages extend `base.html` by name, and `/static/` serves
+them beside the shell's at the same addresses as before. A test imports every viewer module in a fresh interpreter
 and checks that none of dlt, prefect, Pillow or boto3 loaded.
 
-Web imports the viewer only by the names `tests/test_boundaries.py` lists as
-debt (`_WEB_VIEWER_DEBT`), each with the step that removes it; a name no longer
-imported fails the test until it is struck off:
-
-- Step 8: `src/web/app.py` mounts the viewer's routers (the `/media` view
-  route's, `media_routes`, among them), adds its template folder
-  (`TEMPLATES_DIR`), links the header to it (`timeline_source`) and takes
-  `TimelineDatabase` and `ViewerSettings`; `src/web/viewer.py` builds the
-  settings from the configuration, and moves to the composition root.
+The web shell (`src/web/shell/`, package split, step 8) is the one HTTP
+surface; neither the admin part nor the viewer imports the other. A part is
+mounted as a `Part`: its template and static folders, its header links, the
+paths it answers and the sources it adds to the content security policy there,
+the requests that pass without the login because they check a token of their
+own, and its notices. `serve` composes them in `src/cli/compose.py`
+(`web_app`): a shell, the admin part (`mount_admin`, `src/web/app.py`), then the
+viewer (`mount_viewer`), which hands over plain values from
+`src/viewer/part.py` (its routers, `PATHS`, `POLICY` and links) and imports
+nothing of the shell. The login and the headers wrap every part's own
+middleware. `create_app` is the admin part alone in a shell of its own; tests
+that need both parts build them through `web_app`. The viewer's
+`img-src 'self' blob:` is on its own paths only (`/timeline`, `/api/timeline`,
+`/media`); every other response has `img-src 'self'`.
 
 Also: nothing under `src/` imports the collector, and a connector's `formats.py` and
 `contracts.py` never import dlt at module level, so files can be validated

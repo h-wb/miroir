@@ -1,10 +1,10 @@
 """The viewer's functions over a configuration, as the composition root calls
 them: the viewer itself reads only its settings (package split, step 6)."""
 
+from src.cli.compose import viewer_configuration
 from src.core.config import ResolvedMiroir
 from src.viewer import reader
 from src.viewer.database import TimelineDatabase
-from src.web.viewer import viewer_configuration
 
 
 def timeline_source(miroir: ResolvedMiroir) -> reader.TimelineSource | None:

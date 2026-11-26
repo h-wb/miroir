@@ -3,15 +3,19 @@
 import hashlib
 import json
 import re
+import unittest
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from src.cli.compose import web_app
 from src.viewer import TEMPLATES_DIR as VIEWER_TEMPLATES
-from src.web.app import SECURITY_HEADERS, STATIC_DIR, create_app
+from src.web.app import TEMPLATES_DIR as ADMIN_TEMPLATES
+from src.web.app import create_app
+from src.web.shell import SECURITY_HEADERS, STATIC_DIR
+from src.web.shell import TEMPLATES_DIR as TEMPLATES
 from tests.test_web import BEARER, TOKEN, WebFixture
 
-TEMPLATES = Path(STATIC_DIR).parent / "templates"
 # What the policy refuses: style elements and attributes, inline handlers and
 # script, javascript: links.
 INLINE = re.compile(
@@ -35,6 +39,38 @@ class StaticFileTests(WebFixture):
         policy = SECURITY_HEADERS["Content-Security-Policy"]
         self.assertIn("default-src 'self'", policy)
         self.assertNotIn("unsafe", policy)
+
+    def test_only_the_viewer_widens_the_policy_and_only_on_its_own_paths(self):
+        # The timeline makes images from fetched frames (decision 040): blobs are
+        # allowed on the viewer's pages, nowhere else (package split, step 8).
+        strict = (
+            "default-src 'self'; img-src 'self'; object-src 'none'; "
+            "base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+        )
+        viewer = strict.replace("img-src 'self'", "img-src 'self' blob:")
+        self.assertEqual(SECURITY_HEADERS["Content-Security-Policy"], strict)
+        self.login()
+        for path in ("/", "/config", "/login", "/static/miroir.css", "/timelinex"):
+            with self.subTest(path=path):
+                policy = self.client.get(path).headers["Content-Security-Policy"]
+                self.assertEqual(policy, strict)
+                self.assertNotIn("blob:", policy)
+        for path in (
+            "/timeline",
+            "/timeline/conversations",
+            "/timeline/search",
+            "/api/timeline/health",
+            "/media/screen/screenshots/a.png",
+        ):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.headers["Content-Security-Policy"], viewer)
+        # The admin part alone widens nothing.
+        alone = TestClient(create_app(self.service, TOKEN))
+        self.assertEqual(
+            alone.get("/timeline", headers=BEARER).headers["Content-Security-Policy"],
+            strict,
+        )
 
     def test_every_response_carries_the_headers_even_redirects_and_errors(self):
         client = TestClient(create_app(self.service, TOKEN))
@@ -65,19 +101,29 @@ class StaticFileTests(WebFixture):
                 self.assertEqual(response.headers["cache-control"], "no-cache")
                 self.assertEqual(response.headers["x-content-type-options"], "nosniff")
                 self.assertIn("etag", response.headers)
-        for path in ("/static/../app.py", "/static/%2e%2e/app.py", "/static/missing"):
+        for path in (
+            "/static/../__init__.py",
+            "/static/%2e%2e/__init__.py",
+            "/static/missing",
+        ):
             with self.subTest(path=path):
                 response = self.client.get(path, follow_redirects=False)
                 self.assertNotEqual(response.status_code, 200)
-                self.assertNotIn("create_app", response.text)
+                self.assertNotIn("Shell", response.text)
         # The static prefix opens nothing else.
         self.assertEqual(self.client.get("/staticx").status_code, 200)
         self.assertIn("Log in", self.client.get("/staticx").text)
 
     def test_templates_hold_no_inline_style_or_script(self):
         templates = sorted(
-            [*TEMPLATES.glob("*.html"), *VIEWER_TEMPLATES.glob("*.html")]
+            [
+                *TEMPLATES.glob("*.html"),
+                *ADMIN_TEMPLATES.glob("*.html"),
+                *VIEWER_TEMPLATES.glob("*.html"),
+            ]
         )
+        self.assertIn(TEMPLATES / "base.html", templates)
+        self.assertIn(ADMIN_TEMPLATES / "overview.html", templates)
         self.assertIn(VIEWER_TEMPLATES / "timeline_day.html", templates)
         for template in templates:
             with self.subTest(template=template.name):
@@ -164,7 +210,7 @@ class TimelineRouteTests(WebFixture):
 
         # Without a timeline analysis the database alone is not a timeline.
         ready = FakeTimeline({"read_only": True, "statement_timeout": "5s"})
-        client = TestClient(create_app(self.service, TOKEN, timeline=ready))
+        client = TestClient(web_app(self.service, TOKEN, timeline=ready))
         health = client.get("/api/timeline/health", headers=BEARER)
         self.assertEqual(health.status_code, 503)
         self.assertIn("no analysis of the timeline package", health.json()["message"])
@@ -178,18 +224,18 @@ class TimelineRouteTests(WebFixture):
         )
         self.config_path.write_text(json.dumps(config))
         ready = FakeTimeline({"read_only": True, "statement_timeout": "5s"})
-        client = TestClient(create_app(self.service, TOKEN, timeline=ready))
+        client = TestClient(web_app(self.service, TOKEN, timeline=ready))
         health = client.get("/api/timeline/health", headers=BEARER)
         self.assertEqual(health.status_code, 200, health.text)
         self.assertEqual(health.json()["ready"], True)
         self.assertEqual(health.json()["statement_timeout"], "5s")
         writable = FakeTimeline({"read_only": False, "statement_timeout": "5s"})
-        client = TestClient(create_app(self.service, TOKEN, timeline=writable))
+        client = TestClient(web_app(self.service, TOKEN, timeline=writable))
         self.assertEqual(
             client.get("/api/timeline/health", headers=BEARER).status_code, 503
         )
         down = FakeTimeline(error=OperationError("The timeline database is down."))
-        client = TestClient(create_app(self.service, TOKEN, timeline=down))
+        client = TestClient(web_app(self.service, TOKEN, timeline=down))
         client.post("/login", data={"token": TOKEN})
         page = client.get("/timeline")
         self.assertEqual(page.status_code, 503)
@@ -205,7 +251,7 @@ class AccessLogTests(WebFixture):
 
         import uvicorn
 
-        app = create_app(self.service, TOKEN)
+        app = web_app(self.service, TOKEN)
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
             port = probe.getsockname()[1]
@@ -238,7 +284,7 @@ class AccessLogTests(WebFixture):
 
 class RouteTableTests(WebFixture):
     def test_no_path_and_method_is_registered_twice(self):
-        app = create_app(self.service, TOKEN)
+        app = web_app(self.service, TOKEN)
 
         def walk(routes):
             # Included routers are kept as wrappers of the router itself.
@@ -257,3 +303,14 @@ class RouteTableTests(WebFixture):
         self.assertGreater(len(seen), 40)
         self.assertIn(("/api/timeline/search", "POST"), seen)
         self.assertEqual({k: n for k, n in seen.items() if n > 1}, {})
+
+
+class ShellMountGuardTests(unittest.TestCase):
+    def test_a_part_cannot_widen_the_policy_without_paths_or_for_every_page(self):
+        from src.web.shell import Part, Shell
+
+        for paths in ((), ("/",), ("",)):
+            with self.subTest(paths=paths):
+                shell = Shell("synthetic-token-0123456789")
+                with self.assertRaises(ValueError):
+                    shell.mount(Part(paths=paths, policy={"img-src": ("blob:",)}))

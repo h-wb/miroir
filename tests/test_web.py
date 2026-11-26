@@ -18,12 +18,14 @@ import dlt
 import requests
 from fastapi.testclient import TestClient
 
+from src.cli.compose import web_app
 from src.core.config import load_miroir
 from src.core.operations import MetadataStore, OrchestratorUnavailable
 from src.core.runner import execute_operation
 from src.core.service import InlineExecutor, MiroirService, SubprocessExecutor
 from src.kernel.errors import OperationError
-from src.web.app import SESSION_COOKIE, create_app
+from src.web.app import create_app
+from src.web.shell import SESSION_COOKIE
 from tests.test_artifacts import export
 from tests.test_browser_history_batch import FORMAT, batch, compress, record, snapshot
 from tests.test_miroir import example
@@ -63,7 +65,8 @@ class WebFixture(unittest.TestCase):
         http = patch.object(requests.Session, "send", listens_response)
         http.start()
         self.addCleanup(http.stop)
-        self.client = TestClient(create_app(self.service, TOKEN, max_upload_bytes=4096))
+        # What `serve` serves: the shell with the admin part and the viewer.
+        self.client = TestClient(web_app(self.service, TOKEN, max_upload_bytes=4096))
 
     def execute(self, operation_id):
         self.executed.append(operation_id)
@@ -766,7 +769,9 @@ class SubprocessExecutorTests(unittest.TestCase):
                 with (
                     patch.dict(os.environ, {"MIROIR_API_TOKEN": TOKEN}),
                     patch("uvicorn.run"),
-                    patch("src.web.app.create_app", lambda s, t, **_: served.append(s)),
+                    patch(
+                        "src.cli.compose.web_app", lambda s, t, **_: served.append(s)
+                    ),
                     contextlib.redirect_stderr(io.StringIO()),
                 ):
                     code = main(
