@@ -25,8 +25,9 @@ _ALLOWED = {
     "core": (_KERNEL, "src.integrations", "src.analyses", _MEDIA),
     "pipelines": (_KERNEL, "src.core", _MEDIA),
     "adapters": (_KERNEL, "src.core", "src.pipelines"),
-    # Web imports the viewer only by the names of _WEB_VIEWER_DEBT.
-    "web": (_KERNEL, "src.core", "src.integrations", _MEDIA),
+    # Web imports the viewer only by the names of _WEB_VIEWER_DEBT; it reads the
+    # analyses' view declarations to build the viewer's settings.
+    "web": (_KERNEL, "src.core", "src.integrations", "src.analyses", _MEDIA),
     "cli": (
         _KERNEL,
         "src.core",
@@ -36,10 +37,11 @@ _ALLOWED = {
         _MEDIA,
         _VIEWER,
     ),
-    # Reading the warehouse and showing it (package split, step 6): the kernel
-    # and media, never the control plane, web, the connectors or the loading
-    # stack. Its settings arrive as one value (src.viewer.settings).
-    "viewer": (_KERNEL, _MEDIA),
+    # Reading the warehouse and showing it (package split, steps 6 and 7): the
+    # kernel, media and the analyses' view declarations, never the control
+    # plane, web, the connectors or the loading stack. Its settings arrive as one
+    # value (src.viewer.settings).
+    "viewer": (_KERNEL, _MEDIA, "src.analyses.views"),
 }
 # Libraries a part never imports, and those only one module may import.
 _NEVER = {
@@ -54,18 +56,16 @@ _ONLY = {
     "boto3": f"{_MEDIA}.s3",
     "botocore": f"{_MEDIA}.s3",
 }
-# Debt of package split step 6, name by name: web mounts the viewer and serves
-# its `/media` view route until step 7 moves that route and its withheld check
-# into the viewer, and step 8 the mounting, the navigation links, the template
-# and static folders and the building of its settings (`src.web.viewer`).
+# Debt of package split steps 6 and 7, name by name: web mounts the viewer's
+# routers, the `/media` view route among them, until step 8 moves the mounting,
+# the navigation links, the template and static folders and the building of its
+# settings (`src.web.viewer`).
 _WEB_VIEWER_DEBT = {
     "src.web.app": {
         f"{_VIEWER}.TEMPLATES_DIR": 8,
         f"{_VIEWER}.conversations.conversation_pages": 8,
         f"{_VIEWER}.database.TimelineDatabase": 8,
-        f"{_VIEWER}.reader.TimelineTimeout": 7,
-        f"{_VIEWER}.reader.TimelineUnavailable": 7,
-        f"{_VIEWER}.reader.media_withheld": 7,
+        f"{_VIEWER}.media.media_routes": 8,
         f"{_VIEWER}.reader.timeline_source": 8,
         f"{_VIEWER}.settings.ViewerSettings": 8,
         f"{_VIEWER}.timeline.timeline_pages": 8,
@@ -77,6 +77,7 @@ _WEB_VIEWER_DEBT = {
         f"{_VIEWER}.settings.TimelineAnalysis": 8,
         f"{_VIEWER}.settings.ViewerConfiguration": 8,
         f"{_VIEWER}.settings.ViewerSettings": 8,
+        f"{_VIEWER}.settings.WithholdingAnalysis": 8,
     },
 }
 _IMAGE_LIBRARIES = ("PIL", "pillow_heif")
@@ -196,6 +197,7 @@ class BoundaryTests(unittest.TestCase):
             "src.viewer.timeline",
             "src.viewer.timeline_pages",
             "src.viewer.conversations",
+            "src.viewer.media",
             "src.core.service",
             "src.core.runner",
             "src.viewer.reader",

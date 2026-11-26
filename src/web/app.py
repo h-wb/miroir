@@ -36,17 +36,9 @@ from src.core.secrets import SecretKeyError, SecretResolutionError
 from src.core.service import MiroirService
 from src.integrations.validation import InvalidArtifact
 from src.kernel.errors import OperationError
-from src.media.links import NotStreamed
-from src.media.names import image_type, valid_key
-from src.media.store import StorageUnavailable
 from src.viewer import TEMPLATES_DIR as VIEWER_TEMPLATES
 from src.viewer.database import TimelineDatabase
-from src.viewer.reader import (
-    TimelineTimeout,
-    TimelineUnavailable,
-    media_withheld,
-    timeline_source,
-)
+from src.viewer.reader import timeline_source
 from src.viewer.settings import ViewerSettings
 from src.web.metrics import render_metrics
 from src.web.viewer import viewer_settings
@@ -83,8 +75,6 @@ STATIC_DIR = Path(__file__).parent / "static"
 # The viewer's static files are served under the same `/static/` paths: its
 # pages and `timeline-core.js` build them (package split, step 6).
 VIEWER_STATIC = ("src.viewer", "static")
-# Thumbnails and images copied through the server (decision 040).
-IMMUTABLE = "private, max-age=31536000, immutable"
 # Query parameters of the upload API that are not import options.
 UPLOAD_PARAMETERS = {"import", "name", "format"}
 
@@ -186,8 +176,8 @@ def create_app(
 
     `viewer` is what the viewer reads of the installation, built by the
     composition root. Without it, it is built from `timeline`, the read-only
-    warehouse connection, and the service's configuration; without either the
-    timeline routes say it is not configured.
+    warehouse connection, the service's configuration and its media object
+    store; without either the timeline routes say it is not configured.
     """
     if len(token) < 16:
         raise ValueError("MIROIR_API_TOKEN must be at least 16 characters")
@@ -196,7 +186,7 @@ def create_app(
     ):
         raise ValueError(METRICS_TOKEN_REUSED)
     if viewer is None:
-        viewer = viewer_settings(timeline, service.miroir)
+        viewer = viewer_settings(timeline, service.miroir, lambda: service.object_store)
     session = hmac.new(token.encode(), b"miroir-session", hashlib.sha256).hexdigest()
     quiet_access_log()
     app = FastAPI(title="Miroir", docs_url=None, redoc_url=None)
@@ -546,87 +536,6 @@ def create_app(
             headers={"Content-Type": METRICS_CONTENT_TYPE},
         )
 
-    @app.get("/media/{connection_id}/{kind}/{key:path}")
-    def media_view(
-        request: Request, connection_id: str, kind: str, key: str
-    ) -> Response:
-        """A redirect to a short signed link; with `size`, the bytes themselves.
-
-        `size=360` or `1280` copies that thumbnail (404 if none was made);
-        `size=original` copies an image original up to a size, and redirects for
-        any other file. Copied bytes are cached as immutable: a key's file and its
-        thumbnails do not change. The server never decodes them (decision 040).
-
-        A file of a frame the timeline says is withheld is not found, at any size
-        or as a link; a timeline that cannot say refuses rather than serve it.
-        """
-        if not valid_key(key):  # before the warehouse sees it (NUL)
-            return Response(
-                status_code=404, headers={"Cache-Control": "private, no-store"}
-            )
-        refused = withheld_refusal(connection_id, kind, key)
-        if refused is not None:
-            return refused
-        size = request.query_params.get("size")
-        if size is not None:
-            return media_bytes(request, connection_id, kind, key, size)
-        return media_link(connection_id, kind, key)
-
-    def withheld_refusal(connection_id: str, kind: str, key: str) -> Response | None:
-        no_store = {"Cache-Control": "private, no-store"}
-        try:
-            withheld = media_withheld(
-                viewer.database, viewer.configuration(), connection_id, kind, key
-            )
-        except TimelineTimeout as error:
-            return JSONResponse({"error": str(error)}, 504, headers=no_store)
-        except TimelineUnavailable as error:
-            return JSONResponse({"error": str(error)}, 503, headers=no_store)
-        return Response(status_code=404, headers=no_store) if withheld else None
-
-    def media_link(connection_id: str, kind: str, key: str) -> Response:
-        try:
-            url = service.media_view_url(connection_id, kind, key)
-        except OperationError:
-            return Response(status_code=404)
-        return RedirectResponse(
-            url, status_code=302, headers={"Cache-Control": "private, no-store"}
-        )
-
-    def media_bytes(
-        request: Request, connection_id: str, kind: str, key: str, size: str
-    ) -> Response:
-        no_store = {"Cache-Control": "private, no-store"}
-        if len(request.query_params.multi_items()) != 1:
-            return Response(status_code=400, headers=no_store)
-        try:
-            if size == "original":
-                found = service.media_image(connection_id, kind, key)
-                content_type = image_type(key)
-            elif size in ("360", "1280"):
-                found = service.media_thumbnail(connection_id, kind, key, int(size))
-                content_type = "image/webp"
-            else:
-                return Response(status_code=400, headers=no_store)
-        except NotStreamed:
-            return media_link(connection_id, kind, key)
-        except StorageUnavailable:
-            return Response(status_code=503, headers=no_store)
-        except OperationError:
-            return Response(status_code=404, headers=no_store)
-        if found is None:
-            return Response(status_code=404, headers=no_store)
-        headers = {"Cache-Control": IMMUTABLE}
-        if found.etag:
-            # The store's tag for these bytes, as a strong tag.
-            headers["ETag"] = '"' + found.etag.strip('"').replace('"', "") + '"'
-            if headers["ETag"] in {
-                tag.strip().removeprefix("W/")
-                for tag in request.headers.get("if-none-match", "").split(",")
-            }:
-                return Response(status_code=304, headers=headers)
-        return Response(found.body, media_type=content_type, headers=headers)
-
     @app.post("/api/connections/{connection_id}/delivery-token", status_code=201)
     def create_delivery_token(connection_id: str) -> JSONResponse:
         return JSONResponse(
@@ -808,6 +717,7 @@ def create_app(
         return response
 
     from src.viewer.conversations import conversation_pages
+    from src.viewer.media import media_routes
     from src.viewer.timeline import timeline_pages
     from src.viewer.timeline_pages import timeline_page_routes
     from src.web.analyses import analysis_pages
@@ -819,6 +729,8 @@ def create_app(
     # Before the Day view's `/timeline/{day}`, which would take the path.
     app.include_router(conversation_pages(viewer, page))
     app.include_router(timeline_page_routes(viewer, page))
+    # The `/media` view route, after the viewer's withheld check (step 7).
+    app.include_router(media_routes(viewer))
     app.mount(
         "/static",
         StaticFiles(directory=STATIC_DIR, packages=[VIEWER_STATIC]),

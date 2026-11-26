@@ -69,6 +69,7 @@ amendment under it. Older entries say "workspace" (renamed Miroir by 014) and
 | | [040 amendment — Attachment thumbnails (phase 2b)](#040-amendment--attachment-thumbnails-phase-2b) | Accepted |
 | | [040 amendment — Conversations in the API (phase 2c, part 1)](#040-amendment--conversations-in-the-api-phase-2c-part-1) | Accepted |
 | | [040 amendment — The conversation pages (phase 2c, part 2)](#040-amendment--the-conversation-pages-phase-2c-part-2) | Accepted |
+| | [040 amendment — The withheld check reads declarations](#040-amendment--the-withheld-check-reads-declarations) | Accepted |
 | [041](#041--a-messages-analysis-conversations-by-identifier-no-text) | A messages analysis: conversations by identifier, no text | Accepted |
 | [042](#042--dashboards-read-the-analysis-outputs-run_dbt-is-removed) | Dashboards read the analysis outputs; `run_dbt` is removed | Accepted |
 
@@ -3306,6 +3307,44 @@ Known limits:
   grows it.
 - A reply quotes its message only when that message is on the page as served;
   one loaded later by scrolling does not turn the link into a quote.
+
+### 040 amendment — The withheld check reads declarations
+
+Status: accepted, 2026-11-26. Step 7 of
+[the package split](../decisions/2026-11-25-package-split.md). Revises *The
+media route asks the timeline too* in the amendment for phase 1c, part 1, and
+its *second look*: the rule is the same, where it is written is not.
+
+The media route asked "every timeline analysis whose `screen` input is that
+connection, when the kind is `screenshots`", and the check said so in code: it
+named the timeline package, the `screen` role and the `screenshots` kind, and
+the control plane's web app served the route, so receiving files depended on
+the viewer.
+
+**A view declares where rows hide files.** `src/analyses/views.py` holds
+`Withhold(kind, model, key_column, flag_column)` by package: a row of `model`
+whose `key_column` is a file's key and whose `flag_column` is not null hides that
+file. The timeline declares one, its screen frames: `screenshots`,
+`screen_frames`, `image_path`, `withheld`. A catalog test checks that each names
+a model of its package and a media kind an integration of one of its inputs
+declares.
+
+**The check asks the declarations.** For a kind the connection's connector
+declares, it asks every analysis that links that connection, in any role, and
+whose package declares a withhold for that kind. The rest is unchanged: only
+those with a reader role are asked; withheld in any that answers is 404; a key
+none knows is served; none able to answer is 503, or 504 if one reached the
+time limit; a control character is 404 before any lookup. A screenmemory
+connection can be linked only as the timeline's `screen` input, so the same
+analyses are asked as before.
+
+**The route is the viewer's.** `GET /media/{connection}/{kind}/{key}` moved to
+`src/viewer/media.py`, with its path, sizes, headers and answers unchanged. It
+calls media's view side (`src/media/links.py`) with what its settings give it:
+the `media` section and each connection's media kinds, read when it answers,
+and the object store the composition root built. The control plane's service no
+longer has `media_view_url`, `media_thumbnail` or `media_image`; the
+collector's upload and confirm routes stay in the control plane.
 
 ## 041 — A messages analysis: conversations by identifier, no text
 

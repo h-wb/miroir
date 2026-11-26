@@ -186,15 +186,20 @@ bucket's ETag, and answer `If-None-Match` with 304. The connection, kind and key
 are checked as for an upload. The server only copies bytes; it never decodes an
 image.
 
-For a connection a timeline analysis reads as its `screen` input, the route first
-asks the timeline about a screenshot's key, at every size and for the plain
-redirect: a withheld frame's file answers 404 (it may have been stored before a
-newer rule withheld the frame); a key with no frame yet is served. Only the
-analyses that can answer are asked (a `reader_role` set and tables built); a
-frame withheld in any of them stays hidden. If none can answer, the route
-refuses with the timeline's error (503 or 504) rather than serve the file. A key
-with a control character is 404 before any lookup. Other connections are not
-affected. The file stays in the bucket: it is hidden, not deleted.
+The route is the viewer's (`src/viewer/media.py`); it calls media's view side
+(`src/media/links.py`) after its login and withheld checks. Before it serves a
+file, at every size and for the plain redirect, it asks the analyses that link
+the file's connection and whose package declares a `Withhold` for its kind
+(`src/analyses/views.py`). The timeline declares one: a screenshot whose frame
+in `screen_frames` has a `withheld` reason. A withheld frame's file answers 404
+(it may have been stored before a newer rule withheld the frame); a key with no
+frame yet is served. Only the analyses that can answer are asked (a
+`reader_role` set and tables built); a frame withheld in any of them stays
+hidden. If none can answer, the route refuses with the timeline's error (503 or
+504) rather than serve the file. A key with a control character is 404 before
+any lookup. Other kinds and connections are not affected. The file stays in the
+bucket: it is hidden, not deleted
+([decision 040](decisions.md#040-amendment--the-withheld-check-reads-declarations)).
 
 ## The pages
 

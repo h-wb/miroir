@@ -25,6 +25,7 @@ from src.kernel.errors import OperationError
 from src.viewer import reader as timeline
 from src.viewer.conversations import thread_url
 from src.viewer.reader import (
+    FRAMES_KIND,
     MAX_QUERY,
     MEDIA_NO_THUMBNAILS,
     MEDIA_THUMBNAILS,
@@ -33,7 +34,6 @@ from src.viewer.reader import (
     MESSAGES,
     NO_ANALYSIS,
     NOT_CONFIGURED,
-    SCREENSHOTS,
     TimelineReader,
     TimelineTimeout,
     TimelineUnavailable,
@@ -72,7 +72,7 @@ ECHO_LIMIT = 255
 
 def media_url(connection: str | None, key: str, size: int | str) -> str:
     return (
-        f"/media/{quote(connection or '', safe='')}/{SCREENSHOTS}/"
+        f"/media/{quote(connection or '', safe='')}/{FRAMES_KIND}/"
         f"{quote(key, safe='/')}?size={size}"
     )
 

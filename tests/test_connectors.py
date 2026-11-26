@@ -2,6 +2,7 @@
 
 import gzip
 import json
+import re
 import sqlite3
 import tempfile
 import unittest
@@ -12,6 +13,7 @@ from unittest.mock import patch
 import requests
 
 from src.analyses.catalog import PACKAGES
+from src.analyses.views import WITHHOLDS
 from src.core.analysis import analysis_plan
 from src.core.artifacts import submit_artifact
 from src.core.config import ConfigurationError, parse_miroir
@@ -57,6 +59,26 @@ class ConnectorContractTests(unittest.TestCase):
             if definition.analysis is not None:
                 self.assertIn(definition.analysis, PACKAGES, definition.name)
             self.assertTrue(definition.fetch or definition.formats)
+
+    def test_each_withhold_names_a_built_model_and_a_kind_an_input_declares(self):
+        # The viewer asks these before it serves a file (package split, step 7).
+        identifier = re.compile(r"[a-z][a-z0-9_]{0,62}")
+        for package_id, withholds in WITHHOLDS.items():
+            self.assertIn(package_id, PACKAGES)
+            package = PACKAGES[package_id]
+            declared = {
+                kind.name
+                for spec in package.inputs.values()
+                for integration in spec.integrations
+                for kind in INTEGRATIONS[integration].media
+            }
+            self.assertTrue(withholds, package_id)
+            for withhold in withholds:
+                with self.subTest(package=package_id, withhold=withhold):
+                    self.assertIn(withhold.kind, declared)
+                    self.assertIn(withhold.model, package.relations)
+                    for column in (withhold.key_column, withhold.flag_column):
+                        self.assertTrue(identifier.fullmatch(column), column)
 
     def test_resource_selection_is_validated_and_applied(self):
         for bad in ([], ["repos", "repos"], ["not_a_resource"]):

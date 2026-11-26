@@ -65,6 +65,13 @@ configuration and hands in.
 | `POST /api/connections/{id}/media/confirm` | The connection's delivery token | Whether each object is now `stored` |
 | `GET /media/{connection}/{kind}/{key}` | A logged-in administrator | A redirect to a short view link; with `size`, the bytes ([images through the server](timeline.md#images-through-the-server)) |
 
+Media has no routes of its own. The two the collector calls are the control
+plane's, which checks the delivery token and calls `uploads.py`. The view route
+is the viewer's (`src/viewer/media.py`, step 7): after the login it asks the
+views that declare a `Withhold` for the file's kind (`src/analyses/views.py`)
+whether a row hides the file, then calls `links.py` with the `media` section,
+the connection's kinds and the object store its settings give it.
+
 A device holds no storage credential: it asks for links and uses them at once
 ([the collector's side](../../collector/README.md#media)). The bucket is the
 record of what is stored: the server asks the bucket, not a table. An archive can
