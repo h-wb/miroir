@@ -13,6 +13,7 @@ import {
   clock,
   frameAt,
   frameUrl,
+  groupColour,
   imageFor,
   jumpFrame,
   keyStep,
@@ -182,4 +183,14 @@ test("clock times follow the timezone across a change of offset", () => {
   assert.equal(clock(start, 0, "America/Toronto"), "00:00:00");
   assert.equal(clock(start, 3 * 3600, "America/Toronto"), "02:00:00");
   assert.equal(clock(start, 88200, "America/Toronto"), "23:30:00");
+});
+
+test("a group keeps one colour of the palette; no group is grey", () => {
+  assert.equal(groupColour("example.org"), groupColour("example.org"));
+  assert.match(groupColour("example.org"), /^#[0-9a-f]{6}$/);
+  assert.equal(safeColour(groupColour("a conversation")), groupColour("a conversation"));
+  assert.equal(groupColour(""), "#9e9e9e");
+  assert.equal(groupColour(null), "#9e9e9e");
+  const colours = new Set(["a", "b", "c", "d", "e", "f", "g", "h"].map(groupColour));
+  assert.ok(colours.size > 1);
 });

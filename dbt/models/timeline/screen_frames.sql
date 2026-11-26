@@ -42,11 +42,12 @@
 -- The index on the raw image_path also serves dlt's merge of resent frames.
 --
 -- What the worker recorded of each frame's screenshot comes from media_objects in
--- the same dataset, when it exists (timeline_media_columns; no record is unknown).
+-- the same dataset (media_ref), when it exists (timeline_media_columns; no record is unknown).
 -- Its loads are listed in the same _dlt_loads, so an incremental build also reads
 -- again the frames whose record a newly completed load wrote. A table holding
 -- rows built before these columns reads every frame once (timeline_media_pending:
 -- by its rows, not its columns, so a failed first attempt is not forgotten).
+{% set screenshots = media_ref('screen', 'screenshots', 'p.image_path') %}
 {% set replaced = timeline_replaced(['screen']) | length > 0 %}
 {% set cursor = timeline_load_cursor('screenmemory', replaced or timeline_media_pending()) %}
 {% set stamp = timeline_new_stamp() %}
@@ -68,14 +69,7 @@ app_usage as not materialized (
 ),
 -- This connection's screenshots only; the dataset could hold another's.
 media as not materialized (
-    select * from (
-        {{ optional_input('screenmemory', 'media_objects', {
-            'connection_id': 'text', 'kind': 'text', 'key': 'text',
-            'thumbnail_status': 'text', 'thumbnail_w360': 'boolean',
-            'thumbnail_w1280': 'boolean', '_dlt_load_id': 'text'
-        }, ['connection_id', 'kind', 'key', 'thumbnail_status']) }}
-    ) m
-    where m.connection_id = {{ timeline_connection('screen') }} and m.kind = 'screenshots'
+    {{ screenshots.records }}
 ),
 {% if not cursor.rebuild %}
 new_seconds as (
@@ -109,11 +103,7 @@ apps as (
 stored as (
     select p.image_path as key, m.thumbnail_status, m.thumbnail_w360, m.thumbnail_w1280
     from picked p
-    cross join lateral (
-        select * from media m
-        where m.key = p.image_path and {{ timeline_completed_row('m') }}
-        limit 1
-    ) m
+    cross join lateral {{ screenshots.record }} m
 )
 {% else %}
 picked as (select * from frames f where {{ timeline_completed_row('f') }}),

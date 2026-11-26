@@ -26,8 +26,9 @@ view and search (`timeline_pages.py`), the conversation pages
 (`conversations.py`), and its own `templates/` and `static/` folders. It reads
 nothing of the configuration itself: the server hands it a `ViewerSettings`
 (`settings.py`) with the reader database and, as the configuration is when it
-answers, the timeline analyses (their schema, time zone and linked inputs) and
-each connection's media kinds. Its pages extend the server's base template, and
+answers, the timeline analyses (their schema, time zone, linked inputs and
+lanes) and each connection's media kinds. It names no source and no media kind:
+its lanes are declared with the package ([a new source](#a-new-source)). Its pages extend the server's base template, and
 its scripts and stylesheet are served under `/static/viewer/`. `serve` runs it
 with the control plane; `view` runs it alone ([below](#running-it-alone)).
 
@@ -98,8 +99,12 @@ the configuration alone. `serve` with no option keeps running both.
 
 ## The API
 
-The server reads the first `timeline` analysis in the configuration, in the
-schema its build writes. Others are named in a `warning` field of the health
+The server reads the first `timeline` analysis in the configuration (the first
+of a package that declares lanes), in the schema its build writes. A reader's
+first query reads the tables' version in `contract`: a major this server does
+not read answers 503 "built by another package version". Tables built before
+`contract` existed (until the first build after the deploy that adds it) are
+read as version 1.0. Others are named in a `warning` field of the health
 check and of every answer. Every answer carries `analysis` and `timezone`. Dates
 are local days in that time zone, `YYYY-MM-DD`; a day runs from its local
 midnight to the next (where clocks go back at midnight, from the later of the
@@ -109,14 +114,14 @@ it returns. An unknown or repeated parameter is refused.
 
 | Route | Parameters | Answer |
 | --- | --- | --- |
-| `GET /api/timeline/days` | `from`, `to`: days, inclusive, at most 400 apart | `{from, to, days: [{day, screen?: {events, frames}, browser?: {events}, messages?: {events}}]}`, only days with rows, in order; `messages` only when the analysis links a `messages` input |
+| `GET /api/timeline/days` | `from`, `to`: days, inclusive, at most 400 apart | `{from, to, days: [{day, screen?: {events, frames}, browser?: {events}, messages?: {events}}]}`, only days with rows, in order: one key per lane shown, its source; `messages` only when the analysis links a `messages` input |
 | `GET /api/timeline/screen/{day}` | none | A day's frames as columns, below |
 | `GET /api/timeline/frames/{key}` | none (`key` is the frame's media key, slashes included) | One frame, below; 404 if unknown |
-| `GET /api/timeline/events` | `from`, `to`: a day or a time with offset (`to` as a day includes it); `source`: `screen`, `browser` and, when linked, `messages`, comma-separated (default `screen,browser`); `limit` 1–500 (200); `after`: the previous page's `next` | `{events: [...], next}`, events that started in `[from, to)`, oldest first |
+| `GET /api/timeline/events` | `from`, `to`: a day or a time with offset (`to` as a day includes it); `source`: lanes' sources, comma-separated: `screen`, `browser` and, when linked, `messages` (default: the lanes shown always, `screen,browser`); `limit` 1–500 (200); `after`: the previous page's `next` | `{events: [...], next}`, events that started in `[from, to)`, oldest first |
 | `GET /api/timeline/conversations` | `limit` 1–200 (50); `after`: the previous page's `next` | `{conversations: [...], next}`, newest activity first, below |
 | `GET /api/timeline/conversations/{id}` | none (`id` is a `conversation_id`) | One conversation, below; 404 if unknown |
 | `GET /api/timeline/conversations/{id}/messages` | At most one of `before` and `after` (a cursor of a previous answer), `around` (a message's guid) and `at` (a day or a time with offset); `limit` 1–200 (100) | `{conversation_id, messages: [...], before, after}`, below |
-| `POST /api/timeline/search` | A JSON body (`Content-Type: application/json`, else 415; at most 8 KB; each field once). `q`: 1–200 characters, web search syntax (`"a phrase"`, `-word`, `or`), with at least one word to look for in every part (`-word` alone, or `a or -b`, is 400); `kind`: `screen` (default), `browser` or `messages`; `app`: a bundle identifier (screen only); `conversation`: a `conversation_id` (messages only); `from`, `to`: days, optional; `limit` 1–50 (20); `before`: the previous page's `next`. A `GET` answers 400 "Search with POST" | Moments, visits or messages, newest first, below |
+| `POST /api/timeline/search` | A JSON body (`Content-Type: application/json`, else 415; at most 8 KB; each field once). `q`: 1–200 characters, web search syntax (`"a phrase"`, `-word`, `or`), with at least one word to look for in every part (`-word` alone, or `a or -b`, is 400); `kind`: a lane's source, `screen` (default), `browser` or `messages`; `app`: a bundle identifier (screen only); `conversation`: a `conversation_id` (messages only); `from`, `to`: days, optional; `limit` 1–50 (20); `before`: the previous page's `next`. A `GET` answers 400 "Search with POST" | Moments, visits or messages, newest first, below |
 
 The screen index of a day, small enough for about 3,000 frames (about 110 KB,
 15 KB compressed):
@@ -188,12 +193,15 @@ as a frame's, `state` `unknown`, `thumbnails` or `stored` (an attachment is neve
 withheld), and null for a file with no media key. Names are read from `people`
 and `conversations` at each answer, so a renamed contact shows at the next build.
 
-A screen search answers `{kind: "screen", moment_seconds: 300, apps, moments,
-next}`. A moment is the matching frames of one app in one five-minute window
+A screen search answers `{kind: "screen", media_kind: "screenshots",
+moment_seconds: 300, apps, moments, next}` (`media_kind`, the kind of the
+moments' files, since step 11 of the package split). A moment is the matching frames of one app in one five-minute window
 (windows start on multiples of five minutes): `{key, connection, at, until, day,
 app, matches, snippet, media}`, `key` and `at` its first match, `until` its last.
 A browser search answers `{kind: "browser", visits: [{event_id, at, title, url,
-site, snippet}], next}`, matching titles and addresses. A message search answers `{kind: "messages",
+site, snippet}], next}`, matching titles and addresses: the search of every lane
+without a plugin, over `events.search`, with `url` its events' `body` and `site`
+their `group`. A message search answers `{kind: "messages",
 messages: [{guid, conversation_id, display_name, sent_at, day, from_me, sender,
 snippet}], next}`, dated messages only, matched through the text index of
 `messages` whatever the filters. A `snippet` is a list of
@@ -206,6 +214,40 @@ or unreachable (for the conversation routes and a message search, also when the
 analysis has no `messages` input), 504 when a query reached the time limit. Every answer but the screen index is
 `Cache-Control: private, no-store`. Answers over 1 KB are gzip-compressed for a
 client that accepts it.
+
+## A new source
+
+A source joins the timeline without a change to the viewer: its Python, its
+script and its templates draw lanes from declarations and `events` alone
+(package split, step 11). It takes:
+
+1. An input role in the timeline package (`src/analyses/catalog.py`), optional,
+   for the connector that feeds it.
+2. One model, `dbt/models/timeline/timeline_<source>.sql`, writing `events`
+   rows with `source` its own name: the columns of
+   [`events`](analyses.md#lanes-and-the-contract) and `deleted`,
+   `previous_started_at`, `_input` and `_stamp`. Files are joined only through
+   `media_ref`.
+3. A `Lane(role, source, label, colour, plugin)` in `src/analyses/views.py`
+   (`LANES`), after the others: they are the order `events` unites them in. Its
+   `units` word its count ("walk", "walks"), `search_in` where its search looks.
+
+The next build reads it (a normal build; a lane's role, source and media kind
+are part of the build's receipt, so the analysis shows *stale* until then, but
+its wording is not) and records it in `contract`. Where its role is linked, the Day view draws its lane (marks in one
+colour, or by group), counts it in the summary and the calendar, lists its
+events around the frame and gives search a kind of its own over its events'
+titles and bodies (a model that writes an empty `search` is found by nothing).
+The API takes its source in `/api/timeline/events?source=`, answers it in
+`/api/timeline/days` and as a search `kind`. A plugin, a screen of its own, is
+viewer code named by the lane; an unknown name fails the catalog test. A test
+adds such a source to a copy of the dbt project and checks all of this
+(`tests/test_timeline_lanes.py`).
+
+Never take a lane out of the declaration while builds have its rows: each
+build removes, from `events` and `days`, the rows of every listed lane whose
+input was replaced or unlinked, and a lane no longer listed is no longer
+cleaned.
 
 ## Images through the server
 
@@ -249,16 +291,18 @@ scrubber from the API (`src/viewer/static/timeline-core.js`, tested with
 of each page works without it. All four, and `conversations.css`, are served at
 `/static/viewer/<name>`.
 
-- `/timeline` opens the latest day with frames or visits in the last 400 days, or
-  today. Without a reader or a timeline analysis it says why (503), as every
+- `/timeline` opens the latest day with frames or visits (the lanes shown
+  always) in the last 400 days, or today. Without a reader or a timeline analysis it says why (503), as every
   timeline page does; tables not built or the warehouse down say so too (503),
   a query past the time limit 504.
 - `/timeline/{day}` is the Day view: a month calendar beside it, each day shaded
   by its frames plus visits, with links to the days before and after; the frame
   shown, with its time, app, state and masked text, selectable, and "Open the
-  original" when its file is stored; two lanes on the day's time axis (23 to 25
-  hours), Screen coloured by app and Browser with one mark per visit; the visits
-  within fifteen minutes of the frame shown. A day with nothing recorded says so.
+  original" when its file is stored; a lane per source on the day's time axis
+  (23 to 25 hours), Screen coloured by app and Browser with one mark per visit;
+  the visits within fifteen minutes of the frame shown. The summary counts each
+  lane (frames for the screen, events for the others), and so does the
+  calendar's shade. A day with nothing recorded says so.
 - With a `messages` input the Day view also counts the day's messages, shades
   the calendar by them too (a day of messages alone is not empty), draws a third
   lane, Messages, with one mark per message that opens its thread at that
@@ -276,7 +320,7 @@ of each page works without it. All four, and `conversations.css`, are served at
   may well be stored), "No thumbnail could be made" (stored; the original may
   still open), "Withheld" (never uploaded, no text either), "The image could not
   be loaded" (a record whose file is gone).
-- `/timeline/search` searches screen text (moments, newest window first, apps in
+- `/timeline/search` has a kind per lane shown. It searches screen text (moments, newest window first, apps in
   name order within one) or, with **Browser visits**, titles and addresses, or,
   with **Messages** (where linked), message text, newest first, each result with
   its conversation's name, the sender and the time, opening the thread at that

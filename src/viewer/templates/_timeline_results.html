@@ -1,7 +1,9 @@
 {% import "_timeline.html" as t %}
-{% if kind == "messages" %}{% include "_message_results.html" %}{% else %}
+{# By the kind's plugin: the thread's messages, the scrubber's moments, else
+   a lane's events. #}
+{% if plugin == "thread" %}{% include "_message_results.html" %}{% else %}
 {%- for item in results %}
-{% if kind == "screen" %}
+{% if plugin == "scrubber" %}
 <article class="moment">
   <a class="moment-image" href="{{ item.open }}">{{ t.media(item.code, labels, item.thumbnail, "Screenshot at " ~ item.clock) }}</a>
   <div class="moment-text">

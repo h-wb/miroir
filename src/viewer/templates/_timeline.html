@@ -23,19 +23,20 @@
 {%- endfor -%}
 {%- endmacro %}
 
-{# `messages`: the analysis links messages, so they are a kind too, and
-   `conversation` ({id, name}) a filter of them. #}
-{% macro search_form(q="", kind="screen", app="", from_day="", to_day="", messages=False, conversation=None) -%}
+{# `kinds`: one per lane shown ({value, label, search_in}), the first chosen
+   unless `kind` names another; `conversation` ({id, name}) filters the
+   thread's kind. #}
+{% macro search_form(q="", kind="", app="", from_day="", to_day="", kinds=[], conversation=None) -%}
+{%- set chosen = kind if kinds | selectattr("value", "equalto", kind) | list else (kinds[0].value if kinds else "") -%}
+{%- set places = kinds | map(attribute="search_in") | list -%}
 {# POST: search words are never in an address (decision 040). #}
 <form class="timeline-search" method="post" action="/timeline/search" role="search">
-  <label class="grow">Search <input type="search" name="q" value="{{ q }}" maxlength="200" required placeholder="Words on screen{{ ', in page titles or in messages' if messages else ' or in page titles' }}"></label>
+  <label class="grow">Search <input type="search" name="q" value="{{ q }}" maxlength="200" required placeholder="Words {{ places[:-1] | join(', ') }}{{ ' or ' if places | length > 1 else '' }}{{ places[-1] if places else '' }}"></label>
   <fieldset class="kinds">
     <legend class="visually-hidden">Search in</legend>
-    <label><input type="radio" name="kind" value="screen" {% if kind not in ("browser", "messages") %}checked{% endif %}> Screen text</label>
-    <label><input type="radio" name="kind" value="browser" {% if kind == "browser" %}checked{% endif %}> Browser visits</label>
-    {%- if messages %}
-    <label><input type="radio" name="kind" value="messages" {% if kind == "messages" %}checked{% endif %}> Messages</label>
-    {%- endif %}
+    {%- for option in kinds %}
+    <label><input type="radio" name="kind" value="{{ option.value }}" {% if option.value == chosen %}checked{% endif %}> {{ option.label }}</label>
+    {%- endfor %}
   </fieldset>
   <details class="filters" {% if app or from_day or to_day or conversation %}open{% endif %}>
     <summary>Filters</summary>

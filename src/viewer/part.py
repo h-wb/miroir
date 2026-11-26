@@ -52,4 +52,5 @@ def links(settings: ViewerSettings) -> list[tuple[str, str]]:
     # Refuses an unexpected schema, as the pages do.
     if timeline_source(configuration) is None:
         return []
-    return navigation.links(configuration.analyses[0].inputs)
+    first = configuration.analyses[0]
+    return navigation.links(first.inputs, first.lanes)

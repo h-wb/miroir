@@ -4,6 +4,7 @@ The model tests build against a disposable real Postgres (MIROIR_TEST_POSTGRES_B
 see tests/postgres.py) from invented ScreenMemory and browser batches.
 """
 
+import dataclasses
 import getpass
 import gzip
 import json
@@ -23,6 +24,7 @@ import psycopg2.errors
 from dbt.cli.main import dbtRunner
 
 from src.analyses.catalog import PACKAGES
+from src.analyses.views import LANES
 from src.control.analysis import analysis_plan
 from src.control.artifacts import submit_artifact
 from src.control.config import ConfigurationError, parse_miroir
@@ -181,6 +183,7 @@ class TimelinePackageTests(unittest.TestCase):
                 "conversations",
                 "messages",
                 "people",
+                "contract",
             ),
         )
         for inputs in ({"screen": "screen"}, {"browser": "browser"}):
@@ -209,6 +212,48 @@ class TimelinePackageTests(unittest.TestCase):
         )
         music = analysis_plan(parse_miroir(json.dumps(example())).analyses[0])
         self.assertNotIn("miroir_connections", music.variables)
+
+    def test_a_lanes_wording_leaves_the_build_receipt_alone(self):
+        # The pages' words are the viewer's; the build reads role, source and
+        # media kind only (package split, step 11).
+        miroir = configuration([timeline("t", {"browser": "browser"})])
+        before = analysis_plan(miroir.analyses[0])
+        lanes = LANES["timeline"]
+        reworded = tuple(
+            dataclasses.replace(
+                lane,
+                label=lane.label + " (renamed)",
+                colour="lane" if lane.colour == "group" else "group",
+                units=("thing", "things"),
+                search_in="somewhere",
+                always=not lane.always,
+            )
+            for lane in lanes
+        )
+        with patch.dict(LANES, {"timeline": reworded}):
+            after = analysis_plan(miroir.analyses[0])
+        self.assertEqual(after.receipt, before.receipt)
+        self.assertEqual(
+            before.variables["timeline_lanes"],
+            [
+                {
+                    "role": lane.role,
+                    "source": lane.source,
+                    "media_kind": lane.media_kind,
+                }
+                for lane in lanes
+            ],
+        )
+        # What the models read does change it.
+        moved = (
+            *lanes[:1],
+            dataclasses.replace(lanes[1], media_kind="pages"),
+            *lanes[2:],
+        )
+        with patch.dict(LANES, {"timeline": moved}):
+            self.assertNotEqual(
+                analysis_plan(miroir.analyses[0]).receipt, before.receipt
+            )
 
     def test_builds_without_a_miroir_analysis_leave_the_timeline_out(self):
         # dbt reads every model when it parses the project without an analysis.

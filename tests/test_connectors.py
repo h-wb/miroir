@@ -13,7 +13,7 @@ from unittest.mock import patch
 import requests
 
 from src.analyses.catalog import PACKAGES
-from src.analyses.views import WITHHOLDS
+from src.analyses.views import COLOURS, LANES, PLUGINS, WITHHOLDS
 from src.control.analysis import analysis_plan
 from src.control.artifacts import submit_artifact
 from src.control.config import ConfigurationError, parse_miroir
@@ -79,6 +79,67 @@ class ConnectorContractTests(unittest.TestCase):
                     self.assertIn(withhold.model, package.relations)
                     for column in (withhold.key_column, withhold.flag_column):
                         self.assertTrue(identifier.fullmatch(column), column)
+
+    def test_each_lane_reads_an_input_its_models_emit_and_a_known_plugin(self):
+        # A new source joins the timeline with one model and one lane (package
+        # split, step 11): this is what the viewer and the build rely on.
+        root = Path(__file__).resolve().parents[1]
+        models = root / "dbt" / "models"
+        # Every plugin is one the viewer implements: its script names each.
+        script = (root / "src" / "viewer" / "static" / "timeline.js").read_text()
+        for plugin in PLUGINS:
+            self.assertIn(f'= "{plugin}"', script)
+        source = re.compile(r"[a-z][a-z0-9_]{0,40}")
+        for package_id, lanes in LANES.items():
+            self.assertIn(package_id, PACKAGES)
+            package = PACKAGES[package_id]
+            self.assertTrue(lanes, package_id)
+            sources = [lane.source for lane in lanes]
+            self.assertEqual(len(set(sources)), len(sources), "one lane per source")
+            for lane in lanes:
+                with self.subTest(package=package_id, lane=lane.source):
+                    self.assertIn(lane.role, package.inputs)
+                    self.assertTrue(source.fullmatch(lane.source), lane.source)
+                    model = models / package.group / f"timeline_{lane.source}.sql"
+                    self.assertTrue(model.exists(), f"no model emits {lane.source}")
+                    self.assertIn(f"'{lane.source}'::text as source", model.read_text())
+                    self.assertIn(lane.colour, COLOURS)
+                    self.assertTrue(lane.plugin is None or lane.plugin in PLUGINS)
+                    self.assertEqual(len(lane.units), 2)
+                    if lane.media_kind is not None:
+                        declared = {
+                            kind.name
+                            for integration in package.inputs[lane.role].integrations
+                            for kind in INTEGRATIONS[integration].media
+                        }
+                        self.assertIn(lane.media_kind, declared)
+            # A plugin is a screen of its own: at most one lane has each.
+            plugins = [lane.plugin for lane in lanes if lane.plugin]
+            self.assertEqual(len(set(plugins)), len(plugins))
+
+    def test_each_media_ref_names_a_kind_its_role_declares(self):
+        # media_ref is the only way a model joins media_objects (step 11).
+        root = Path(__file__).resolve().parents[1] / "dbt"
+        call = re.compile(r"media_ref\(\s*'([a-z_]+)'\s*,\s*'([a-z_]+)'")
+        found = 0
+        joined = re.compile(r"optional_input\(\s*'[a-z_]+'\s*,\s*'media_objects'")
+        for model in sorted((root / "models").rglob("*.sql")):
+            text = model.read_text()
+            self.assertIsNone(joined.search(text), model.name)
+            for role, kind in call.findall(text):
+                found += 1
+                package = next(
+                    p for p in PACKAGES.values() if p.group == model.parent.name
+                )
+                with self.subTest(model=model.name, role=role):
+                    self.assertIn(role, package.inputs)
+                    declared = {
+                        k.name
+                        for integration in package.inputs[role].integrations
+                        for k in INTEGRATIONS[integration].media
+                    }
+                    self.assertIn(kind, declared)
+        self.assertGreater(found, 0)
 
     def test_resource_selection_is_validated_and_applied(self):
         for bad in ([], ["repos", "repos"], ["not_a_resource"]):

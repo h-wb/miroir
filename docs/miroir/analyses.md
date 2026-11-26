@@ -147,13 +147,56 @@ It writes these relations to `miroir_<analysis>_<identity>_timeline`:
 | `conversations` | One row per conversation (one person or one group, whatever Apple chats it has): `conversation_id` (opaque, below), `display_name`, `is_group`, `title` (a group's own), `participants` (`people.handle` values, never me), `participant_count`, `first_message_at`, `last_message_at` (both without undated messages), `message_count` |
 | `messages` | One row per message (no reactions or group events): `guid`, `conversation_id` (null when it is in no known chat), `sent_at` (null when undated), `day` (local, in `timezone`), `is_from_me`, `sender_handle` (a `people.handle`, null for mine), `sender_written` (the handle as this message writes it), `service`, `text` (as the collector delivered it, masked on the device), `text_unreadable`, `is_edited`, `is_unsent`, `edited_at`, `is_audio`, `reply_to_guid`, `attachments` and `reactions` (JSON arrays, below), `deleted`. Search with `to_tsvector('simple', left(text, 100000))`, the indexed expression, as for frames: the first 100,000 characters |
 | `people` | One row per person other than me: `handle` (the person: an address in lower case, a number's digits), `name` (the address book's, or null), `written` (as Messages writes the handle), `display_name` |
+| `contract` | One row: `version`, the tables' version as the viewer reads them (major.minor, `1.0`), and `lanes`, the lanes the build declared, in order, as a JSON array of their `role`, `source` and `media_kind` (below). Written last in a build |
 
 An app session is a run of frames of one app with no pause over five minutes.
 Frames without an app neither start nor end one. Redirects, reloads, embeds and
 framed links are not visits. Columns starting with `_` are the builds' own
-bookkeeping. `timeline_screen`, `timeline_browser` and `timeline_message_chats`
-(one row per Apple chat with its conversation) are the sources' own models and
-are not meant to be read.
+bookkeeping. `timeline_screen`, `timeline_browser`, `timeline_messages` (a view
+over `messages`) and `timeline_message_chats` (one row per Apple chat with its
+conversation) are the sources' own models and are not meant to be read.
+
+### Lanes and the contract
+
+Each source of `events` is a lane, declared in `src/analyses/views.py` (`LANES`)
+as `Lane(role, source, label, colour, plugin)`, with how the pages word it
+(`units`, `search_in`), whether it is shown unlinked (`always`) and the kind of
+its files (`media_kind`):
+
+| Source | Role | Plugin | Shown | Files |
+| --- | --- | --- | --- | --- |
+| `screen` | `screen` | `scrubber` (frames, the scrubber, screen search) | Always | `screenshots` |
+| `browser` | `browser` | none | Always | none |
+| `messages` | `messages` | `thread` (conversations, message search) | Where linked | `attachments` |
+
+The build passes the lanes to the models (`timeline_lanes`, every declared lane,
+linked or not, with what the models read of it: `role`, `source` and
+`media_kind`; and `timeline_contract`, the version). The pages' wording (label,
+colour, units, search words, `always`) is not passed, so changing it changes no
+build and leaves the analysis current. `events` unites the model
+`timeline_<source>` of each lane, in their order, and `days` counts each; both
+remove the rows of every listed lane's role that belong to another identity
+(`timeline_remove_foreign`). A lane left out would no longer be cleaned, so the
+list keeps every source an existing build has; adding one is safe.
+`contract` records the version and the lanes. The version is major.minor: a
+column or relation added is a minor change, one removed or changed a major one.
+The viewer reads it before anything else and answers 503 for a major it does
+not know, or for a `contract` without exactly one row. The first build after the
+deploy that adds `contract` creates it (a normal build; no rebuild from scratch
+is needed); until then the viewer reads the tables as version 1.0, which they
+are, row for row.
+
+A source's model `timeline_<source>` writes the columns of `events` but
+`search` (a model may write its own; otherwise `events` weights the title over
+the body), and `deleted` (removed rows, which `events` drops),
+`previous_started_at` (old start times, for `days`; null when the row never
+moved), `_input` (`timeline_input` of its role) and `_stamp` (the build's
+stamp, rising from build to build).
+
+Files rows point at are joined only through media's `media_ref(role, kind,
+key_column)` ([Media](media.md#in-the-models)): `screen_frames` and `messages`
+read their records through it, and `timeline_screen` and `timeline_messages`
+take their `media_kind` from it.
 
 ### Messages in the timeline
 
@@ -266,10 +309,10 @@ dlt's own small tables.
 ### Read access
 
 `reader_role` names the role the server reads the timeline with. Each build
-leaves the seven relations readable by the owner and that role only, with
-`SELECT`, and grants `USAGE` on their schema; the models' own tables
-(`timeline_screen`, `timeline_browser`, `timeline_message_chats`,
-`timeline_secret`) stay readable by the owner alone. `messages` holds message
+leaves the eight relations readable by the owner and that role only, with
+`SELECT`, and grants `USAGE` on their schema; the models' own tables and view
+(`timeline_screen`, `timeline_browser`, `timeline_messages`,
+`timeline_message_chats`, `timeline_secret`) stay readable by the owner alone. `messages` holds message
 text, so the role can read it. `conversations`, `people` and `apps`, rebuilt
 every build, replace their rows in one transaction instead of being renamed, so
 their indexes keep their names; a rebuild from scratch leaves the old table,

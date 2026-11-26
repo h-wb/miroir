@@ -73,6 +73,7 @@ OUTPUTS = {
     "conversations",
     "messages",
     "people",
+    "contract",
 }
 # The timeline's own message columns, without the build's bookkeeping.
 MESSAGE_COLUMNS = (
@@ -1058,6 +1059,19 @@ class TimelineMessagesTests(TimelineMessagesFixture):
         self.assertEqual(readable, OUTPUTS)
         for table in ("conversations", "messages", "people"):
             self.assertTrue(self.query(f"select 1 from {schema}.{table}", READER))
+        # The tables' version and the lanes the build declared (step 11).
+        ((version, lanes),) = self.query(
+            f"select version, lanes from {schema}.contract", READER
+        )
+        self.assertEqual(version, "1.0")
+        self.assertEqual(
+            lanes,
+            [
+                {"role": "screen", "source": "screen", "media_kind": "screenshots"},
+                {"role": "browser", "source": "browser", "media_kind": None},
+                {"role": "messages", "source": "messages", "media_kind": "attachments"},
+            ],
+        )
         dataset = miroir.connections[0].binding.dataset_name
         for relation in (
             f"{schema}.timeline_secret",

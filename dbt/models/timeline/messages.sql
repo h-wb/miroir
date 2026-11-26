@@ -67,11 +67,12 @@
 -- incremental build recomputes the messages that rows of the loads completed
 -- since its cursor name or touch: a message sent again (an edit, an unsend, a
 -- restore from another Mac), a new link to a chat, a reaction or removal (its
--- target), an attachment or its link, a media record (its attachment's
--- message), and every message of a chat whose conversation changed
+-- target), an attachment or its link, a media record (media_ref; its
+-- attachment's message), and every message of a chat whose conversation changed
 -- (timeline_message_chats' _stamp, read since _chats_seen). Each is looked up by
 -- index on the raw tables. A message that moved keeps its previous times in
 -- previous_sent_at until days has read the row (as timeline_previous).
+{% set files = media_ref('messages', 'attachments', 'a.media_key') %}
 {% set replaced = timeline_replaced(['messages']) | length > 0 %}
 {% set cursor = timeline_load_cursor('apple_messages', replaced or timeline_messages_retimed()) %}
 {% set stamp = timeline_new_stamp() %}
@@ -115,14 +116,7 @@ attachments as not materialized (
 ),
 -- This connection's attachment files only; the dataset could hold another's.
 media as not materialized (
-    select * from (
-        {{ optional_input('apple_messages', 'media_objects', {
-            'connection_id': 'text', 'kind': 'text', 'key': 'text',
-            'thumbnail_status': 'text', 'thumbnail_w360': 'boolean',
-            'thumbnail_w1280': 'boolean', '_dlt_load_id': 'text'
-        }, ['connection_id', 'kind', 'key', 'thumbnail_status']) }}
-    ) m
-    where m.connection_id = {{ timeline_connection('messages') }} and m.kind = 'attachments'
+    {{ files.records }}
 ),
 chats as not materialized (
     select guid, conversation_key, conversation_id, _stamp from {{ ref('timeline_message_chats') }}
@@ -249,9 +243,7 @@ attachment_items as (
             'thumbnail_w1280', m.thumbnail_w1280
         ) order by a.created_at nulls last, a.transfer_name nulls last, a.guid) as items
     from message_attachments a
-    left join lateral (
-        select * from media m where m.key = a.media_key and {{ timeline_completed_row('m') }} limit 1
-    ) m on true
+    left join lateral {{ files.record }} m on true
     where not {{ messages_is_link_preview('a.transfer_name') }}
     group by 1
 ),

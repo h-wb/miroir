@@ -70,6 +70,8 @@ amendment under it. Older entries say "workspace" (renamed Miroir by 014) and
 | | [040 amendment — Conversations in the API (phase 2c, part 1)](#040-amendment--conversations-in-the-api-phase-2c-part-1) | Accepted |
 | | [040 amendment — The conversation pages (phase 2c, part 2)](#040-amendment--the-conversation-pages-phase-2c-part-2) | Accepted |
 | | [040 amendment — The withheld check reads declarations](#040-amendment--the-withheld-check-reads-declarations) | Accepted |
+| | [040 amendment — Blobs on the viewer's pages only](#040-amendment--blobs-on-the-viewers-pages-only) | Accepted |
+| | [040 amendment — Lanes come from declarations](#040-amendment--lanes-come-from-declarations) | Accepted |
 | [041](#041--a-messages-analysis-conversations-by-identifier-no-text) | A messages analysis: conversations by identifier, no text | Accepted |
 | [042](#042--dashboards-read-the-analysis-outputs-run_dbt-is-removed) | Dashboards read the analysis outputs; `run_dbt` is removed | Accepted |
 
@@ -3360,6 +3362,73 @@ paths (`/timeline` and below, `/api/timeline/…`, `/media/…`) keep
 `img-src 'self' blob:`; every other response, the admin pages, `/login` and
 `/static/` among them, has `img-src 'self'`. The other directives and headers
 are unchanged, so no page's policy is wider than before.
+
+### 040 amendment — Lanes come from declarations
+
+Status: accepted, 2026-11-26, with pull request #68. Step 11 of
+[the package split](../decisions/2026-11-25-package-split.md). Revises where the
+timeline's sources are named: in the Day view's lanes and their pages (phase 1c,
+part 2), the source list of `events` and `days` (phase 1a), messages as a source
+(phase 2c, part 2) and the media columns (phase 1b). What is shown does not
+change.
+
+The sources were named in the reader (`SOURCES` plus messages), the Day view's
+template and script (one element per lane), search (one function per kind) and
+`events.sql` (the list given to `timeline_remove_foreign`); the media kinds in
+the viewer's links and in the models' joins. A new source edited all of them.
+
+**A lane is declared.** `src/analyses/views.py` holds `Lane(role, source, label,
+colour, plugin)` by package, beside `Withhold`, with how the pages word it
+(`units`, `search_in`), whether it is shown unlinked (`always`) and the kind of
+its files (`media_kind`). The timeline declares three: screen (plugin
+`scrubber`), browser and messages (plugin `thread`). Screen and browser are
+`always`, as before: shown linked or not, read by the events API without a
+`source`, counted on the latest day `/timeline` opens; messages only where
+linked. A catalog test checks that each role is an input of its package, each
+source is written by a model `timeline_<source>`, each plugin is one the viewer
+implements and each media kind one its role's connector declares.
+
+**The build passes the lanes.** The timeline's variables carry them
+(`timeline_lanes`, every declared lane, linked or not: its role, source and
+media kind) and the tables' version
+(`timeline_contract`); `miroir_roles` gives each role's dbt source. `events`
+unites `timeline_<source>` for each lane, in order; `days` counts each; both
+clean the rows of every listed lane's role of another identity. A lane left out
+would no longer be cleaned, so the list keeps every source an existing build has;
+adding one is safe. Messages reach `events` through `timeline_messages`, a view
+over `messages` with the columns every source's model has.
+
+**`contract`.** The package builds one row: `version`, major.minor, starting at
+`1.0`, and `lanes`, the declared lanes' role, source and media kind as JSON (the
+pages' wording is not part of the build, so it leaves the receipt alone),
+readable by the reader role like
+the other outputs. An added column or relation is a minor change, a removed or
+changed one a major. The viewer reads the version on a reader's first query and
+answers 503 *built by another package version* for a major it does not know or
+a `contract` without exactly one row. Tables built before `contract` existed are
+read as 1.0, which they are (the identity test), so the viewer keeps answering
+after the deploy until the first build creates it.
+
+**`media_ref`.** Media's macro (`dbt/macros/media.sql`) is the only way a model
+joins `media_objects`: `media_ref(role, kind, key_column)` gives the kind as a
+literal, the role's connection's records of that kind and the lookup of one
+record by key. `screen_frames`, `messages`, `timeline_screen` and
+`timeline_messages` use it in place of their own joins and literal kinds; the
+`screen_only` options of the media hooks are gone (`events` passes its
+condition). A test builds the package on the same synthetic deliveries at the
+commit before and after and compares every table's columns, indexes and rows.
+
+**The viewer draws from the declarations and `events`.** The Day view renders a
+lane per shown lane as data its script reads; the script draws each lane's
+marks (the lane's colour, or by group) and its events around the frame from
+`/api/timeline/events`, the day totals and the calendar count each lane (its
+frames where `days` has them, else its events). Search has one kind per shown
+lane: the scrubber's searches frames' text, the thread's messages' text, any
+other lane `events.search`, with the browser's answer (`visits`). Plugins stay
+code, chosen by the lane's plugin name. Links to files are built from each row's
+connection and kind; a frame's or an attachment's kind is its lane's
+`media_kind`. Whether an analysis can be read, and asked for withheld files, is
+its own `reader_role` parameter, for any package that declares views.
 
 ## 041 — A messages analysis: conversations by identifier, no text
 

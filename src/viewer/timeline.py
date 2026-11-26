@@ -21,19 +21,17 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.routing import APIRoute
 from starlette.concurrency import run_in_threadpool
 
+from src.analyses.views import SCRUBBER, THREAD
 from src.kernel.errors import OperationError
 from src.viewer import reader as timeline
 from src.viewer.reader import (
-    ALL_SOURCES,
     MAX_CONVERSATIONS,
     MAX_EVENTS,
     MAX_GUID,
     MAX_MESSAGES,
     MAX_SEARCH,
-    MESSAGES,
     NO_ANALYSIS,
     NOT_CONFIGURED,
-    SOURCES,
     TimelineReader,
     TimelineTimeout,
     TimelineUnavailable,
@@ -242,23 +240,25 @@ def timeline_pages(settings: ViewerSettings, page: Page) -> APIRouter:
     def events(request: Request) -> Response:
         query = _parameters(request, {"from", "to", "source", "limit", "after"})
         start, end = _time(query.get("from"), "from"), _time(query.get("to"), "to")
-        # Messages only when asked for: the default is as before it was a source.
-        sources = tuple(query.get("source", ",".join(SOURCES)).split(","))
+        found = reader()
+        # Without a source, the lanes shown always: a lane shown where linked
+        # is read only when asked for, as Messages was when it became one.
+        default = ",".join(found.source.default_sources)
+        sources = tuple(query.get("source", default).split(","))
+        declared = [lane.source for lane in found.source.lanes]
         if (
             not sources
             or len(set(sources)) != len(sources)
-            or set(sources) - set(ALL_SOURCES)
+            or set(sources) - set(declared)
         ):
-            raise OperationError(
-                f"source must be one or more of {', '.join(ALL_SOURCES)}"
-            )
+            raise OperationError(f"source must be one or more of {', '.join(declared)}")
         after = None
         if "after" in query:
             at, event_id = read_cursor(query["after"], (str, str))
             after = (_cursor_time(at), event_id)
         return _answer(
             request,
-            reader().events(
+            found.events(
                 start, end, sources, _limit(query.get("limit"), 200, MAX_EVENTS), after
             ),
         )
@@ -321,7 +321,7 @@ def timeline_pages(settings: ViewerSettings, page: Page) -> APIRouter:
     @api.post("/api/timeline/search")
     async def search(request: Request) -> Response:
         fields = await _json_fields(request)
-        found = await run_in_threadpool(search_fields, reader, fields, SEARCH_KINDS)
+        found = await run_in_threadpool(search_fields, reader, fields, True)
         return _answer(request, found)
 
     router.include_router(api)
@@ -333,9 +333,6 @@ USE_POST = (
     " address, where logs and the browser's history would keep them."
 )
 SEARCH_FIELDS = {"q", "kind", "app", "conversation", "from", "to", "limit", "before"}
-# The kinds of search: the pages search messages too where they are linked.
-PAGE_KINDS = ("screen", "browser")
-SEARCH_KINDS = (*PAGE_KINDS, MESSAGES)
 UNKNOWN_CONVERSATION = "Unknown conversation"
 UNKNOWN_MESSAGE = "Unknown message in this conversation"
 MAX_SEARCH_BODY = 8192
@@ -382,51 +379,59 @@ async def _json_fields(request: Request) -> dict[str, str]:
     return fields
 
 
+def search_kinds(source: timeline.TimelineSource, declared: bool = False) -> list[str]:
+    """The kinds of search: one per lane, its source. The pages search the
+    lanes shown; the JSON route every declared one, and a plugin's search
+    without its input answers 503, as its pages do."""
+    return [lane.source for lane in (source.lanes if declared else source.shown)]
+
+
 def search_fields(
     reader: Callable[[], TimelineReader],
     fields: Mapping[str, str],
-    kinds: tuple[str, ...] = PAGE_KINDS,
+    declared: bool = False,
 ) -> dict[str, Any]:
     """A search from its fields (strings), for the JSON route and the page. A
-    message search needs the analysis's messages input (503 without)."""
+    kind is a lane: the scrubber's searches frames' text, the thread's
+    messages' text (503 without its input), and any other lane its events'
+    `search` vector (titles and bodies)."""
     words = _plain(fields.get("q"), "q")
     if words is None:
         raise OperationError("Missing field: q")
-    kind = fields.get("kind", "screen")
     start = _optional_day(fields.get("from") or None, "from")
     end = _optional_day(fields.get("to") or None, "to")
     limit = _limit(fields.get("limit"), 20, MAX_SEARCH)
     before = fields.get("before") or None
     app = _plain(fields.get("app") or None, "app")
     conversation = fields.get("conversation") or None
-    if kind not in kinds:
+    found = reader()
+    kinds = search_kinds(found.source, declared)
+    kind = fields.get("kind", kinds[0] if kinds else "")
+    lane = found.source.lane(kind) if kind in kinds else None
+    if lane is None:
         raise OperationError(f"kind must be {', '.join(kinds[:-1])} or {kinds[-1]}")
-    if conversation is not None and kind != MESSAGES:
+    if conversation is not None and lane.plugin != THREAD:
         raise OperationError("conversation filters message results only")
-    if kind == MESSAGES:
-        if app is not None:
-            raise OperationError("app filters screen results only")
+    if app is not None and lane.plugin != SCRUBBER:
+        raise OperationError("app filters screen results only")
+    if lane.plugin == THREAD:
         if conversation is not None and not valid_conversation_id(conversation):
             raise OperationError("conversation must be a conversation id")
         sent = _message_cursor(before) if before else None
-        return reader().search_messages(words, conversation, start, end, limit, sent)
-    if kind == "screen":
+        return found.search_messages(words, conversation, start, end, limit, sent)
+    if lane.plugin == SCRUBBER:
         if app is not None and not 1 <= len(app) <= 255:
             raise OperationError("app must be a bundle identifier")
         moment = None
         if before:
             bucket, bundle = read_cursor(before, (int, str))
             moment = (bucket, bundle)
-        return reader().search_screen(words, app, start, end, limit, moment)
-    if kind == "browser":
-        if app is not None:
-            raise OperationError("app filters screen results only")
-        visit = None
-        if before:
-            at, event_id = read_cursor(before, (str, str))
-            visit = (_cursor_time(at), event_id)
-        return reader().search_browser(words, start, end, limit, visit)
-    raise OperationError(f"kind must be {', '.join(kinds[:-1])} or {kinds[-1]}")
+        return found.search_screen(words, app, start, end, limit, moment)
+    event = None
+    if before:
+        at, event_id = read_cursor(before, (str, str))
+        event = (_cursor_time(at), event_id)
+    return found.search_events(lane.source, words, start, end, limit, event)
 
 
 def _message_cursor(value: str) -> tuple[datetime, str]:

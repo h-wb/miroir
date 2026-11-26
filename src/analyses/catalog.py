@@ -13,6 +13,7 @@ from typing import Any
 
 from pydantic import Field, field_validator
 
+from src.analyses.views import CONTRACT_VERSION, LANES
 from src.kernel.models import StrictModel
 
 
@@ -94,7 +95,15 @@ def _no_variables(inputs: Mapping[str, Any], parameters: Any) -> dict[str, Any]:
 def _timeline_variables(
     inputs: Mapping[str, Any], parameters: TimelineParameters
 ) -> dict[str, Any]:
-    return {"timeline_reader_role": parameters.reader_role}
+    # The lanes, linked or not: `events` reads each one's model and cleans the
+    # rows of each one's role, and `contract` keeps them (package split, step
+    # 11). A lane left out would no longer be cleaned; adding one is safe. Only
+    # what the models read: the pages' wording is not part of the receipt.
+    return {
+        "timeline_reader_role": parameters.reader_role,
+        "timeline_contract": CONTRACT_VERSION,
+        "timeline_lanes": [lane.built() for lane in LANES["timeline"]],
+    }
 
 
 def _github_variables(
@@ -277,6 +286,7 @@ PACKAGES: Mapping[str, Package] = {
                 "conversations",
                 "messages",
                 "people",
+                "contract",
             ),
             {
                 "screen": InputSpec(

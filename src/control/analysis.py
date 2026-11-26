@@ -67,6 +67,11 @@ def analysis_plan(analysis: ResolvedAnalysis) -> AnalysisPlan:
         variables["miroir_connections"] = {
             role: connection.config.id for role, connection in analysis.inputs.items()
         }
+        # Each role's dbt source, linked or not, so a model finds a role's raw
+        # dataset (its identity, its media records) without naming its source.
+        variables["miroir_roles"] = {
+            role: spec.dbt_source for role, spec in package.inputs.items()
+        }
     if any(not spec.required for spec in package.inputs.values()):
         # Models report measures of unlinked inputs as unknown, not zero.
         variables["miroir_inputs"] = sorted(analysis.inputs)

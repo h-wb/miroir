@@ -13,7 +13,7 @@ from collections.abc import Callable
 
 from fastapi import APIRouter, FastAPI, Request
 
-from src.analyses.views import WITHHOLDS
+from src.analyses.views import LANES, WITHHOLDS
 from src.control.analysis import analysis_plan
 from src.control.config import ConfigurationError, ResolvedAnalysis, ResolvedMiroir
 from src.kernel.errors import OperationError
@@ -22,7 +22,6 @@ from src.viewer import STATIC_DIR as VIEWER_STATIC
 from src.viewer import TEMPLATES_DIR as VIEWER_TEMPLATES
 from src.viewer import part as viewer_part
 from src.viewer.database import TimelineDatabase
-from src.viewer.reader import PACKAGE
 from src.viewer.settings import (
     TimelineAnalysis,
     ViewerConfiguration,
@@ -81,8 +80,9 @@ def mount_viewer(shell: Shell, settings: ViewerSettings) -> None:
 def viewer_configuration(miroir: ResolvedMiroir) -> ViewerConfiguration:
     """What the viewer reads of a configuration."""
     return ViewerConfiguration(
+        # The analyses of a package that declares lanes (the timeline's).
         analyses=tuple(
-            _analysis(a) for a in miroir.analyses if a.package.id == PACKAGE
+            _analysis(a) for a in miroir.analyses if LANES.get(a.package.id)
         ),
         media_kinds={c.config.id: c.integration.media for c in miroir.connections},
         media=miroir.media,
@@ -104,11 +104,14 @@ def viewer_settings(
 
 
 def _built(analysis: ResolvedAnalysis) -> tuple[str, bool]:
-    """Its built tables' schema, and whether its build grants the viewer's
-    reader role those tables."""
+    """Its built tables' schema, as its build names it, and whether its build
+    grants the viewer's reader role those tables: whether the analysis sets its
+    own `reader_role` parameter, for any package that declares views and takes
+    one. A package without that parameter grants the reader nothing."""
     plan = analysis_plan(analysis)
     schema = plan.relations[0].split(".")[0]
-    return schema, bool(plan.variables.get("timeline_reader_role"))
+    parameters = analysis.package.parameters.model_validate(analysis.config.parameters)
+    return schema, bool(getattr(parameters, "reader_role", None))
 
 
 def _analysis(analysis: ResolvedAnalysis) -> TimelineAnalysis:
@@ -119,6 +122,7 @@ def _analysis(analysis: ResolvedAnalysis) -> TimelineAnalysis:
         timezone=analysis.config.timezone,
         inputs={role: c.config.id for role, c in analysis.inputs.items()},
         readable=readable,
+        lanes=LANES[analysis.package.id],
     )
 
 

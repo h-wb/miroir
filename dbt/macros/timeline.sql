@@ -57,26 +57,56 @@
    carry it as `_input`; rows of another identity belong to an input no longer
    linked, or replaced, and are removed before the build. #}
 {% macro timeline_input(role) -%}
-    {%- set sources = {'screen': 'screenmemory', 'browser': 'browser_history', 'messages': 'apple_messages'} -%}
     {%- set connection = var('miroir_connections', {}).get(role) -%}
     {%- if not connection -%}{{ return('') }}{%- endif -%}
-    {{- return(connection ~ '@' ~ var('miroir_sources', {}).get(sources[role], '')) -}}
+    {%- set source_name = var('miroir_roles', {}).get(role, '') -%}
+    {{- return(connection ~ '@' ~ var('miroir_sources', {}).get(source_name, '')) -}}
 {%- endmacro %}
 
+{# The lanes the build declares (src/analyses/views.py LANES), linked or not, in
+   their order: each is {role, source, ...}, its events written by the model
+   timeline_<source>. Empty where the build gives none (another package's). #}
+{% macro timeline_lanes() -%}
+    {%- set lanes = var('timeline_lanes', []) -%}
+    {%- for lane in lanes -%}
+        {%- if not modules.re.fullmatch('[a-z][a-z0-9_]{0,40}', lane.source)
+            or not modules.re.fullmatch('[a-z][a-z0-9_]{0,62}', lane.role) -%}
+            {{ exceptions.raise_compiler_error('Invalid timeline lane ' ~ lane) }}
+        {%- endif -%}
+    {%- endfor -%}
+    {{- return(lanes) -}}
+{%- endmacro %}
+
+{# Each lane's input and its source, for the tables of every source: a source
+   is cleaned of its role's rows of another identity only while its lane is
+   listed. Adding one is safe; leaving one out stops it being cleaned. #}
+{% macro timeline_lane_inputs() -%}
+    {%- set pairs = [] -%}
+    {%- for lane in timeline_lanes() -%}{%- do pairs.append([lane.role, lane.source]) -%}{%- endfor -%}
+    {%- if execute and not pairs -%}
+        {{ exceptions.raise_compiler_error('The timeline build declares no lanes (timeline_lanes)') }}
+    {%- endif -%}
+    {{- return(pairs) -}}
+{%- endmacro %}
+
+{# An entry is a role, or [role, source] where a table holds several sources
+   (by_source): rows of that source whose identity is not the role's. #}
 {% macro timeline_foreign_rows(roles, by_source=false) -%}
-    {%- for role in roles -%}
+    {%- for entry in roles -%}
+        {%- set role, source = (entry, entry) if entry is string else entry -%}
         {#- Two ranges, not "is distinct from", so the index on _input answers. -#}
-        ({% if by_source %}source = '{{ role }}' and {% endif %}(_input < {{ timeline_literal(timeline_input(role)) }} or _input > {{ timeline_literal(timeline_input(role)) }})){% if not loop.last %} or {% endif %}
+        ({% if by_source %}source = '{{ source }}' and {% endif %}(_input < {{ timeline_literal(timeline_input(role)) }} or _input > {{ timeline_literal(timeline_input(role)) }})){% if not loop.last %} or {% endif %}
     {%- endfor -%}
 {%- endmacro %}
 
-{# Roles whose rows in this incremental table belong to another identity. #}
+{# Roles whose rows in this incremental table belong to another identity; for
+   [role, source] entries, their sources. #}
 {% macro timeline_replaced(roles, by_source=false) -%}
     {%- set replaced = [] -%}
     {%- if execute and is_incremental() -%}
-        {%- for role in roles -%}
-            {%- if run_query('select 1 from ' ~ this ~ ' where ' ~ timeline_foreign_rows([role], by_source) ~ ' limit 1').rows | length > 0 -%}
-                {%- do replaced.append(role) -%}
+        {%- for entry in roles -%}
+            {%- if run_query('select 1 from ' ~ this ~ ' where ' ~ timeline_foreign_rows([entry], by_source) ~ ' limit 1').rows | length > 0 -%}
+                {%- do replaced.append(entry if entry is string else entry[1]) -%}
             {%- endif -%}
         {%- endfor -%}
     {%- endif -%}
@@ -373,16 +403,14 @@
    raw rows or its load gone) would keep its null and make every later build read
    everything again. Such rows get the value the models give: `value`, where
    `where` holds. The partial index makes this free when nothing is pending. #}
-{% macro timeline_media_settle(value, where='true', screen_only=false) -%}
-    {%- set where = "source = 'screen'" if screen_only else where -%}
+{% macro timeline_media_settle(value, where='true') -%}
     update {{ this }} set media_withheld = {{ value }}
     where media_withheld is null and ({{ where }})
 {%- endmacro %}
 
 {# Pre-hook, after timeline_add_media_columns: the index for that check. Empty
    once every row is read again; created once, on an existing table. #}
-{% macro timeline_media_pending_index(key, where='true', screen_only=false) -%}
-    {%- set where = "source = 'screen'" if screen_only else where -%}
+{% macro timeline_media_pending_index(key, where='true') -%}
     {%- if is_incremental() -%}
     create index if not exists {{ adapter.quote(this.identifier ~ '_media_pending') }}
         on {{ this }} ({{ adapter.quote(key) }}) where media_withheld is null and ({{ where }})

@@ -10,9 +10,9 @@ import base64
 import json
 import logging
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any, cast
 from zoneinfo import ZoneInfo
@@ -20,9 +20,8 @@ from zoneinfo import ZoneInfo
 import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
-from src.analyses.views import SCREEN_FRAMES
+from src.analyses.views import SCRUBBER, THREAD, Lane
 from src.kernel.errors import OperationError, Timeout, Unavailable
-from src.viewer import navigation
 from src.viewer.database import (
     NOT_CONFIGURED,
     STATEMENT_TIMEOUT_MS,
@@ -72,18 +71,20 @@ def status(
 
 # ---- Which tables -------------------------------------------------------------
 
-# The package whose analyses the viewer shows, and the role of its messages
-# input; the composition root hands it their settings (src.viewer.settings).
-PACKAGE = navigation.PACKAGE
-MESSAGES_ROLE = navigation.MESSAGES_ROLE
-# The kind of the files a screen frame points at, as the view that hides some of
-# them declares it (package split, step 7); each row names its own in step 11.
-FRAMES_KIND = SCREEN_FRAMES.kind
-ATTACHMENTS = "attachments"
+# The majors of the tables' version (the package's `contract`) this viewer
+# reads; a minor change only adds, so any minor of these is read.
+CONTRACT_MAJORS = (1,)
+# The version of tables built before the package wrote `contract`: the same
+# tables as 1.0 (tests/test_timeline_identity.py).
+UNRECORDED_VERSION = "1.0"
 NO_ANALYSIS = (
     "The timeline is not configured: no analysis of the timeline package is set up."
 )
 NOT_BUILT = "The timeline has not been built yet, or its reader role cannot read it."
+OTHER_VERSION = (
+    "The timeline was built by another package version than this viewer reads;"
+    " deploy the matching viewer, or rebuild the timeline."
+)
 NO_MESSAGES = (
     "The timeline reads no Apple Messages: its analysis has no messages input."
 )
@@ -111,17 +112,51 @@ class TimelineSource:
     timezone: str
     # Further timeline analyses, not shown: only the first one is.
     ignored: tuple[str, ...] = ()
-    # The connection linked as its `messages` input, if any.
-    messages: str | None = None
+    # Linked input role -> connection id.
+    inputs: Mapping[str, str] = field(default_factory=dict)
+    # Its package's lanes (src.analyses.views), linked or not, in order.
+    lanes: tuple[Lane, ...] = ()
 
     @property
     def zone(self) -> ZoneInfo:
         return ZoneInfo(self.timezone)
 
     @property
+    def shown(self) -> tuple[Lane, ...]:
+        """The lanes of days, events and search: those whose role is linked,
+        and those shown always."""
+        return tuple(
+            lane for lane in self.lanes if lane.always or lane.role in self.inputs
+        )
+
+    @property
     def sources(self) -> tuple[str, ...]:
-        """The sources of days and events: Messages only when it is linked."""
-        return SOURCES + ((MESSAGES,) if self.messages else ())
+        """The sources of days and events, a lane's where it is shown."""
+        return tuple(lane.source for lane in self.shown)
+
+    @property
+    def default_sources(self) -> tuple[str, ...]:
+        """What is read where no source is asked for: the lanes shown always."""
+        return tuple(lane.source for lane in self.lanes if lane.always)
+
+    def lane(self, source: str) -> Lane | None:
+        return next((lane for lane in self.lanes if lane.source == source), None)
+
+    def plugin(self, name: str) -> Lane | None:
+        """The shown lane whose plugin is `name`, if any."""
+        return next((lane for lane in self.shown if lane.plugin == name), None)
+
+    @property
+    def thread(self) -> Lane | None:
+        """The lane of the conversations, where its role is linked."""
+        return self.plugin(THREAD)
+
+    def media_kind(self, plugin: str) -> str:
+        """The kind of the files a plugin's rows point at, as its lane declares."""
+        lane = next((lane for lane in self.lanes if lane.plugin == plugin), None)
+        if lane is None or lane.media_kind is None:
+            raise TimelineUnavailable(f"No lane of the timeline has the {plugin}")
+        return lane.media_kind
 
     def table(self, name: str) -> str:
         return f'"{self.schema}".{name}'
@@ -159,7 +194,8 @@ def _source(analysis: TimelineAnalysis, ignored: tuple[str, ...]) -> TimelineSou
         analysis.schema,
         analysis.timezone,
         ignored,
-        analysis.inputs.get(MESSAGES_ROLE),
+        dict(analysis.inputs),
+        analysis.lanes,
     )
 
 
@@ -189,10 +225,6 @@ _MEDIA_STATES = {
     MEDIA_NO_THUMBNAILS: "stored",
     MEDIA_WITHHELD: "withheld",
 }
-# Screen and browser are always sources; Messages when the analysis links it.
-SOURCES = ("screen", "browser")
-MESSAGES = "messages"
-ALL_SOURCES = (*SOURCES, MESSAGES)
 MAX_CONVERSATIONS = 200
 MAX_MESSAGES = 200
 PREVIEW_CHARACTERS = 200
@@ -352,22 +384,50 @@ def session(database: TimelineDatabase, lookup: bool = False) -> Iterator[Any]:
 
 
 class TimelineReader:
-    """The timeline's queries, each through one read-only, time-limited session."""
+    """The timeline's queries, each through one read-only, time-limited session.
+
+    The first session of a reader checks the tables' version (`contract`):
+    tables of a major this viewer does not read answer 503. Tables built before
+    `contract` existed (until the first build after the deploy that added it)
+    are read as version 1.0: they are the same tables, row for row.
+    """
 
     def __init__(self, database: TimelineDatabase, source: TimelineSource) -> None:
         self.database = database
         self.source = source
+        self.checked = False
 
     def _session(self, lookup: bool = False) -> AbstractContextManager[Any]:
-        return session(self.database, lookup)
+        return self._checked_session(lookup)
+
+    @contextmanager
+    def _checked_session(self, lookup: bool) -> Iterator[Any]:
+        with session(self.database, lookup) as db:
+            if not self.checked:
+                contract = self.source.table("contract")
+                built = db.execute(
+                    sa.text("SELECT to_regclass(:contract) IS NOT NULL"),
+                    {"contract": contract},
+                ).scalar_one()
+                if built:
+                    found = db.execute(sa.text(f"SELECT version FROM {contract}")).all()
+                    versions = [row[0] for row in found]
+                else:
+                    versions = [UNRECORDED_VERSION]
+                if len(versions) != 1 or _major(versions[0]) not in CONTRACT_MAJORS:
+                    raise TimelineUnavailable(OTHER_VERSION)
+                self.checked = True
+            yield db
 
     def days(
-        self, start: date, end: date, sources: tuple[str, ...] = SOURCES
+        self, start: date, end: date, sources: tuple[str, ...] | None = None
     ) -> dict[str, Any]:
         """Counts per local day and source, from `start` to `end` inclusive. The
         API and the Day view ask for every source of the analysis
-        (`TimelineSource.sources`); the home page for the screen and the
-        browser only, so it never opens a day of messages alone."""
+        (`TimelineSource.sources`); by default, the lanes shown always, so the
+        home page never opens a day of another lane alone."""
+        if sources is None:
+            sources = self.source.default_sources
         if end < start or (end - start).days >= MAX_DAYS_RANGE:
             raise OperationError(
                 f"The range must run forward and span at most {MAX_DAYS_RANGE} days"
@@ -437,7 +497,7 @@ class TimelineReader:
             "start": _iso(bounds[0], zone),
             "end": _iso(bounds[1], zone),
             "connection": rows[0][7] if rows else None,
-            "media_kind": FRAMES_KIND,
+            "media_kind": self.source.media_kind(SCRUBBER),
             "count": len(rows),
             "truncated": truncated,
             "apps": described,
@@ -484,7 +544,9 @@ class TimelineReader:
             "text_truncated": bool(cut),
             "withheld": withheld,
             "masked": masked,
-            "media": _media(connection, FRAMES_KIND, key, code, status),
+            "media": _media(
+                connection, self.source.media_kind(SCRUBBER), key, code, status
+            ),
         }
 
     def _instant(self, db: Any, value: datetime | date, end: bool) -> datetime:
@@ -512,6 +574,7 @@ class TimelineReader:
             raise OperationError(f"The limit must be between 1 and {MAX_EVENTS}")
         if not sources or set(sources) - set(self.source.sources):
             raise OperationError(f"Sources are {', '.join(self.source.sources)}")
+        lanes = [self.source.lane(source) for source in sources]
         events = self.source.table("events")
         parameters: dict[str, Any] = {"limit": limit + 1, "max_text": MAX_EVENT_TEXT}
         keyset = ""
@@ -533,9 +596,10 @@ class TimelineReader:
                 f" AND started_at >= :lo AND started_at < :hi{keyset}"
                 " ORDER BY started_at, event_id LIMIT :limit"
             )
-            parts.append(
-                f"({self._named_messages(part) if source == MESSAGES else part})"
-            )
+            # The thread names its senders and conversations as they are now.
+            lane = lanes[number]
+            thread = lane is not None and lane.plugin == THREAD
+            parts.append(f"({self._named_messages(part) if thread else part})")
         sql = (
             "SELECT * FROM (" + " UNION ALL ".join(parts) + ") merged"
             " ORDER BY started_at, event_id LIMIT :limit"
@@ -683,22 +747,34 @@ class TimelineReader:
         last = rows[-1] if rows else None
         return {
             **self.source.describe(),
-            "kind": "screen",
+            "kind": self._plugin_source(SCRUBBER),
+            "media_kind": self.source.media_kind(SCRUBBER),
             "moment_seconds": MOMENT_SECONDS,
             "apps": described,
             "moments": moments,
             "next": _cursor([int(last[0]), last[1] or ""]) if more and last else None,
         }
 
-    def search_browser(
+    def _plugin_source(self, plugin: str) -> str:
+        lane = next((lane for lane in self.source.lanes if lane.plugin == plugin), None)
+        if lane is None:
+            raise TimelineUnavailable(f"No lane of the timeline has the {plugin}")
+        return lane.source
+
+    def search_events(
         self,
+        source: str,
         query: str,
         start: date | None,
         end: date | None,
         limit: int,
         before: tuple[datetime, str] | None,
     ) -> dict[str, Any]:
-        """Visits whose title or address matches, newest first."""
+        """A lane's events whose title or body matches (`events.search`), newest
+        first: the search of every lane without a plugin. A lane whose model
+        writes an empty search vector finds nothing. The answer keeps the
+        browser's words, its first such lane: `visits`, each with its `url` (the
+        body) and `site` (the group)."""
         words = _query(query, limit)
         parameters: dict[str, Any] = {
             "q": words,
@@ -707,8 +783,9 @@ class TimelineReader:
             "headline": _HEADLINE,
             "marks": _START + _STOP,
             "max_text": MAX_EVENT_TEXT,
+            "source": source,
         }
-        conditions = ["e.source = 'browser'", "e.search @@ q.query"]
+        conditions = ["e.source = :source", "e.search @@ q.query"]
         conditions += _range_conditions("e.started_at", start, end, parameters)
         if before is not None:
             conditions.append(
@@ -748,7 +825,7 @@ class TimelineReader:
         last = rows[-1] if rows else None
         return {
             **self.source.describe(),
-            "kind": "browser",
+            "kind": source,
             "visits": visits,
             "next": _cursor([last[1].isoformat(), last[0]]) if more and last else None,
         }
@@ -756,7 +833,7 @@ class TimelineReader:
     # ---- Messages (decision 040, phase 2c) -----------------------------------
 
     def _messages_tables(self) -> tuple[str, str, str]:
-        if not self.source.messages:
+        if self.source.thread is None:
             raise TimelineUnavailable(NO_MESSAGES)
         return (
             self.source.table("conversations"),
@@ -937,7 +1014,10 @@ class TimelineReader:
         return {
             **self.source.describe(),
             "conversation_id": conversation_id,
-            "messages": [_message(row, names, zone) for row in rows],
+            "messages": [
+                _message(row, names, zone, self.source.media_kind(THREAD))
+                for row in rows
+            ],
             "before": _message_cursor(older_key),
             "after": _message_cursor(newer_key),
         }
@@ -1013,7 +1093,7 @@ class TimelineReader:
         last = rows[-1] if rows else None
         return {
             **self.source.describe(),
-            "kind": "messages",
+            "kind": self._plugin_source(THREAD),
             "messages": found,
             "next": _cursor([last[3].isoformat(), last[0]]) if more and last else None,
         }
@@ -1122,7 +1202,9 @@ def _utc_text(value: str | None, zone: ZoneInfo) -> str | None:
     return _iso(datetime.fromisoformat(value.replace("Z", "+00:00")), zone)
 
 
-def _message(row: Any, names: dict[str, str], zone: ZoneInfo) -> dict[str, Any]:
+def _message(
+    row: Any, names: dict[str, str], zone: ZoneInfo, kind: str
+) -> dict[str, Any]:
     (guid, sent, day, from_me, handle, sender, service, text, cut) = row[:9]
     (unreadable, edited, edited_at, unsent, audio, reply_to) = row[9:15]
     attachments, reactions, connection = row[15:]
@@ -1150,7 +1232,7 @@ def _message(row: Any, names: dict[str, str], zone: ZoneInfo) -> dict[str, Any]:
                 "mime_type": item.get("mime_type"),
                 "bytes": item.get("bytes"),
                 "transfer_name": item.get("transfer_name"),
-                "media": _attachment_media(connection, item),
+                "media": _attachment_media(connection, kind, item),
             }
             for item in attachments or []
         ],
@@ -1170,10 +1252,10 @@ def _message(row: Any, names: dict[str, str], zone: ZoneInfo) -> dict[str, Any]:
 
 
 def _attachment_media(
-    connection: str | None, item: dict[str, Any]
+    connection: str | None, kind: str, item: dict[str, Any]
 ) -> dict[str, Any] | None:
-    """An attachment's file as a frame's media; null without a media key. Never
-    withheld: only screenshots are."""
+    """An attachment's file as a frame's media, of the kind its lane declares;
+    null without a media key. Never withheld: no view withholds attachments."""
     key = item.get("media_key")
     if not key:
         return None
@@ -1181,7 +1263,7 @@ def _attachment_media(
     code = media_code(
         None, status, item.get("thumbnail_w360"), item.get("thumbnail_w1280")
     )
-    return _media(connection, ATTACHMENTS, key, code, status)
+    return _media(connection, kind, key, code, status)
 
 
 # A message's sender as shown: the address book's name, else the handle as that
@@ -1190,6 +1272,15 @@ _SENDER = (
     "CASE WHEN m.sender_handle IS NULL THEN NULL"
     " ELSE coalesce(p.name, m.sender_written, p.display_name, m.sender_handle) END"
 )
+
+
+def _major(version: Any) -> int | None:
+    """A contract version's major: `1` of `1.0`; None for anything else."""
+    if not isinstance(version, str) or not re.fullmatch(
+        r"[0-9]{1,6}\.[0-9]{1,6}", version
+    ):
+        return None
+    return int(version.split(".")[0])
 
 
 def _media(

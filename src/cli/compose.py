@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
 
+from src.analyses.views import LANES
 from src.control.config import ConfigurationError, ResolvedMiroir
 from src.control.service import MiroirService
 from src.kernel.errors import OperationError
@@ -81,8 +82,10 @@ def viewer_links(miroir: Callable[[], ResolvedMiroir]) -> Callable[[], list[Link
         except (ConfigurationError, OperationError):
             # A configuration that does not load links nothing; its pages say why.
             return []
-        first = next((a for a in analyses if a.package.id == navigation.PACKAGE), None)
-        roles = None if first is None else first.inputs
-        return [Link(href, label) for href, label in navigation.links(roles)]
+        first = next((a for a in analyses if LANES.get(a.package.id)), None)
+        if first is None:
+            return []
+        found = navigation.links(first.inputs, LANES[first.package.id])
+        return [Link(href, label) for href, label in found]
 
     return links

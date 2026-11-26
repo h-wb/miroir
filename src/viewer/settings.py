@@ -11,7 +11,7 @@ composition root built.
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
-from src.analyses.views import Withhold
+from src.analyses.views import Lane, Withhold
 from src.media.config import MediaConfig
 from src.media.kinds import MediaKind
 from src.media.store import ObjectStore
@@ -20,7 +20,8 @@ from src.viewer.database import TimelineDatabase
 
 @dataclass(frozen=True)
 class TimelineAnalysis:
-    """An analysis of the timeline package, as the viewer reads it."""
+    """An analysis of a package that declares lanes (`src.analyses.views`), as
+    the viewer reads it."""
 
     id: str
     # Its built tables' schema, named as the build names it.
@@ -30,6 +31,8 @@ class TimelineAnalysis:
     inputs: Mapping[str, str] = field(default_factory=dict)
     # Whether its build grants the reader role, so its tables can be read.
     readable: bool = False
+    # Its package's lanes, linked or not, in their order.
+    lanes: tuple[Lane, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -50,7 +53,7 @@ class WithholdingAnalysis:
 class ViewerConfiguration:
     """The configuration as the viewer reads it."""
 
-    # The timeline package's analyses, in configuration order.
+    # The analyses of a package that declares lanes, in configuration order.
     analyses: tuple[TimelineAnalysis, ...] = ()
     # Connection id -> the media kinds its connector declares.
     media_kinds: Mapping[str, tuple[MediaKind, ...]] = field(default_factory=dict)

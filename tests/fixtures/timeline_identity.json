@@ -1,0 +1,3893 @@
+{
+ "apps": {
+  "columns": [
+   [
+    "bundle_id",
+    "text",
+    1
+   ],
+   [
+    "name",
+    "text",
+    2
+   ],
+   [
+    "colour",
+    "text",
+    3
+   ],
+   [
+    "known",
+    "boolean",
+    4
+   ]
+  ],
+  "indexes": [],
+  "rows": [
+   [
+    "app.zen-browser.zen",
+    "Zen",
+    "#7e57c2",
+    true
+   ],
+   [
+    "com.1password.1password",
+    "1Password",
+    "#0572ec",
+    true
+   ],
+   [
+    "com.apple.ActivityMonitor",
+    "Activity Monitor",
+    "#616161",
+    true
+   ],
+   [
+    "com.apple.FaceTime",
+    "FaceTime",
+    "#2e7d32",
+    true
+   ],
+   [
+    "com.apple.Maps",
+    "Maps",
+    "#66bb6a",
+    true
+   ],
+   [
+    "com.apple.MobileSMS",
+    "Messages",
+    "#43a047",
+    true
+   ],
+   [
+    "com.apple.Music",
+    "Music",
+    "#ec407a",
+    true
+   ],
+   [
+    "com.apple.Notes",
+    "Notes",
+    "#fbc02d",
+    true
+   ],
+   [
+    "com.apple.Passwords",
+    "Passwords",
+    "#546e7a",
+    true
+   ],
+   [
+    "com.apple.Photos",
+    "Photos",
+    "#ab47bc",
+    true
+   ],
+   [
+    "com.apple.Preview",
+    "Preview",
+    "#5c6bc0",
+    true
+   ],
+   [
+    "com.apple.Safari",
+    "Safari",
+    "#2196f3",
+    true
+   ],
+   [
+    "com.apple.Terminal",
+    "Terminal",
+    "#424242",
+    true
+   ],
+   [
+    "com.apple.TextEdit",
+    "TextEdit",
+    "#90a4ae",
+    true
+   ],
+   [
+    "com.apple.dt.Xcode",
+    "Xcode",
+    "#1565c0",
+    true
+   ],
+   [
+    "com.apple.finder",
+    "Finder",
+    "#1e88e5",
+    true
+   ],
+   [
+    "com.apple.iCal",
+    "Calendar",
+    "#e53935",
+    true
+   ],
+   [
+    "com.apple.keychainaccess",
+    "Keychain Access",
+    "#546e7a",
+    true
+   ],
+   [
+    "com.apple.mail",
+    "Mail",
+    "#42a5f5",
+    true
+   ],
+   [
+    "com.apple.reminders",
+    "Reminders",
+    "#fb8c00",
+    true
+   ],
+   [
+    "com.apple.systempreferences",
+    "System Settings",
+    "#757575",
+    true
+   ],
+   [
+    "com.bitwarden.desktop",
+    "Bitwarden",
+    "#175ddc",
+    true
+   ],
+   [
+    "com.figma.Desktop",
+    "Figma",
+    "#a259ff",
+    true
+   ],
+   [
+    "com.google.Chrome",
+    "Chrome",
+    "#fdd835",
+    true
+   ],
+   [
+    "com.googlecode.iterm2",
+    "iTerm2",
+    "#212121",
+    true
+   ],
+   [
+    "com.hnc.Discord",
+    "Discord",
+    "#5865f2",
+    true
+   ],
+   [
+    "com.microsoft.Excel",
+    "Excel",
+    "#1d7044",
+    true
+   ],
+   [
+    "com.microsoft.Outlook",
+    "Outlook",
+    "#0a64ad",
+    true
+   ],
+   [
+    "com.microsoft.VSCode",
+    "Visual Studio Code",
+    "#1976d2",
+    true
+   ],
+   [
+    "com.microsoft.Word",
+    "Word",
+    "#1e5fbf",
+    true
+   ],
+   [
+    "com.microsoft.teams2",
+    "Teams",
+    "#5b5fc7",
+    true
+   ],
+   [
+    "com.mitchellh.ghostty",
+    "Ghostty",
+    "#3d3d3d",
+    true
+   ],
+   [
+    "com.spotify.client",
+    "Spotify",
+    "#1db954",
+    true
+   ],
+   [
+    "com.tinyspeck.slackmacgap",
+    "Slack",
+    "#611f69",
+    true
+   ],
+   [
+    "company.thebrowser.Browser",
+    "Arc",
+    "#ef5350",
+    true
+   ],
+   [
+    "dev.warp.Warp-Stable",
+    "Warp",
+    "#01a4ff",
+    true
+   ],
+   [
+    "md.obsidian",
+    "Obsidian",
+    "#7c3aed",
+    true
+   ],
+   [
+    "me.proton.pass.electron",
+    "Proton Pass",
+    "#6d4aff",
+    true
+   ],
+   [
+    "net.whatsapp.WhatsApp",
+    "WhatsApp",
+    "#25d366",
+    true
+   ],
+   [
+    "notion.id",
+    "Notion",
+    "#37352f",
+    true
+   ],
+   [
+    "org.mozilla.firefox",
+    "Firefox",
+    "#ff7043",
+    true
+   ],
+   [
+    "org.whispersystems.signal-desktop",
+    "Signal",
+    "#3a76f0",
+    true
+   ],
+   [
+    "ru.keepcoder.Telegram",
+    "Telegram",
+    "#29a9eb",
+    true
+   ],
+   [
+    "us.zoom.xos",
+    "Zoom",
+    "#2d8cff",
+    true
+   ]
+  ]
+ },
+ "conversations": {
+  "columns": [
+   [
+    "conversation_id",
+    "text",
+    1
+   ],
+   [
+    "display_name",
+    "text",
+    2
+   ],
+   [
+    "is_group",
+    "boolean",
+    3
+   ],
+   [
+    "title",
+    "text",
+    4
+   ],
+   [
+    "participants",
+    "ARRAY",
+    5
+   ],
+   [
+    "participant_count",
+    "bigint",
+    6
+   ],
+   [
+    "first_message_at",
+    "timestamp with time zone",
+    7
+   ],
+   [
+    "last_message_at",
+    "timestamp with time zone",
+    8
+   ],
+   [
+    "message_count",
+    "bigint",
+    9
+   ],
+   [
+    "connection",
+    "text",
+    10
+   ]
+  ],
+  "indexes": [
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.conversations USING btree (last_message_at)",
+   "CREATE UNIQUE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.conversations USING btree (conversation_id)"
+  ],
+  "rows": [
+   [
+    "5555550101",
+    "Alex Example",
+    false,
+    null,
+    [
+     "5555550101"
+    ],
+    1,
+    "2026-01-10T04:30:00+00:00",
+    "2026-01-12T06:12:00+00:00",
+    6,
+    "m"
+   ],
+   [
+    "5555550105",
+    "+15555550105",
+    false,
+    null,
+    [
+     "5555550105"
+    ],
+    1,
+    "2026-01-10T21:10:00+00:00",
+    "2026-01-10T21:50:00+00:00",
+    6,
+    "m"
+   ],
+   [
+    "5555550113",
+    "+15555550113",
+    false,
+    null,
+    [
+     "5555550113"
+    ],
+    1,
+    "2026-01-10T19:30:00+00:00",
+    "2026-01-10T19:33:00+00:00",
+    2,
+    "m"
+   ],
+   [
+    "5555550199",
+    "+15555550199",
+    false,
+    null,
+    [],
+    0,
+    "2026-01-10T09:30:00+00:00",
+    "2026-01-10T09:30:00+00:00",
+    1,
+    "m"
+   ],
+   [
+    "chat111",
+    "Book Club",
+    true,
+    "Book Club",
+    [
+     "5555550101",
+     "5555550102",
+     "5555550103"
+    ],
+    3,
+    "2026-01-10T11:10:00+00:00",
+    "2026-01-10T11:14:00+00:00",
+    4,
+    "m"
+   ],
+   [
+    "chat222",
+    "+15555550104, Kai, Robin Sample",
+    true,
+    null,
+    [
+     "5555550102",
+     "5555550103",
+     "5555550104"
+    ],
+    3,
+    "2026-01-10T12:50:00+00:00",
+    "2026-01-10T12:50:00+00:00",
+    1,
+    "m"
+   ],
+   [
+    "chat333",
+    "+15555550104, Alex Example, Kai, Robin Sample +1",
+    true,
+    null,
+    [
+     "5555550101",
+     "5555550102",
+     "5555550103",
+     "5555550104",
+     "sam@example.com"
+    ],
+    5,
+    "2026-01-10T14:30:00+00:00",
+    "2026-01-10T14:30:00+00:00",
+    1,
+    "m"
+   ],
+   [
+    "chat444",
+    "Group",
+    true,
+    null,
+    [],
+    0,
+    "2026-01-10T22:50:00+00:00",
+    "2026-01-10T22:50:00+00:00",
+    1,
+    "m"
+   ],
+   [
+    "iMessage;-;",
+    "iMessage;-;",
+    false,
+    null,
+    [],
+    0,
+    null,
+    null,
+    0,
+    "m"
+   ],
+   [
+    "quinn@example.com",
+    "Quinn Sample",
+    false,
+    null,
+    [
+     "quinn@example.com"
+    ],
+    1,
+    "2026-01-10T17:50:00+00:00",
+    "2026-01-10T17:55:00+00:00",
+    2,
+    "m"
+   ],
+   [
+    "sam@example.com",
+    "sam@example.com",
+    false,
+    null,
+    [
+     "sam@example.com"
+    ],
+    1,
+    "2026-01-10T07:50:00+00:00",
+    "2026-01-10T08:05:00+00:00",
+    5,
+    "m"
+   ]
+  ]
+ },
+ "days": {
+  "columns": [
+   [
+    "source",
+    "text",
+    1
+   ],
+   [
+    "day",
+    "date",
+    2
+   ],
+   [
+    "events",
+    "bigint",
+    3
+   ],
+   [
+    "frames",
+    "bigint",
+    4
+   ],
+   [
+    "timezone",
+    "text",
+    5
+   ],
+   [
+    "_input",
+    "text",
+    6
+   ],
+   [
+    "_stamp",
+    "text",
+    7
+   ]
+  ],
+  "indexes": [
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.days USING btree (source, _input)",
+   "CREATE UNIQUE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.days USING btree (source, day)"
+  ],
+  "rows": [
+   [
+    "browser",
+    "2026-11-20",
+    3,
+    null,
+    "America/Toronto",
+    "browser@ws_17_timeline_identity_browser"
+   ],
+   [
+    "messages",
+    "2026-01-09",
+    1,
+    null,
+    "America/Toronto",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "2026-01-10",
+    26,
+    null,
+    "America/Toronto",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "2026-01-12",
+    1,
+    null,
+    "America/Toronto",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "screen",
+    "2026-11-20",
+    4,
+    7,
+    "America/Toronto",
+    "screen@ws_17_timeline_identity_screen"
+   ]
+  ]
+ },
+ "events": {
+  "columns": [
+   [
+    "source",
+    "text",
+    1
+   ],
+   [
+    "connection",
+    "text",
+    2
+   ],
+   [
+    "event_id",
+    "text",
+    3
+   ],
+   [
+    "started_at",
+    "timestamp with time zone",
+    4
+   ],
+   [
+    "ended_at",
+    "timestamp with time zone",
+    5
+   ],
+   [
+    "kind",
+    "text",
+    6
+   ],
+   [
+    "title",
+    "text",
+    7
+   ],
+   [
+    "body",
+    "text",
+    8
+   ],
+   [
+    "media_kind",
+    "text",
+    9
+   ],
+   [
+    "media_key",
+    "text",
+    10
+   ],
+   [
+    "media_status",
+    "text",
+    11
+   ],
+   [
+    "thumbnail_w360",
+    "boolean",
+    12
+   ],
+   [
+    "thumbnail_w1280",
+    "boolean",
+    13
+   ],
+   [
+    "media_withheld",
+    "boolean",
+    14
+   ],
+   [
+    "group_key",
+    "text",
+    15
+   ],
+   [
+    "payload",
+    "jsonb",
+    16
+   ],
+   [
+    "search",
+    "tsvector",
+    17
+   ],
+   [
+    "_input",
+    "text",
+    18
+   ],
+   [
+    "_stamp",
+    "text",
+    19
+   ]
+  ],
+  "indexes": [
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.events USING btree (group_key, started_at)",
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.events USING btree (source, _input)",
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.events USING btree (source, _stamp)",
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.events USING btree (source, started_at)",
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.events USING gin (search)",
+   "CREATE INDEX events_media_pending ON miroir_t_dcf1e40697ca1eda_timeline.events USING btree (event_id) WHERE ((media_withheld IS NULL) AND (source = 'screen'::text))",
+   "CREATE UNIQUE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.events USING btree (event_id)"
+  ],
+  "rows": [
+   [
+    "browser",
+    "browser",
+    "browser:1",
+    "2026-11-20T05:01:40+00:00",
+    "2026-11-20T05:01:40+00:00",
+    "visit",
+    "Page A, renamed",
+    "https://example.org/a",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "example.org",
+    {
+     "from_visit_id": 0,
+     "place_id": 1,
+     "visit_id": 1,
+     "visit_type": 1
+    },
+    "'/a':6B 'a':2A 'example.org':5B 'example.org/a':4B 'page':1A 'renamed':3A",
+    "browser@ws_17_timeline_identity_browser"
+   ],
+   [
+    "browser",
+    "browser",
+    "browser:2",
+    "2026-11-20T05:03:20+00:00",
+    "2026-11-20T05:03:20+00:00",
+    "visit",
+    "https://www.example.net/b",
+    "https://www.example.net/b",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "example.net",
+    {
+     "from_visit_id": 0,
+     "place_id": 2,
+     "visit_id": 2,
+     "visit_type": 1
+    },
+    "'/b':3A,6B 'www.example.net':2A,5B 'www.example.net/b':1A,4B",
+    "browser@ws_17_timeline_identity_browser"
+   ],
+   [
+    "browser",
+    "browser",
+    "browser:4",
+    "2026-11-20T05:35:00+00:00",
+    "2026-11-20T05:35:00+00:00",
+    "visit",
+    "Page A, renamed",
+    "https://example.org/a",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "example.org",
+    {
+     "from_visit_id": 0,
+     "place_id": 1,
+     "visit_id": 4,
+     "visit_type": 1
+    },
+    "'/a':6B 'a':2A 'example.org':5B 'example.org/a':4B 'page':1A 'renamed':3A",
+    "browser@ws_17_timeline_identity_browser"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:a1",
+    "2026-01-10T04:30:00+00:00",
+    "2026-01-10T04:30:00+00:00",
+    "message",
+    "hello there",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "5555550101",
+    {
+     "attachments": 0,
+     "audio": false,
+     "conversation": "5555550101",
+     "edited": false,
+     "from_me": false,
+     "guid": "a1",
+     "reactions": 1,
+     "reply_to": null,
+     "sender": "5555550101",
+     "service": "iMessage",
+     "unsent": false
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:a2",
+    "2026-01-10T05:10:00+00:00",
+    "2026-01-10T05:10:00+00:00",
+    "message",
+    "\ufffc",
+    null,
+    "attachments",
+    "att1.jpeg",
+    "made",
+    true,
+    true,
+    null,
+    "5555550101",
+    {
+     "attachments": 1,
+     "audio": false,
+     "conversation": "5555550101",
+     "edited": false,
+     "from_me": true,
+     "guid": "a2",
+     "reactions": 1,
+     "reply_to": null,
+     "sender": null,
+     "service": "SMS",
+     "unsent": false
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:a3",
+    "2026-01-10T05:12:00+00:00",
+    "2026-01-10T05:12:00+00:00",
+    "message",
+    "ok",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "5555550101",
+    {
+     "attachments": 0,
+     "audio": false,
+     "conversation": "5555550101",
+     "edited": false,
+     "from_me": true,
+     "guid": "a3",
+     "reactions": 0,
+     "reply_to": null,
+     "sender": null,
+     "service": "SMS",
+     "unsent": false
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:a4",
+    "2026-01-10T06:12:00+00:00",
+    "2026-01-10T06:12:00+00:00",
+    "message",
+    "see this",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "5555550101",
+    {
+     "attachments": 0,
+     "audio": false,
+     "conversation": "5555550101",
+     "edited": false,
+     "from_me": false,
+     "guid": "a4",
+     "reactions": 1,
+     "reply_to": null,
+     "sender": "5555550101",
+     "service": "iMessage",
+     "unsent": false
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:a5",
+    "2026-01-12T06:12:00+00:00",
+    "2026-01-12T06:12:00+00:00",
+    "message",
+    "sorry",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "5555550101",
+    {
+     "attachments": 0,
+     "audio": false,
+     "conversation": "5555550101",
+     "edited": false,
+     "from_me": true,
+     "guid": "a5",
+     "reactions": 0,
+     "reply_to": null,
+     "sender": null,
+     "service": "iMessage",
+     "unsent": false
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:g1",
+    "2026-01-10T11:10:00+00:00",
+    "2026-01-10T11:10:00+00:00",
+    "message",
+    "chapter 3",
+    null,
+    "attachments",
+    "att4.caf",
+    "failed",
+    false,
+    false,
+    null,
+    "chat111",
+    {
+     "attachments": 1,
+     "audio": true,
+     "conversation": "chat111",
+     "edited": false,
+     "from_me": false,
+     "guid": "g1",
+     "reactions": 3,
+     "reply_to": null,
+     "sender": "5555550102",
+     "service": "iMessage",
+     "unsent": false
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:g2",
+    "2026-01-10T11:11:00+00:00",
+    "2026-01-10T11:11:00+00:00",
+    "message",
+    "done",
+    null,
+    "attachments",
+    "att3.pdf",
+    "made",
+    true,
+    true,
+    null,
+    "chat111",
+    {
+     "attachments": 1,
+     "audio": false,
+     "conversation": "chat111",
+     "edited": false,
+     "from_me": true,
+     "guid": "g2",
+     "reactions": 2,
+     "reply_to": "g1",
+     "sender": null,
+     "service": "iMessage",
+     "unsent": false
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:g3",
+    "2026-01-10T11:12:00+00:00",
+    "2026-01-10T11:12:00+00:00",
+    "message",
+    "edited",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "chat111",
+    {
+     "attachments": 0,
+     "audio": false,
+     "conversation": "chat111",
+     "edited": true,
+     "from_me": false,
+     "guid": "g3",
+     "reactions": 1,
+     "reply_to": null,
+     "sender": "5555550103",
+     "service": "iMessage",
+     "unsent": false
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:g4",
+    "2026-01-10T11:14:00+00:00",
+    "2026-01-10T11:14:00+00:00",
+    "message",
+    "",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "chat111",
+    {
+     "attachments": 0,
+     "audio": false,
+     "conversation": "chat111",
+     "edited": false,
+     "from_me": false,
+     "guid": "g4",
+     "reactions": 0,
+     "reply_to": null,
+     "sender": "5555550103",
+     "service": "iMessage",
+     "unsent": true
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:j1",
+    "2026-01-10T21:10:00+00:00",
+    "2026-01-10T21:10:00+00:00",
+    "message",
+    "",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "5555550105",
+    {
+     "attachments": 0,
+     "audio": false,
+     "conversation": "5555550105",
+     "edited": false,
+     "from_me": false,
+     "guid": "j1",
+     "reactions": 0,
+     "reply_to": null,
+     "sender": "5555550105",
+     "service": "iMessage",
+     "unsent": true
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:j2",
+    "2026-01-10T21:20:00+00:00",
+    "2026-01-10T21:20:00+00:00",
+    "message",
+    "hi",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "5555550105",
+    {
+     "attachments": 0,
+     "audio": false,
+     "conversation": "5555550105",
+     "edited": false,
+     "from_me": false,
+     "guid": "j2",
+     "reactions": 0,
+     "reply_to": null,
+     "sender": "5555550105",
+     "service": "iMessage",
+     "unsent": false
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:j3",
+    "2026-01-10T21:30:00+00:00",
+    "2026-01-10T21:30:00+00:00",
+    "message",
+    "hi",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "5555550105",
+    {
+     "attachments": 0,
+     "audio": false,
+     "conversation": "5555550105",
+     "edited": false,
+     "from_me": false,
+     "guid": "j3",
+     "reactions": 0,
+     "reply_to": null,
+     "sender": "5555550105",
+     "service": "iMessage",
+     "unsent": false
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:j4",
+    "2026-01-10T21:40:00+00:00",
+    "2026-01-10T21:40:00+00:00",
+    "message",
+    "hi",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "5555550105",
+    {
+     "attachments": 0,
+     "audio": false,
+     "conversation": "5555550105",
+     "edited": false,
+     "from_me": true,
+     "guid": "j4",
+     "reactions": 0,
+     "reply_to": null,
+     "sender": null,
+     "service": "iMessage",
+     "unsent": false
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:j5",
+    "2026-01-10T21:41:00+00:00",
+    "2026-01-10T21:41:00+00:00",
+    "message",
+    "hi",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "5555550105",
+    {
+     "attachments": 0,
+     "audio": false,
+     "conversation": "5555550105",
+     "edited": false,
+     "from_me": true,
+     "guid": "j5",
+     "reactions": 0,
+     "reply_to": null,
+     "sender": null,
+     "service": "iMessage",
+     "unsent": false
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:j6",
+    "2026-01-10T21:50:00+00:00",
+    "2026-01-10T21:50:00+00:00",
+    "message",
+    "hi",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "5555550105",
+    {
+     "attachments": 0,
+     "audio": false,
+     "conversation": "5555550105",
+     "edited": false,
+     "from_me": false,
+     "guid": "j6",
+     "reactions": 0,
+     "reply_to": null,
+     "sender": "5555550105",
+     "service": "iMessage",
+     "unsent": false
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:late1",
+    "2026-01-10T19:30:00+00:00",
+    "2026-01-10T19:30:00+00:00",
+    "message",
+    "a later one",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "5555550101",
+    {
+     "attachments": 0,
+     "audio": false,
+     "conversation": "5555550101",
+     "edited": false,
+     "from_me": false,
+     "guid": "late1",
+     "reactions": 0,
+     "reply_to": null,
+     "sender": "5555550101",
+     "service": "iMessage",
+     "unsent": false
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:n1",
+    "2026-01-10T09:30:00+00:00",
+    "2026-01-10T09:30:00+00:00",
+    "message",
+    "code?",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "5555550199",
+    {
+     "attachments": 0,
+     "audio": false,
+     "conversation": "5555550199",
+     "edited": false,
+     "from_me": true,
+     "guid": "n1",
+     "reactions": 0,
+     "reply_to": null,
+     "sender": null,
+     "service": "SMS",
+     "unsent": false
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:o1",
+    "2026-01-10T16:10:00+00:00",
+    "2026-01-10T16:10:00+00:00",
+    "message",
+    "orphan",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    {
+     "attachments": 0,
+     "audio": false,
+     "conversation": null,
+     "edited": false,
+     "from_me": false,
+     "guid": "o1",
+     "reactions": 0,
+     "reply_to": null,
+     "sender": "sam@example.com",
+     "service": "iMessage",
+     "unsent": false
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:q1",
+    "2026-01-10T17:50:00+00:00",
+    "2026-01-10T17:50:00+00:00",
+    "message",
+    "hi",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "quinn@example.com",
+    {
+     "attachments": 0,
+     "audio": false,
+     "conversation": "quinn@example.com",
+     "edited": false,
+     "from_me": false,
+     "guid": "q1",
+     "reactions": 0,
+     "reply_to": null,
+     "sender": "quinn@example.com",
+     "service": "iMessage",
+     "unsent": false
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:q2",
+    "2026-01-10T17:55:00+00:00",
+    "2026-01-10T17:55:00+00:00",
+    "message",
+    "hi",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "quinn@example.com",
+    {
+     "attachments": 0,
+     "audio": false,
+     "conversation": "quinn@example.com",
+     "edited": false,
+     "from_me": true,
+     "guid": "q2",
+     "reactions": 0,
+     "reply_to": null,
+     "sender": null,
+     "service": "iMessage",
+     "unsent": false
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:s1",
+    "2026-01-10T07:50:00+00:00",
+    "2026-01-10T07:50:00+00:00",
+    "message",
+    "are you in?",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "sam@example.com",
+    {
+     "attachments": 0,
+     "audio": false,
+     "conversation": "sam@example.com",
+     "edited": false,
+     "from_me": true,
+     "guid": "s1",
+     "reactions": 0,
+     "reply_to": null,
+     "sender": null,
+     "service": "iMessage",
+     "unsent": false
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:s2",
+    "2026-01-10T08:00:00+00:00",
+    "2026-01-10T08:00:00+00:00",
+    "message",
+    "yes",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "sam@example.com",
+    {
+     "attachments": 0,
+     "audio": false,
+     "conversation": "sam@example.com",
+     "edited": false,
+     "from_me": false,
+     "guid": "s2",
+     "reactions": 0,
+     "reply_to": null,
+     "sender": "sam@example.com",
+     "service": "iMessage",
+     "unsent": false
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:s3",
+    "2026-01-10T08:05:00+00:00",
+    "2026-01-10T08:05:00+00:00",
+    "message",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "sam@example.com",
+    {
+     "attachments": 0,
+     "audio": false,
+     "conversation": "sam@example.com",
+     "edited": false,
+     "from_me": false,
+     "guid": "s3",
+     "reactions": 0,
+     "reply_to": null,
+     "sender": "sam@example.com",
+     "service": "iMessage",
+     "unsent": false
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:t1",
+    "2026-01-10T19:30:00+00:00",
+    "2026-01-10T19:30:00+00:00",
+    "message",
+    "hi",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "5555550113",
+    {
+     "attachments": 0,
+     "audio": false,
+     "conversation": "5555550113",
+     "edited": false,
+     "from_me": false,
+     "guid": "t1",
+     "reactions": 0,
+     "reply_to": null,
+     "sender": "5555550113",
+     "service": "SMS",
+     "unsent": false
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:t2",
+    "2026-01-10T19:33:00+00:00",
+    "2026-01-10T19:33:00+00:00",
+    "message",
+    "hi",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "5555550113",
+    {
+     "attachments": 0,
+     "audio": false,
+     "conversation": "5555550113",
+     "edited": false,
+     "from_me": true,
+     "guid": "t2",
+     "reactions": 0,
+     "reply_to": null,
+     "sender": null,
+     "service": "iMessage",
+     "unsent": false
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:u1",
+    "2026-01-10T12:50:00+00:00",
+    "2026-01-10T12:50:00+00:00",
+    "message",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "chat222",
+    {
+     "attachments": 0,
+     "audio": false,
+     "conversation": "chat222",
+     "edited": false,
+     "from_me": false,
+     "guid": "u1",
+     "reactions": 0,
+     "reply_to": null,
+     "sender": "5555550104",
+     "service": "iMessage",
+     "unsent": false
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:v1",
+    "2026-01-10T14:30:00+00:00",
+    "2026-01-10T14:30:00+00:00",
+    "message",
+    "hi all",
+    null,
+    "attachments",
+    "att6.xyz",
+    null,
+    null,
+    null,
+    null,
+    "chat333",
+    {
+     "attachments": 2,
+     "audio": false,
+     "conversation": "chat333",
+     "edited": false,
+     "from_me": true,
+     "guid": "v1",
+     "reactions": 0,
+     "reply_to": null,
+     "sender": null,
+     "service": "iMessage",
+     "unsent": false
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "messages",
+    "m",
+    "messages:w1",
+    "2026-01-10T22:50:00+00:00",
+    "2026-01-10T22:50:00+00:00",
+    "message",
+    "hi",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "chat444",
+    {
+     "attachments": 0,
+     "audio": false,
+     "conversation": "chat444",
+     "edited": false,
+     "from_me": true,
+     "guid": "w1",
+     "reactions": 0,
+     "reply_to": null,
+     "sender": null,
+     "service": "iMessage",
+     "unsent": false
+    },
+    "",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "screen",
+    "screen",
+    "screen:2026/11/20/1795150800.jpeg",
+    "2026-11-20T05:00:00+00:00",
+    "2026-11-20T05:00:20+00:00",
+    "app_session",
+    "Safari",
+    null,
+    "screenshots",
+    "2026/11/20/1795150800.jpeg",
+    "made",
+    true,
+    true,
+    false,
+    "com.apple.Safari",
+    {
+     "bundle_id": "com.apple.Safari",
+     "frames": 3,
+     "last_frame": "2026/11/20/1795150820.jpeg"
+    },
+    "'safari':1A",
+    "screen@ws_17_timeline_identity_screen"
+   ],
+   [
+    "screen",
+    "screen",
+    "screen:2026/11/20/1795151200.jpeg",
+    "2026-11-20T05:06:40+00:00",
+    "2026-11-20T05:06:50+00:00",
+    "app_session",
+    "Terminal",
+    null,
+    "screenshots",
+    "2026/11/20/1795151200.jpeg",
+    "failed",
+    false,
+    false,
+    false,
+    "com.apple.Terminal",
+    {
+     "bundle_id": "com.apple.Terminal",
+     "frames": 2,
+     "last_frame": "2026/11/20/1795151210.jpeg"
+    },
+    "'terminal':1A",
+    "screen@ws_17_timeline_identity_screen"
+   ],
+   [
+    "screen",
+    "screen",
+    "screen:2026/11/20/1795151700.jpeg",
+    "2026-11-20T05:15:00+00:00",
+    "2026-11-20T05:15:00+00:00",
+    "app_session",
+    "Notes",
+    null,
+    "screenshots",
+    "2026/11/20/1795151700.jpeg",
+    null,
+    null,
+    null,
+    false,
+    "com.apple.Notes",
+    {
+     "bundle_id": "com.apple.Notes",
+     "frames": 1,
+     "last_frame": "2026/11/20/1795151700.jpeg"
+    },
+    "'notes':1A",
+    "screen@ws_17_timeline_identity_screen"
+   ],
+   [
+    "screen",
+    "screen",
+    "screen:2026/11/20/1795152800.jpeg",
+    "2026-11-20T05:33:20+00:00",
+    "2026-11-20T05:33:20+00:00",
+    "app_session",
+    "Notes",
+    null,
+    "screenshots",
+    "2026/11/20/1795152800.jpeg",
+    null,
+    null,
+    null,
+    false,
+    "com.apple.Notes",
+    {
+     "bundle_id": "com.apple.Notes",
+     "frames": 1,
+     "last_frame": "2026/11/20/1795152800.jpeg"
+    },
+    "'notes':1A",
+    "screen@ws_17_timeline_identity_screen"
+   ]
+  ]
+ },
+ "messages": {
+  "columns": [
+   [
+    "guid",
+    "text",
+    1
+   ],
+   [
+    "conversation_id",
+    "text",
+    2
+   ],
+   [
+    "sent_at",
+    "timestamp with time zone",
+    3
+   ],
+   [
+    "day",
+    "date",
+    4
+   ],
+   [
+    "timezone",
+    "text",
+    5
+   ],
+   [
+    "is_from_me",
+    "boolean",
+    6
+   ],
+   [
+    "sender_handle",
+    "text",
+    7
+   ],
+   [
+    "sender_written",
+    "text",
+    8
+   ],
+   [
+    "service",
+    "text",
+    9
+   ],
+   [
+    "text",
+    "text",
+    10
+   ],
+   [
+    "text_unreadable",
+    "boolean",
+    11
+   ],
+   [
+    "is_edited",
+    "boolean",
+    12
+   ],
+   [
+    "is_unsent",
+    "boolean",
+    13
+   ],
+   [
+    "edited_at",
+    "timestamp with time zone",
+    14
+   ],
+   [
+    "is_audio",
+    "boolean",
+    15
+   ],
+   [
+    "reply_to_guid",
+    "text",
+    16
+   ],
+   [
+    "attachments",
+    "jsonb",
+    17
+   ],
+   [
+    "reactions",
+    "jsonb",
+    18
+   ],
+   [
+    "deleted",
+    "boolean",
+    19
+   ],
+   [
+    "connection",
+    "text",
+    20
+   ],
+   [
+    "previous_sent_at",
+    "ARRAY",
+    21
+   ],
+   [
+    "_input",
+    "text",
+    22
+   ],
+   [
+    "_cursor",
+    "timestamp with time zone",
+    23
+   ],
+   [
+    "_stamp",
+    "text",
+    24
+   ],
+   [
+    "_chats_seen",
+    "text",
+    25
+   ],
+   [
+    "_reactions_from",
+    "ARRAY",
+    26
+   ]
+  ],
+  "indexes": [
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.messages USING btree (_cursor)",
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.messages USING btree (_input)",
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.messages USING btree (_stamp)",
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.messages USING btree (conversation_id, sender_handle)",
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.messages USING btree (conversation_id, sent_at, guid)",
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.messages USING btree (deleted)",
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.messages USING btree (sender_handle, sender_written)",
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.messages USING btree (timezone)",
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.messages USING gin (to_tsvector('simple'::regconfig, \"left\"(text, 100000)))",
+   "CREATE UNIQUE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.messages USING btree (guid)"
+  ],
+  "rows": [
+   [
+    "a1",
+    "5555550101",
+    "2026-01-10T04:30:00+00:00",
+    "2026-01-09",
+    "America/Toronto",
+    false,
+    "5555550101",
+    "+15555550101",
+    "iMessage",
+    "hello there",
+    false,
+    false,
+    false,
+    null,
+    false,
+    null,
+    [],
+    [
+     {
+      "at": "2026-01-10T06:15:00.000000Z",
+      "from_me": true,
+      "kind": "laugh",
+      "part": 0,
+      "sender": null
+     }
+    ],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    [
+     "r4",
+     "r6"
+    ]
+   ],
+   [
+    "a2",
+    "5555550101",
+    "2026-01-10T05:10:00+00:00",
+    "2026-01-10",
+    "America/Toronto",
+    true,
+    null,
+    null,
+    "SMS",
+    "\ufffc",
+    false,
+    false,
+    false,
+    null,
+    false,
+    null,
+    [
+     {
+      "bytes": 1000,
+      "guid": "att1",
+      "kind": "image",
+      "media_key": "att1.jpeg",
+      "media_status": "made",
+      "mime_type": "image/jpeg",
+      "thumbnail_w1280": true,
+      "thumbnail_w360": true,
+      "transfer_name": "IMG_0001.JPG"
+     }
+    ],
+    [
+     {
+      "at": "2026-01-10T05:11:00.000000Z",
+      "from_me": false,
+      "kind": "love",
+      "part": 0,
+      "sender": "5555550101"
+     }
+    ],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    [
+     "r1"
+    ]
+   ],
+   [
+    "a3",
+    "5555550101",
+    "2026-01-10T05:12:00+00:00",
+    "2026-01-10",
+    "America/Toronto",
+    true,
+    null,
+    null,
+    "SMS",
+    "ok",
+    false,
+    false,
+    false,
+    null,
+    false,
+    null,
+    [],
+    [],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    []
+   ],
+   [
+    "a4",
+    "5555550101",
+    "2026-01-10T06:12:00+00:00",
+    "2026-01-10",
+    "America/Toronto",
+    false,
+    "5555550101",
+    "+15555550101",
+    "iMessage",
+    "see this",
+    false,
+    false,
+    false,
+    null,
+    false,
+    null,
+    [],
+    [
+     {
+      "at": "2026-01-10T06:16:00.000000Z",
+      "from_me": false,
+      "kind": "emoji",
+      "part": 1,
+      "sender": "5555550101"
+     }
+    ],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    [
+     "r2",
+     "r3",
+     "r5"
+    ]
+   ],
+   [
+    "a5",
+    "5555550101",
+    "2026-01-12T06:12:00+00:00",
+    "2026-01-12",
+    "America/Toronto",
+    true,
+    null,
+    null,
+    "iMessage",
+    "sorry",
+    false,
+    false,
+    false,
+    null,
+    false,
+    null,
+    [],
+    [],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    []
+   ],
+   [
+    "g1",
+    "chat111",
+    "2026-01-10T11:10:00+00:00",
+    "2026-01-10",
+    "America/Toronto",
+    false,
+    "5555550102",
+    "+15555550102",
+    "iMessage",
+    "chapter 3",
+    false,
+    false,
+    false,
+    null,
+    true,
+    null,
+    [
+     {
+      "bytes": null,
+      "guid": "att4",
+      "kind": "audio",
+      "media_key": "att4.caf",
+      "media_status": "failed",
+      "mime_type": null,
+      "thumbnail_w1280": false,
+      "thumbnail_w360": false,
+      "transfer_name": "Audio Message.caf"
+     }
+    ],
+    [
+     {
+      "at": "2026-01-10T11:24:00.000000Z",
+      "from_me": true,
+      "kind": "sticker",
+      "part": 0,
+      "sender": null
+     },
+     {
+      "at": "2026-01-10T11:30:00.000000Z",
+      "from_me": false,
+      "kind": "sticker",
+      "part": 0,
+      "sender": "5555550102"
+     },
+     {
+      "at": "2026-01-10T11:31:00.000000Z",
+      "from_me": false,
+      "kind": "sticker",
+      "part": 0,
+      "sender": "5555550102"
+     }
+    ],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    [
+     "k1",
+     "k2",
+     "k3",
+     "r11"
+    ]
+   ],
+   [
+    "g2",
+    "chat111",
+    "2026-01-10T11:11:00+00:00",
+    "2026-01-10",
+    "America/Toronto",
+    true,
+    null,
+    null,
+    "iMessage",
+    "done",
+    false,
+    false,
+    false,
+    null,
+    false,
+    "g1",
+    [
+     {
+      "bytes": null,
+      "guid": "att3",
+      "kind": "document",
+      "media_key": "att3.pdf",
+      "media_status": "made",
+      "mime_type": null,
+      "thumbnail_w1280": true,
+      "thumbnail_w360": true,
+      "transfer_name": "notes.pdf"
+     }
+    ],
+    [
+     {
+      "at": "2026-01-10T11:22:00.000000Z",
+      "from_me": false,
+      "kind": "emphasis",
+      "part": 0,
+      "sender": "5555550102"
+     },
+     {
+      "at": "2026-01-10T11:23:00.000000Z",
+      "from_me": false,
+      "kind": "question",
+      "part": 0,
+      "sender": "5555550103"
+     }
+    ],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    [
+     "r10",
+     "r7",
+     "r8",
+     "r9"
+    ]
+   ],
+   [
+    "g3",
+    "chat111",
+    "2026-01-10T11:12:00+00:00",
+    "2026-01-10",
+    "America/Toronto",
+    false,
+    "5555550103",
+    "+15555550103",
+    "iMessage",
+    "edited",
+    false,
+    true,
+    false,
+    "2026-01-10T11:13:00+00:00",
+    false,
+    null,
+    [],
+    [
+     {
+      "at": "2026-01-10T11:41:00.000000Z",
+      "from_me": false,
+      "kind": "like",
+      "part": 0,
+      "sender": "5555550103"
+     }
+    ],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    [
+     "k4",
+     "k5"
+    ]
+   ],
+   [
+    "g4",
+    "chat111",
+    "2026-01-10T11:14:00+00:00",
+    "2026-01-10",
+    "America/Toronto",
+    false,
+    "5555550103",
+    "+15555550103",
+    "iMessage",
+    "",
+    false,
+    false,
+    true,
+    "2026-01-10T11:15:00+00:00",
+    false,
+    null,
+    [],
+    [],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    []
+   ],
+   [
+    "j1",
+    "5555550105",
+    "2026-01-10T21:10:00+00:00",
+    "2026-01-10",
+    "America/Toronto",
+    false,
+    "5555550105",
+    "+15555550105",
+    "iMessage",
+    "",
+    false,
+    false,
+    true,
+    null,
+    false,
+    null,
+    [],
+    [],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    []
+   ],
+   [
+    "j2",
+    "5555550105",
+    "2026-01-10T21:20:00+00:00",
+    "2026-01-10",
+    "America/Toronto",
+    false,
+    "5555550105",
+    "+15555550105",
+    "iMessage",
+    "hi",
+    false,
+    false,
+    false,
+    null,
+    false,
+    null,
+    [],
+    [],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    []
+   ],
+   [
+    "j3",
+    "5555550105",
+    "2026-01-10T21:30:00+00:00",
+    "2026-01-10",
+    "America/Toronto",
+    false,
+    "5555550105",
+    "+15555550105",
+    "iMessage",
+    "hi",
+    false,
+    false,
+    false,
+    null,
+    false,
+    null,
+    [],
+    [],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    []
+   ],
+   [
+    "j4",
+    "5555550105",
+    "2026-01-10T21:40:00+00:00",
+    "2026-01-10",
+    "America/Toronto",
+    true,
+    null,
+    null,
+    "iMessage",
+    "hi",
+    false,
+    false,
+    false,
+    null,
+    false,
+    null,
+    [],
+    [],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    []
+   ],
+   [
+    "j5",
+    "5555550105",
+    "2026-01-10T21:41:00+00:00",
+    "2026-01-10",
+    "America/Toronto",
+    true,
+    null,
+    null,
+    "iMessage",
+    "hi",
+    false,
+    false,
+    false,
+    null,
+    false,
+    null,
+    [],
+    [],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    []
+   ],
+   [
+    "j6",
+    "5555550105",
+    "2026-01-10T21:50:00+00:00",
+    "2026-01-10",
+    "America/Toronto",
+    false,
+    "5555550105",
+    "+15555550105",
+    "iMessage",
+    "hi",
+    false,
+    false,
+    false,
+    null,
+    false,
+    null,
+    [],
+    [],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    []
+   ],
+   [
+    "late1",
+    "5555550101",
+    "2026-01-10T19:30:00+00:00",
+    "2026-01-10",
+    "America/Toronto",
+    false,
+    "5555550101",
+    "+15555550101",
+    "iMessage",
+    "a later one",
+    false,
+    false,
+    false,
+    null,
+    false,
+    null,
+    [],
+    [],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    []
+   ],
+   [
+    "n1",
+    "5555550199",
+    "2026-01-10T09:30:00+00:00",
+    "2026-01-10",
+    "America/Toronto",
+    true,
+    null,
+    null,
+    "SMS",
+    "code?",
+    false,
+    false,
+    false,
+    null,
+    false,
+    null,
+    [],
+    [],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    []
+   ],
+   [
+    "o1",
+    null,
+    "2026-01-10T16:10:00+00:00",
+    "2026-01-10",
+    "America/Toronto",
+    false,
+    "sam@example.com",
+    "sam@example.com",
+    "iMessage",
+    "orphan",
+    false,
+    false,
+    false,
+    null,
+    false,
+    null,
+    [],
+    [],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    []
+   ],
+   [
+    "q1",
+    "quinn@example.com",
+    "2026-01-10T17:50:00+00:00",
+    "2026-01-10",
+    "America/Toronto",
+    false,
+    "quinn@example.com",
+    "Quinn@Example.com",
+    "iMessage",
+    "hi",
+    false,
+    false,
+    false,
+    null,
+    false,
+    null,
+    [],
+    [],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    []
+   ],
+   [
+    "q2",
+    "quinn@example.com",
+    "2026-01-10T17:55:00+00:00",
+    "2026-01-10",
+    "America/Toronto",
+    true,
+    null,
+    null,
+    "iMessage",
+    "hi",
+    false,
+    false,
+    false,
+    null,
+    false,
+    null,
+    [],
+    [],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    []
+   ],
+   [
+    "s1",
+    "sam@example.com",
+    "2026-01-10T07:50:00+00:00",
+    "2026-01-10",
+    "America/Toronto",
+    true,
+    null,
+    null,
+    "iMessage",
+    "are you in?",
+    false,
+    false,
+    false,
+    null,
+    false,
+    null,
+    [],
+    [],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    []
+   ],
+   [
+    "s2",
+    "sam@example.com",
+    "2026-01-10T08:00:00+00:00",
+    "2026-01-10",
+    "America/Toronto",
+    false,
+    "sam@example.com",
+    "sam@example.com",
+    "iMessage",
+    "yes",
+    false,
+    false,
+    false,
+    null,
+    false,
+    null,
+    [],
+    [],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    []
+   ],
+   [
+    "s3",
+    "sam@example.com",
+    "2026-01-10T08:05:00+00:00",
+    "2026-01-10",
+    "America/Toronto",
+    false,
+    "sam@example.com",
+    "sam@example.com",
+    "iMessage",
+    null,
+    false,
+    false,
+    false,
+    null,
+    false,
+    null,
+    [],
+    [],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    []
+   ],
+   [
+    "t1",
+    "5555550113",
+    "2026-01-10T19:30:00+00:00",
+    "2026-01-10",
+    "America/Toronto",
+    false,
+    "5555550113",
+    "5555550113",
+    "SMS",
+    "hi",
+    false,
+    false,
+    false,
+    null,
+    false,
+    null,
+    [],
+    [],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    []
+   ],
+   [
+    "t2",
+    "5555550113",
+    "2026-01-10T19:33:00+00:00",
+    "2026-01-10",
+    "America/Toronto",
+    true,
+    null,
+    null,
+    "iMessage",
+    "hi",
+    false,
+    false,
+    false,
+    null,
+    false,
+    null,
+    [],
+    [],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    []
+   ],
+   [
+    "u1",
+    "chat222",
+    "2026-01-10T12:50:00+00:00",
+    "2026-01-10",
+    "America/Toronto",
+    false,
+    "5555550104",
+    "+15555550104",
+    "iMessage",
+    null,
+    true,
+    false,
+    false,
+    null,
+    false,
+    null,
+    [],
+    [],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    []
+   ],
+   [
+    "v1",
+    "chat333",
+    "2026-01-10T14:30:00+00:00",
+    "2026-01-10",
+    "America/Toronto",
+    true,
+    null,
+    null,
+    "iMessage",
+    "hi all",
+    false,
+    false,
+    false,
+    null,
+    false,
+    null,
+    [
+     {
+      "bytes": null,
+      "guid": "att6",
+      "kind": "other",
+      "media_key": "att6.xyz",
+      "media_status": null,
+      "mime_type": null,
+      "thumbnail_w1280": null,
+      "thumbnail_w360": null,
+      "transfer_name": "thing.xyz"
+     },
+     {
+      "bytes": null,
+      "guid": "att5",
+      "kind": "video",
+      "media_key": null,
+      "media_status": null,
+      "mime_type": "video/quicktime",
+      "thumbnail_w1280": null,
+      "thumbnail_w360": null,
+      "transfer_name": null
+     }
+    ],
+    [],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    []
+   ],
+   [
+    "w1",
+    "chat444",
+    "2026-01-10T22:50:00+00:00",
+    "2026-01-10",
+    "America/Toronto",
+    true,
+    null,
+    null,
+    "iMessage",
+    "hi",
+    false,
+    false,
+    false,
+    null,
+    false,
+    null,
+    [],
+    [],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    []
+   ],
+   [
+    "z1",
+    "sam@example.com",
+    null,
+    null,
+    "America/Toronto",
+    false,
+    "sam@example.com",
+    "sam@example.com",
+    "iMessage",
+    "hi",
+    false,
+    false,
+    false,
+    null,
+    false,
+    null,
+    [],
+    [],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    []
+   ],
+   [
+    "z2",
+    "sam@example.com",
+    null,
+    null,
+    "America/Toronto",
+    true,
+    null,
+    null,
+    "iMessage",
+    "hi",
+    false,
+    false,
+    false,
+    null,
+    false,
+    null,
+    [],
+    [],
+    false,
+    "m",
+    null,
+    "m@ws_17_timeline_identity_m",
+    []
+   ]
+  ]
+ },
+ "people": {
+  "columns": [
+   [
+    "handle",
+    "text",
+    1
+   ],
+   [
+    "name",
+    "text",
+    2
+   ],
+   [
+    "written",
+    "text",
+    3
+   ],
+   [
+    "display_name",
+    "text",
+    4
+   ]
+  ],
+  "indexes": [
+   "CREATE UNIQUE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.people USING btree (handle)"
+  ],
+  "rows": [
+   [
+    "5555550101",
+    "Alex Example",
+    "+15555550101",
+    "Alex Example"
+   ],
+   [
+    "5555550102",
+    "Robin Sample",
+    "+15555550102",
+    "Robin Sample"
+   ],
+   [
+    "5555550103",
+    "Kai",
+    "+15555550103",
+    "Kai"
+   ],
+   [
+    "5555550104",
+    null,
+    "+15555550104",
+    "+15555550104"
+   ],
+   [
+    "5555550105",
+    null,
+    "+15555550105",
+    "+15555550105"
+   ],
+   [
+    "5555550113",
+    null,
+    "+15555550113",
+    "+15555550113"
+   ],
+   [
+    "quinn@example.com",
+    "Quinn Sample",
+    "Quinn@Example.com",
+    "Quinn Sample"
+   ],
+   [
+    "sam@example.com",
+    null,
+    "sam@example.com",
+    "sam@example.com"
+   ]
+  ]
+ },
+ "screen_frames": {
+  "columns": [
+   [
+    "image_path",
+    "text",
+    1
+   ],
+   [
+    "captured_at",
+    "timestamp with time zone",
+    2
+   ],
+   [
+    "bundle_id",
+    "text",
+    3
+   ],
+   [
+    "text",
+    "text",
+    4
+   ],
+   [
+    "withheld",
+    "text",
+    5
+   ],
+   [
+    "masked",
+    "bigint",
+    6
+   ],
+   [
+    "media_status",
+    "text",
+    7
+   ],
+   [
+    "thumbnail_w360",
+    "boolean",
+    8
+   ],
+   [
+    "thumbnail_w1280",
+    "boolean",
+    9
+   ],
+   [
+    "media_withheld",
+    "boolean",
+    10
+   ],
+   [
+    "connection",
+    "text",
+    11
+   ],
+   [
+    "previous_captured_at",
+    "ARRAY",
+    12
+   ],
+   [
+    "_input",
+    "text",
+    13
+   ],
+   [
+    "_cursor",
+    "timestamp with time zone",
+    14
+   ],
+   [
+    "_stamp",
+    "text",
+    15
+   ]
+  ],
+  "indexes": [
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.screen_frames USING btree (_cursor)",
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.screen_frames USING btree (_input)",
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.screen_frames USING btree (_stamp)",
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.screen_frames USING btree (captured_at)",
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.screen_frames USING gin (to_tsvector('simple'::regconfig, \"left\"(text, 100000)))",
+   "CREATE INDEX screen_frames_media_pending ON miroir_t_dcf1e40697ca1eda_timeline.screen_frames USING btree (image_path) WHERE ((media_withheld IS NULL) AND true)",
+   "CREATE UNIQUE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.screen_frames USING btree (image_path)"
+  ],
+  "rows": [
+   [
+    "2026/11/20/1795150800.jpeg",
+    "2026-11-20T05:00:00+00:00",
+    "com.apple.Safari",
+    "Invented text 0",
+    null,
+    0,
+    "made",
+    true,
+    true,
+    false,
+    "screen",
+    null,
+    "screen@ws_17_timeline_identity_screen"
+   ],
+   [
+    "2026/11/20/1795150810.jpeg",
+    "2026-11-20T05:00:10+00:00",
+    "com.apple.Safari",
+    "Invented text 10",
+    null,
+    0,
+    null,
+    null,
+    null,
+    false,
+    "screen",
+    null,
+    "screen@ws_17_timeline_identity_screen"
+   ],
+   [
+    "2026/11/20/1795150820.jpeg",
+    "2026-11-20T05:00:20+00:00",
+    "com.apple.Safari",
+    "Invented text 20",
+    null,
+    0,
+    null,
+    null,
+    null,
+    false,
+    "screen",
+    null,
+    "screen@ws_17_timeline_identity_screen"
+   ],
+   [
+    "2026/11/20/1795151200.jpeg",
+    "2026-11-20T05:06:40+00:00",
+    "com.apple.Terminal",
+    "Invented text 400",
+    null,
+    0,
+    "failed",
+    false,
+    false,
+    false,
+    "screen",
+    null,
+    "screen@ws_17_timeline_identity_screen"
+   ],
+   [
+    "2026/11/20/1795151210.jpeg",
+    "2026-11-20T05:06:50+00:00",
+    "com.apple.Terminal",
+    null,
+    "password_manager",
+    0,
+    null,
+    null,
+    null,
+    true,
+    "screen",
+    null,
+    "screen@ws_17_timeline_identity_screen"
+   ],
+   [
+    "2026/11/20/1795151700.jpeg",
+    "2026-11-20T05:15:00+00:00",
+    "com.apple.Notes",
+    "Invented text 900",
+    null,
+    0,
+    null,
+    null,
+    null,
+    false,
+    "screen",
+    null,
+    "screen@ws_17_timeline_identity_screen"
+   ],
+   [
+    "2026/11/20/1795152800.jpeg",
+    "2026-11-20T05:33:20+00:00",
+    "com.apple.Notes",
+    "Invented text 2000",
+    null,
+    0,
+    null,
+    null,
+    null,
+    false,
+    "screen",
+    null,
+    "screen@ws_17_timeline_identity_screen"
+   ]
+  ]
+ },
+ "timeline_browser": {
+  "columns": [
+   [
+    "source",
+    "text",
+    1
+   ],
+   [
+    "connection",
+    "text",
+    2
+   ],
+   [
+    "event_id",
+    "text",
+    3
+   ],
+   [
+    "started_at",
+    "timestamp with time zone",
+    4
+   ],
+   [
+    "ended_at",
+    "timestamp with time zone",
+    5
+   ],
+   [
+    "kind",
+    "text",
+    6
+   ],
+   [
+    "title",
+    "text",
+    7
+   ],
+   [
+    "body",
+    "text",
+    8
+   ],
+   [
+    "media_kind",
+    "text",
+    9
+   ],
+   [
+    "media_key",
+    "text",
+    10
+   ],
+   [
+    "media_status",
+    "text",
+    11
+   ],
+   [
+    "thumbnail_w360",
+    "boolean",
+    12
+   ],
+   [
+    "thumbnail_w1280",
+    "boolean",
+    13
+   ],
+   [
+    "media_withheld",
+    "boolean",
+    14
+   ],
+   [
+    "group_key",
+    "text",
+    15
+   ],
+   [
+    "payload",
+    "jsonb",
+    16
+   ],
+   [
+    "deleted",
+    "boolean",
+    17
+   ],
+   [
+    "previous_started_at",
+    "ARRAY",
+    18
+   ],
+   [
+    "_input",
+    "text",
+    19
+   ],
+   [
+    "_cursor",
+    "timestamp with time zone",
+    20
+   ],
+   [
+    "_stamp",
+    "text",
+    21
+   ]
+  ],
+  "indexes": [
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.timeline_browser USING btree (_cursor)",
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.timeline_browser USING btree (_input)",
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.timeline_browser USING btree (_stamp)",
+   "CREATE UNIQUE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.timeline_browser USING btree (event_id)"
+  ],
+  "rows": [
+   [
+    "browser",
+    "browser",
+    "browser:1",
+    "2026-11-20T05:01:40+00:00",
+    "2026-11-20T05:01:40+00:00",
+    "visit",
+    "Page A, renamed",
+    "https://example.org/a",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "example.org",
+    {
+     "from_visit_id": 0,
+     "place_id": 1,
+     "visit_id": 1,
+     "visit_type": 1
+    },
+    false,
+    null,
+    "browser@ws_17_timeline_identity_browser"
+   ],
+   [
+    "browser",
+    "browser",
+    "browser:2",
+    "2026-11-20T05:03:20+00:00",
+    "2026-11-20T05:03:20+00:00",
+    "visit",
+    "https://www.example.net/b",
+    "https://www.example.net/b",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "example.net",
+    {
+     "from_visit_id": 0,
+     "place_id": 2,
+     "visit_id": 2,
+     "visit_type": 1
+    },
+    false,
+    null,
+    "browser@ws_17_timeline_identity_browser"
+   ],
+   [
+    "browser",
+    "browser",
+    "browser:3",
+    "2026-11-20T05:05:00+00:00",
+    "2026-11-20T05:05:00+00:00",
+    "visit",
+    "Page A, renamed",
+    "https://example.org/a",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "example.org",
+    {
+     "from_visit_id": 0,
+     "place_id": 1,
+     "visit_id": 3,
+     "visit_type": 5
+    },
+    true,
+    null,
+    "browser@ws_17_timeline_identity_browser"
+   ],
+   [
+    "browser",
+    "browser",
+    "browser:4",
+    "2026-11-20T05:35:00+00:00",
+    "2026-11-20T05:35:00+00:00",
+    "visit",
+    "Page A, renamed",
+    "https://example.org/a",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "example.org",
+    {
+     "from_visit_id": 0,
+     "place_id": 1,
+     "visit_id": 4,
+     "visit_type": 1
+    },
+    false,
+    null,
+    "browser@ws_17_timeline_identity_browser"
+   ]
+  ]
+ },
+ "timeline_message_chats": {
+  "columns": [
+   [
+    "guid",
+    "text",
+    1
+   ],
+   [
+    "identifier",
+    "text",
+    2
+   ],
+   [
+    "conversation_key",
+    "text",
+    3
+   ],
+   [
+    "conversation_id",
+    "text",
+    4
+   ],
+   [
+    "is_group",
+    "boolean",
+    5
+   ],
+   [
+    "title",
+    "text",
+    6
+   ],
+   [
+    "service",
+    "text",
+    7
+   ],
+   [
+    "members",
+    "ARRAY",
+    8
+   ],
+   [
+    "loaded",
+    "text",
+    9
+   ],
+   [
+    "connection",
+    "text",
+    10
+   ],
+   [
+    "_input",
+    "text",
+    11
+   ],
+   [
+    "_stamp",
+    "text",
+    12
+   ]
+  ],
+  "indexes": [
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.timeline_message_chats USING btree (_input)",
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.timeline_message_chats USING btree (_stamp)",
+   "CREATE UNIQUE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.timeline_message_chats USING btree (guid)"
+  ],
+  "rows": [
+   [
+    "SMS;-;+15555550101",
+    "+15555550101",
+    "5555550101",
+    "5555550101",
+    false,
+    null,
+    "SMS",
+    [
+     "5555550101"
+    ],
+    "m",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "SMS;-;+15555550199",
+    "+15555550199",
+    "5555550199",
+    "5555550199",
+    false,
+    null,
+    "SMS",
+    [],
+    "m",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "SMS;-;5555550113",
+    "5555550113",
+    "5555550113",
+    "5555550113",
+    false,
+    null,
+    "SMS",
+    [
+     "5555550113"
+    ],
+    "m",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "any;+;chat333",
+    "chat333",
+    "chat333",
+    "chat333",
+    true,
+    null,
+    "iMessage",
+    [
+     "5555550101",
+     "5555550102",
+     "5555550103",
+     "5555550104",
+     "sam@example.com"
+    ],
+    "m",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "any;-;+15555550101",
+    "+15555550101",
+    "5555550101",
+    "5555550101",
+    false,
+    null,
+    "iMessage",
+    [
+     "5555550101"
+    ],
+    "m",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "iMessage;+;chat111",
+    "chat111",
+    "chat111",
+    "chat111",
+    true,
+    "Book Club",
+    "iMessage",
+    [
+     "5555550101",
+     "5555550102",
+     "5555550103"
+    ],
+    "m",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "iMessage;+;chat222",
+    "chat222",
+    "chat222",
+    "chat222",
+    true,
+    null,
+    "iMessage",
+    [
+     "5555550102",
+     "5555550103",
+     "5555550104"
+    ],
+    "m",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "iMessage;+;chat444",
+    "chat444",
+    "chat444",
+    "chat444",
+    true,
+    null,
+    "iMessage",
+    [],
+    "m",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "iMessage;-;",
+    "iMessage;-;",
+    "iMessage;-;",
+    "iMessage;-;",
+    false,
+    null,
+    "iMessage",
+    [],
+    "m",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "iMessage;-;+15555550101",
+    "+15555550101",
+    "5555550101",
+    "5555550101",
+    false,
+    null,
+    "iMessage",
+    [
+     "5555550101"
+    ],
+    "m",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "iMessage;-;+15555550105",
+    "+15555550105",
+    "5555550105",
+    "5555550105",
+    false,
+    null,
+    "iMessage",
+    [
+     "5555550105"
+    ],
+    "m",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "iMessage;-;+15555550113",
+    "+15555550113",
+    "5555550113",
+    "5555550113",
+    false,
+    null,
+    "iMessage",
+    [
+     "5555550113"
+    ],
+    "m",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "iMessage;-;Quinn@Example.com",
+    "Quinn@Example.com",
+    "quinn@example.com",
+    "quinn@example.com",
+    false,
+    null,
+    "iMessage",
+    [
+     "quinn@example.com"
+    ],
+    "m",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "iMessage;-;quinn@example.com",
+    "quinn@example.com",
+    "quinn@example.com",
+    "quinn@example.com",
+    false,
+    null,
+    "iMessage",
+    [
+     "quinn@example.com"
+    ],
+    "m",
+    "m@ws_17_timeline_identity_m"
+   ],
+   [
+    "iMessage;-;sam@example.com",
+    "sam@example.com",
+    "sam@example.com",
+    "sam@example.com",
+    false,
+    null,
+    "iMessage",
+    [
+     "sam@example.com"
+    ],
+    "m",
+    "m@ws_17_timeline_identity_m"
+   ]
+  ]
+ },
+ "timeline_message_reaction_targets": {
+  "columns": [
+   [
+    "reaction_guid",
+    "text",
+    1
+   ],
+   [
+    "message_guid",
+    "text",
+    2
+   ]
+  ],
+  "indexes": [
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.timeline_message_reaction_targets USING btree (message_guid)",
+   "CREATE UNIQUE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.timeline_message_reaction_targets USING btree (reaction_guid, message_guid)"
+  ],
+  "rows": [
+   [
+    "k1",
+    "g1"
+   ],
+   [
+    "k2",
+    "g1"
+   ],
+   [
+    "k3",
+    "g1"
+   ],
+   [
+    "k4",
+    "g3"
+   ],
+   [
+    "k5",
+    "g3"
+   ],
+   [
+    "r1",
+    "a2"
+   ],
+   [
+    "r10",
+    "g2"
+   ],
+   [
+    "r11",
+    "g1"
+   ],
+   [
+    "r2",
+    "a4"
+   ],
+   [
+    "r3",
+    "a4"
+   ],
+   [
+    "r4",
+    "a1"
+   ],
+   [
+    "r5",
+    "a4"
+   ],
+   [
+    "r6",
+    "a1"
+   ],
+   [
+    "r7",
+    "g2"
+   ],
+   [
+    "r8",
+    "g2"
+   ],
+   [
+    "r9",
+    "g2"
+   ]
+  ]
+ },
+ "timeline_screen": {
+  "columns": [
+   [
+    "source",
+    "text",
+    1
+   ],
+   [
+    "connection",
+    "text",
+    2
+   ],
+   [
+    "event_id",
+    "text",
+    3
+   ],
+   [
+    "started_at",
+    "timestamp with time zone",
+    4
+   ],
+   [
+    "ended_at",
+    "timestamp with time zone",
+    5
+   ],
+   [
+    "kind",
+    "text",
+    6
+   ],
+   [
+    "title",
+    "text",
+    7
+   ],
+   [
+    "body",
+    "text",
+    8
+   ],
+   [
+    "media_kind",
+    "text",
+    9
+   ],
+   [
+    "media_key",
+    "text",
+    10
+   ],
+   [
+    "media_status",
+    "text",
+    11
+   ],
+   [
+    "thumbnail_w360",
+    "boolean",
+    12
+   ],
+   [
+    "thumbnail_w1280",
+    "boolean",
+    13
+   ],
+   [
+    "media_withheld",
+    "boolean",
+    14
+   ],
+   [
+    "group_key",
+    "text",
+    15
+   ],
+   [
+    "payload",
+    "jsonb",
+    16
+   ],
+   [
+    "deleted",
+    "boolean",
+    17
+   ],
+   [
+    "previous_started_at",
+    "ARRAY",
+    18
+   ],
+   [
+    "_input",
+    "text",
+    19
+   ],
+   [
+    "_stamp",
+    "text",
+    20
+   ]
+  ],
+  "indexes": [
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.timeline_screen USING btree (_input)",
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.timeline_screen USING btree (_stamp)",
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.timeline_screen USING btree (deleted, group_key)",
+   "CREATE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.timeline_screen USING btree (deleted, started_at)",
+   "CREATE INDEX timeline_screen_media_pending ON miroir_t_dcf1e40697ca1eda_timeline.timeline_screen USING btree (event_id) WHERE ((media_withheld IS NULL) AND (NOT deleted))",
+   "CREATE UNIQUE INDEX \"dbt\" ON miroir_t_dcf1e40697ca1eda_timeline.timeline_screen USING btree (event_id)"
+  ],
+  "rows": [
+   [
+    "screen",
+    "screen",
+    "screen:2026/11/20/1795150800.jpeg",
+    "2026-11-20T05:00:00+00:00",
+    "2026-11-20T05:00:20+00:00",
+    "app_session",
+    "Safari",
+    null,
+    "screenshots",
+    "2026/11/20/1795150800.jpeg",
+    "made",
+    true,
+    true,
+    false,
+    "com.apple.Safari",
+    {
+     "bundle_id": "com.apple.Safari",
+     "frames": 3,
+     "last_frame": "2026/11/20/1795150820.jpeg"
+    },
+    false,
+    null,
+    "screen@ws_17_timeline_identity_screen"
+   ],
+   [
+    "screen",
+    "screen",
+    "screen:2026/11/20/1795151200.jpeg",
+    "2026-11-20T05:06:40+00:00",
+    "2026-11-20T05:06:50+00:00",
+    "app_session",
+    "Terminal",
+    null,
+    "screenshots",
+    "2026/11/20/1795151200.jpeg",
+    "failed",
+    false,
+    false,
+    false,
+    "com.apple.Terminal",
+    {
+     "bundle_id": "com.apple.Terminal",
+     "frames": 2,
+     "last_frame": "2026/11/20/1795151210.jpeg"
+    },
+    false,
+    null,
+    "screen@ws_17_timeline_identity_screen"
+   ],
+   [
+    "screen",
+    "screen",
+    "screen:2026/11/20/1795151700.jpeg",
+    "2026-11-20T05:15:00+00:00",
+    "2026-11-20T05:15:00+00:00",
+    "app_session",
+    "Notes",
+    null,
+    "screenshots",
+    "2026/11/20/1795151700.jpeg",
+    null,
+    null,
+    null,
+    false,
+    "com.apple.Notes",
+    {
+     "bundle_id": "com.apple.Notes",
+     "frames": 1,
+     "last_frame": "2026/11/20/1795151700.jpeg"
+    },
+    false,
+    null,
+    "screen@ws_17_timeline_identity_screen"
+   ],
+   [
+    "screen",
+    "screen",
+    "screen:2026/11/20/1795152800.jpeg",
+    "2026-11-20T05:33:20+00:00",
+    "2026-11-20T05:33:20+00:00",
+    "app_session",
+    "Notes",
+    null,
+    "screenshots",
+    "2026/11/20/1795152800.jpeg",
+    null,
+    null,
+    null,
+    false,
+    "com.apple.Notes",
+    {
+     "bundle_id": "com.apple.Notes",
+     "frames": 1,
+     "last_frame": "2026/11/20/1795152800.jpeg"
+    },
+    false,
+    null,
+    "screen@ws_17_timeline_identity_screen"
+   ]
+  ]
+ }
+}
