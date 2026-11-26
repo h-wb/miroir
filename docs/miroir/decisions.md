@@ -3389,7 +3389,8 @@ source is written by a model `timeline_<source>`, each plugin is one the viewer
 implements and each media kind one its role's connector declares.
 
 **The build passes the lanes.** The timeline's variables carry them
-(`timeline_lanes`, every declared lane, linked or not) and the tables' version
+(`timeline_lanes`, every declared lane, linked or not: its role, source and
+media kind) and the tables' version
 (`timeline_contract`); `miroir_roles` gives each role's dbt source. `events`
 unites `timeline_<source>` for each lane, in order; `days` counts each; both
 clean the rows of every listed lane's role of another identity. A lane left out
@@ -3398,11 +3399,15 @@ adding one is safe. Messages reach `events` through `timeline_messages`, a view
 over `messages` with the columns every source's model has.
 
 **`contract`.** The package builds one row: `version`, major.minor, starting at
-`1.0`, and `lanes`, the declared lanes as JSON, readable by the reader role like
+`1.0`, and `lanes`, the declared lanes' role, source and media kind as JSON (the
+pages' wording is not part of the build, so it leaves the receipt alone),
+readable by the reader role like
 the other outputs. An added column or relation is a minor change, a removed or
 changed one a major. The viewer reads the version on a reader's first query and
-answers 503 *built by another package version* for a major it does not know; a
-missing `contract` is *not built yet*, as a missing table is.
+answers 503 *built by another package version* for a major it does not know or
+a `contract` without exactly one row. Tables built before `contract` existed are
+read as 1.0, which they are (the identity test), so the viewer keeps answering
+after the deploy until the first build creates it.
 
 **`media_ref`.** Media's macro (`dbt/macros/media.sql`) is the only way a model
 joins `media_objects`: `media_ref(role, kind, key_column)` gives the kind as a

@@ -97,11 +97,12 @@ def _timeline_variables(
 ) -> dict[str, Any]:
     # The lanes, linked or not: `events` reads each one's model and cleans the
     # rows of each one's role, and `contract` keeps them (package split, step
-    # 11). A lane left out would no longer be cleaned; adding one is safe.
+    # 11). A lane left out would no longer be cleaned; adding one is safe. Only
+    # what the models read: the pages' wording is not part of the receipt.
     return {
         "timeline_reader_role": parameters.reader_role,
         "timeline_contract": CONTRACT_VERSION,
-        "timeline_lanes": [lane.declared() for lane in LANES["timeline"]],
+        "timeline_lanes": [lane.built() for lane in LANES["timeline"]],
     }
 
 

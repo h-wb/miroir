@@ -74,6 +74,9 @@ def status(
 # The majors of the tables' version (the package's `contract`) this viewer
 # reads; a minor change only adds, so any minor of these is read.
 CONTRACT_MAJORS = (1,)
+# The version of tables built before the package wrote `contract`: the same
+# tables as 1.0 (tests/test_timeline_identity.py).
+UNRECORDED_VERSION = "1.0"
 NO_ANALYSIS = (
     "The timeline is not configured: no analysis of the timeline package is set up."
 )
@@ -384,7 +387,9 @@ class TimelineReader:
     """The timeline's queries, each through one read-only, time-limited session.
 
     The first session of a reader checks the tables' version (`contract`):
-    tables of a major this viewer does not read answer 503, as missing ones do.
+    tables of a major this viewer does not read answer 503. Tables built before
+    `contract` existed (until the first build after the deploy that added it)
+    are read as version 1.0: they are the same tables, row for row.
     """
 
     def __init__(self, database: TimelineDatabase, source: TimelineSource) -> None:
@@ -399,10 +404,17 @@ class TimelineReader:
     def _checked_session(self, lookup: bool) -> Iterator[Any]:
         with session(self.database, lookup) as db:
             if not self.checked:
-                found = db.execute(
-                    sa.text(f"SELECT version FROM {self.source.table('contract')}")
-                ).all()
-                if len(found) != 1 or _major(found[0][0]) not in CONTRACT_MAJORS:
+                contract = self.source.table("contract")
+                built = db.execute(
+                    sa.text("SELECT to_regclass(:contract) IS NOT NULL"),
+                    {"contract": contract},
+                ).scalar_one()
+                if built:
+                    found = db.execute(sa.text(f"SELECT version FROM {contract}")).all()
+                    versions = [row[0] for row in found]
+                else:
+                    versions = [UNRECORDED_VERSION]
+                if len(versions) != 1 or _major(versions[0]) not in CONTRACT_MAJORS:
                     raise TimelineUnavailable(OTHER_VERSION)
                 self.checked = True
             yield db

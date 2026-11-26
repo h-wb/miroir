@@ -7,7 +7,7 @@ the viewer, media or the control plane.
 """
 
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -66,11 +66,12 @@ class Lane:
     always: bool = False
     media_kind: str | None = None
 
-    def declared(self) -> dict[str, Any]:
-        """As the build hands it to the models and `contract` keeps it."""
-        found = asdict(self)
-        found["units"] = list(self.units)
-        return found
+    def built(self) -> dict[str, Any]:
+        """What the models read of it, as the build hands it to them and
+        `contract` keeps it: its role, its source and the kind of its files.
+        Nothing of its wording, so a change of label, colour, units or search
+        words changes no build (the receipt holds the build's variables)."""
+        return {"role": self.role, "source": self.source, "media_kind": self.media_kind}
 
 
 # A frame the collector withheld keeps its row, with the reason in `withheld`,

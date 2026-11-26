@@ -38,6 +38,7 @@ from src.viewer.reader import (
     MEDIA_WITHHELD,
     NO_ANALYSIS,
     NOT_BUILT,
+    OTHER_VERSION,
     TimelineDatabase,
     TimelineReader,
     TimelineSource,
@@ -241,6 +242,69 @@ class TimelineQueryTests(TimelineApiFixture):
         )
         with self.assertRaisesRegex(TimelineUnavailable, NOT_BUILT):
             missing.screen_day(datetime(2026, 11, 20).date())
+
+    def test_the_tables_version_is_checked_before_any_read(self):
+        # The contract check (package split, step 11), on a schema of its own.
+        schema = "miroir_contract_check"
+        self.query(
+            f"drop schema if exists {schema} cascade; create schema {schema}; "
+            f"grant usage on schema {schema} to {READER}"
+        )
+        self.addCleanup(self.query, f"drop schema if exists {schema} cascade")
+
+        def checked():
+            source = TimelineSource("other", schema, "UTC", lanes=LANES["timeline"])
+            reader = TimelineReader(self.database, source)
+            with reader._session() as db:
+                self.assertEqual(db.execute(sa.text("SELECT 1")).scalar_one(), 1)
+            return reader.checked
+
+        # Built before `contract` existed: read as 1.0.
+        self.assertTrue(checked())
+        self.query(
+            f"create table {schema}.contract (version text, lanes jsonb); "
+            f"grant select on {schema}.contract to {READER}"
+        )
+        for versions, readable in (
+            (["1.0"], True),
+            (["1.7"], True),
+            (["2.0"], False),
+            (["0.9"], False),
+            (["1"], False),
+            (["one.zero"], False),
+            ([None], False),
+            ([], False),
+            (["1.0", "1.0"], False),
+        ):
+            with self.subTest(versions=versions):
+                self.query(f"delete from {schema}.contract")
+                for version in versions:
+                    value = "null" if version is None else f"'{version}'"
+                    self.query(f"insert into {schema}.contract values ({value}, '[]')")
+                if readable:
+                    self.assertTrue(checked())
+                else:
+                    with self.assertRaisesRegex(TimelineUnavailable, OTHER_VERSION):
+                        checked()
+        # Through a route: a built timeline without `contract` (just after the
+        # deploy that adds it) keeps answering; a major it does not know is 503.
+        built = self.schema(self.miroir, "timeline")
+        url = "/api/timeline/days?from=2026-11-20&to=2026-11-20"
+        self.query(f"alter table {built}.contract rename to contract_later")
+        try:
+            answer = self.client().get(url, headers=BEARER)
+            self.assertEqual(answer.status_code, 200, answer.text)
+            self.assertTrue(answer.json()["days"])
+        finally:
+            self.query(f"alter table {built}.contract_later rename to contract")
+        self.query(f"update {built}.contract set version = '2.0'")
+        try:
+            answer = self.client().get(url, headers=BEARER)
+        finally:
+            self.query(f"update {built}.contract set version = '1.0'")
+        self.assertEqual(
+            (answer.status_code, answer.json()), (503, {"error": OTHER_VERSION})
+        )
 
     def test_a_query_past_the_time_limit_is_a_clear_error(self):
         reader = TimelineReader(self.reader_database(timeout=300), self.source)

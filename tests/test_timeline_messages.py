@@ -1065,8 +1065,12 @@ class TimelineMessagesTests(TimelineMessagesFixture):
         )
         self.assertEqual(version, "1.0")
         self.assertEqual(
-            [(lane["source"], lane["plugin"]) for lane in lanes],
-            [("screen", "scrubber"), ("browser", None), ("messages", "thread")],
+            lanes,
+            [
+                {"role": "screen", "source": "screen", "media_kind": "screenshots"},
+                {"role": "browser", "source": "browser", "media_kind": None},
+                {"role": "messages", "source": "messages", "media_kind": "attachments"},
+            ],
         )
         dataset = miroir.connections[0].binding.dataset_name
         for relation in (

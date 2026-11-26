@@ -102,8 +102,9 @@ the configuration alone. `serve` with no option keeps running both.
 The server reads the first `timeline` analysis in the configuration (the first
 of a package that declares lanes), in the schema its build writes. A reader's
 first query reads the tables' version in `contract`: a major this server does
-not read answers 503 "built by another package version", and a missing
-`contract` is "not built yet". Others are named in a `warning` field of the health
+not read answers 503 "built by another package version". Tables built before
+`contract` existed (until the first build after the deploy that adds it) are
+read as version 1.0. Others are named in a `warning` field of the health
 check and of every answer. Every answer carries `analysis` and `timezone`. Dates
 are local days in that time zone, `YYYY-MM-DD`; a day runs from its local
 midnight to the next (where clocks go back at midnight, from the later of the
@@ -231,9 +232,9 @@ script and its templates draw lanes from declarations and `events` alone
    (`LANES`), after the others: they are the order `events` unites them in. Its
    `units` word its count ("walk", "walks"), `search_in` where its search looks.
 
-The next build reads it (a normal build; the lanes are part of the build's
-receipt, so the analysis shows *stale* until then) and records it in
-`contract`. Where its role is linked, the Day view draws its lane (marks in one
+The next build reads it (a normal build; a lane's role, source and media kind
+are part of the build's receipt, so the analysis shows *stale* until then, but
+its wording is not) and records it in `contract`. Where its role is linked, the Day view draws its lane (marks in one
 colour, or by group), counts it in the summary and the calendar, lists its
 events around the frame and gives search a kind of its own over its events'
 titles and bodies (a model that writes an empty `search` is found by nothing).
