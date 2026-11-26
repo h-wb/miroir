@@ -54,6 +54,27 @@ gone.
 | `media` | false | Upload screenshots |
 | `media_dir` | `<data_dir>/screenshots` | Where the screenshots are |
 
+### Columns read, and why
+
+Only these five columns are read. Other columns and tables of ScreenMemory's
+databases are not read: their format is undocumented, and the collector takes
+what it needs.
+
+| Table | Column | Why |
+| --- | --- | --- |
+| `ocrresults` | `imagetimestamp` | When the frame was taken: the cursor, the settle rule and the join to the app |
+| `ocrresults` | `imagepath` | The frame's key, and where its screenshot is |
+| `ocrresults` | `imagetext` | The recognised text, which is what a frame is for; masked before it leaves |
+| `usage` | `timestamp` | When the app was in front, to join a frame to its app |
+| `usage` | `identifier` | The app's bundle id, to name the app and to withhold a password manager's frames (`name` is unusable) |
+
+Timestamps are whole seconds. A value ScreenMemory stores as text or a fraction is
+cut to its integer second; one that is not a number is never selected, and one
+outside the years 2001 to 2100 is rejected. Whole seconds are what the cursor,
+the `settle_seconds` rule and the exact-timestamp join between a frame and its
+app compare, so every batch cuts the same way and a batch delivered twice is the
+same.
+
 ## What the collector sends
 
 A gzip JSON Lines file per batch (`screenmemory_batch`, version 1): a header, `frame`

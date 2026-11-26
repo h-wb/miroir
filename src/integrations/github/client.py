@@ -39,6 +39,17 @@ def parse_datetime(value: str) -> DateTime:
     return parsed
 
 
+# What is kept of each changed file; `patch` (the diff text) is never stored.
+FILE_SUMMARY = (
+    "filename",
+    "status",
+    "additions",
+    "deletions",
+    "changes",
+    "previous_filename",
+)
+
+
 class GitHubClient:
     def __init__(self, username: str, access_token: str, session: Session) -> None:
         self.username = username
@@ -128,7 +139,12 @@ class GitHubClient:
             return None
         response.raise_for_status()
         commit: dict[str, Any] = response.json()
-        commit.pop("files", None)
+        commit["files"] = [
+            {key: f[key] for key in FILE_SUMMARY if key in f}
+            for f in commit.get("files") or []
+        ]
+        if not commit["files"]:
+            del commit["files"]
         return commit
 
     def search(

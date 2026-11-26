@@ -38,7 +38,7 @@ supporting resource that loads nothing):
 
 | Resource | Endpoint | Key | Incremental |
 | --- | --- | --- | --- |
-| `commits` | `/repos/{r}/branches`, then `/repos/{r}/commits?sha=<branch>&since=`, then `/repos/{r}/commits/{sha}` for line stats (file patches dropped) | `html_url` | Run windows |
+| `commits` | `/repos/{r}/branches`, then `/repos/{r}/commits?sha=<branch>&since=`, then `/repos/{r}/commits/{sha}` for line stats and the changed files (patches dropped) | `html_url` | Run windows |
 | `pull_requests` | `/repos/{r}/pulls?state=all&sort=updated` | `html_url` | `updated_at` |
 | `issues` | `/repos/{r}/issues?since=` (also lists pull requests; the models drop them) | `html_url` | `updated_at` |
 | `issue_comments` | `/repos/{r}/issues/comments?since=` | `html_url` | `updated_at` |
@@ -51,6 +51,18 @@ split in half past the 1,000-result cap):
 | --- | --- |
 | `external_commits` | `author:<me> -user:<me>` on `/search/commits` (default branches only), then `/commits/{sha}` for stats |
 | `external_issues` | `is:issue` and `is:pull-request` `author:<me> -user:<me>` on `/search/issues` |
+
+### Changed files
+
+Each commit's changed files are kept as a child table that dlt makes from the
+`files` list: `commits__files` and `external_commits__files`, one row per file with
+`filename`, `status`, `additions`, `deletions`, `changes` and, for a rename,
+`previous_filename`, joined to the commit by `_dlt_parent_id`. The `patch` text
+is never stored (size), nor is any other field of the file. A commit with no files
+has no rows, and the commit tables are unchanged. Commits loaded before this
+have no file rows until they are fetched again: an API source cannot be
+re-imported, so only commits inside a later run's window gain them. When a commit
+is fetched again its file rows are replaced (tested).
 
 Every incremental read re-reads three days, so late merges and edits are merged.
 Commits and searches keep run windows rather than a cursor on record dates, since
