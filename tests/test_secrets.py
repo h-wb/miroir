@@ -20,17 +20,17 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from src.cli.main import main
-from src.core.config import ConfigurationConflict, ConfigurationError, parse_miroir
-from src.core.operations import MetadataStore
-from src.core.runner import IngestionFailed, run_connection
-from src.core.secrets import (
+from src.control.config import ConfigurationConflict, ConfigurationError, parse_miroir
+from src.control.operations import MetadataStore
+from src.control.runner import IngestionFailed, run_connection
+from src.control.secrets import (
     SecretBox,
     SecretKeyError,
     SecretResolutionError,
     SecretStore,
     make_resolver,
 )
-from src.core.service import InlineExecutor, MiroirService
+from src.control.service import InlineExecutor, MiroirService
 from src.kernel.errors import OperationError
 from src.web.app import create_app
 from tests.test_operations import listens_response
@@ -151,7 +151,7 @@ class ConnectionSecretTests(unittest.TestCase):
     def test_failed_save_removes_stored_secrets_and_duplicates_keep_theirs(self):
         with (
             patch(
-                "src.core.service.save_miroir",
+                "src.control.service.save_miroir",
                 side_effect=ConfigurationConflict("x"),
             ),
             self.assertRaises(ConfigurationConflict),

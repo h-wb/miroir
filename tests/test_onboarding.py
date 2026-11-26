@@ -33,7 +33,7 @@ class OnboardingTests(WebFixture):
     def test_resource_choices_create_edit_validate_and_detect_conflicts(self):
         from cryptography.fernet import Fernet
 
-        from src.core.secrets import SecretBox, SecretStore
+        from src.control.secrets import SecretBox, SecretStore
 
         self.service.secrets = SecretStore(
             self.store, SecretBox.from_keys(Fernet.generate_key().decode())
@@ -138,7 +138,7 @@ class OnboardingTests(WebFixture):
     def test_api_creation_accepts_resource_selection_and_omission_means_all(self):
         from cryptography.fernet import Fernet
 
-        from src.core.secrets import SecretBox, SecretStore
+        from src.control.secrets import SecretBox, SecretStore
 
         self.service.secrets = SecretStore(
             self.store, SecretBox.from_keys(Fernet.generate_key().decode())
@@ -305,7 +305,7 @@ class OnboardingTests(WebFixture):
     def test_boolean_settings_are_saved_as_booleans_and_shown_when_false(self):
         from cryptography.fernet import Fernet
 
-        from src.core.secrets import SecretBox, SecretStore
+        from src.control.secrets import SecretBox, SecretStore
 
         key = Fernet.generate_key().decode()
         self.service.secrets = SecretStore(self.store, SecretBox.from_keys(key))
@@ -453,7 +453,7 @@ class OnboardingTests(WebFixture):
         registry = {**INTEGRATIONS, "other_files": definition}
         with (
             patch("src.integrations.registry.INTEGRATIONS", registry),
-            patch("src.core.config.INTEGRATIONS", registry),
+            patch("src.control.config.INTEGRATIONS", registry),
         ):
             self.service.create_connection(
                 "other_files",
@@ -490,7 +490,7 @@ class FolderSettingsTests(WebFixture):
         )
 
     def test_shared_edit_aborts_on_errors_and_detects_changes_at_save(self):
-        from src.core.config import ConfigurationConflict
+        from src.control.config import ConfigurationConflict
 
         before = self.config_path.read_bytes()
         revision = self.service.connection_settings("health")["file_revision"]

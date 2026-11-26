@@ -14,11 +14,11 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from src.core.config import ConfigurationError, load_miroir
+from src.control.config import ConfigurationError, load_miroir
 from src.integrations.registry import INTEGRATIONS
 
 if TYPE_CHECKING:
-    from src.core.config import ResolvedMiroir
+    from src.control.config import ResolvedMiroir
     from src.media.store import ObjectStore
     from src.viewer.database import TimelineDatabase
 
@@ -29,7 +29,7 @@ EXECUTE_LOCK_WAIT = 3600.0
 
 
 def main(argv: list[str] | None = None) -> int:
-    from src.core.config import metadata_url
+    from src.control.config import metadata_url
 
     parser = argparse.ArgumentParser(prog="pipelines-miroir")
     parser.add_argument("--config", type=Path, default=Path("miroir.json"))
@@ -201,7 +201,7 @@ def main(argv: list[str] | None = None) -> int:
 
     result: Any
     if args.command == "generate-key":
-        from src.core.secrets import generate_key
+        from src.control.secrets import generate_key
 
         print(generate_key())
         return 0
@@ -244,8 +244,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _operate(args: argparse.Namespace, miroir: Any) -> int:
-    from src.core.operations import MetadataStore
-    from src.core.secrets import SecretKeyError
+    from src.control.operations import MetadataStore
+    from src.control.secrets import SecretKeyError
 
     ids = [c.config.id for c in miroir.connections]
     if getattr(args, "connection", None) not in (None, *ids):
@@ -274,7 +274,7 @@ def _operate(args: argparse.Namespace, miroir: Any) -> int:
 
 def _secret_store(store: Any) -> Any:
     """The built-in secret backend, or None when no master key is configured."""
-    from src.core.secrets import KEY_VARIABLE, SecretBox, SecretStore
+    from src.control.secrets import KEY_VARIABLE, SecretBox, SecretStore
 
     if not os.environ.get(KEY_VARIABLE):
         return None
@@ -336,7 +336,7 @@ def _timeline_database() -> "TimelineDatabase | None":
 def _orchestrate(
     args: argparse.Namespace, miroir: Any, store: Any, secrets: Any
 ) -> int:
-    from src.core.service import MiroirService
+    from src.control.service import MiroirService
     from src.kernel.errors import OperationError
 
     store.migrate()
@@ -383,8 +383,8 @@ def _orchestrate(
 def _credentials(args: argparse.Namespace, store: Any, secrets: Any) -> int:
     import getpass
 
-    from src.core.secrets import SecretResolutionError
-    from src.core.service import InlineExecutor, MiroirService
+    from src.control.secrets import SecretResolutionError
+    from src.control.service import InlineExecutor, MiroirService
     from src.kernel.errors import OperationError
 
     store.migrate()
@@ -422,7 +422,7 @@ def _with_store(
     store.migrate()
     selected = [args.connection] if getattr(args, "connection", None) else ids
     if args.command == "status":
-        from src.core.service import InlineExecutor, MiroirService
+        from src.control.service import InlineExecutor, MiroirService
 
         service = MiroirService(
             args.config, store, Path(DEFAULT_ARTIFACTS), InlineExecutor(lambda _: None)
@@ -430,7 +430,7 @@ def _with_store(
         result = [service.connection(c)["status"] for c in selected]
         return _print(result)
     if args.command == "analyses":
-        from src.core.service import InlineExecutor, MiroirService
+        from src.control.service import InlineExecutor, MiroirService
 
         service = MiroirService(
             args.config, store, Path(DEFAULT_ARTIFACTS), InlineExecutor(lambda _: None)
@@ -444,7 +444,7 @@ def _with_store(
         ]
         return _print(result)
     if args.command == "submit":
-        from src.core.artifacts import submit_artifact
+        from src.control.artifacts import submit_artifact
         from src.integrations.validation import InvalidArtifact
 
         connection = next(
@@ -469,14 +469,14 @@ def _with_store(
 
     import dlt
 
-    from src.core.runner import (
+    from src.control.runner import (
         AlreadyImported,
         IngestionFailed,
         execute_operation,
         import_artifact,
         run_connection,
     )
-    from src.core.secrets import SecretKeyError, SecretResolutionError, make_resolver
+    from src.control.secrets import SecretKeyError, SecretResolutionError, make_resolver
 
     common: dict[str, Any] = {
         "store": store,
@@ -533,7 +533,7 @@ def _with_store(
 def _backfill_here(
     args: argparse.Namespace, miroir: Any, store: Any, common: dict[str, Any]
 ) -> Any:
-    from src.core.runner import execute_operation, request_derive
+    from src.control.runner import execute_operation, request_derive
     from src.kernel.errors import OperationError
     from src.media.backfill import backfill_options
 
@@ -609,7 +609,7 @@ def _serve(args: argparse.Namespace, miroir: Any, store: Any, secrets: Any) -> i
     import uvicorn
 
     from src.cli.compose import viewer_settings, web_app
-    from src.core.service import MiroirService, SubprocessExecutor
+    from src.control.service import MiroirService, SubprocessExecutor
     from src.viewer.database import TimelineConfigurationError
     from src.web.app import METRICS_TOKEN_REUSED
 

@@ -17,9 +17,9 @@ import sqlalchemy as sa
 from fastapi.testclient import TestClient
 
 from src.cli.compose import web_app
-from src.core.analysis import analysis_plan
-from src.core.config import parse_miroir
-from src.core.service import InlineExecutor, MiroirService
+from src.control.analysis import analysis_plan
+from src.control.config import parse_miroir
+from src.control.service import InlineExecutor, MiroirService
 from src.kernel.errors import OperationError
 from src.viewer.reader import (
     MAX_EVENT_TEXT,

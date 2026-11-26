@@ -14,14 +14,14 @@ from unittest.mock import patch
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
 
-from src.core.operations import (
+from src.control.operations import (
     SCHEMA_VERSION,
     MetadataStore,
     collector_reports,
     collector_summaries,
     schema_info,
 )
-from src.core.service import InlineExecutor, MiroirService
+from src.control.service import InlineExecutor, MiroirService
 from src.web.app import create_app
 from src.web.metrics import render_metrics
 from src.web.shell import SESSION_COOKIE
@@ -398,7 +398,7 @@ class OrderTests(ReportFixture):
         later = datetime(2026, 11, 21, 5, 0, tzinfo=timezone.utc)
         earlier = later - timedelta(seconds=1)
         # Two writers whose clocks were read in the opposite order to their writes.
-        with patch("src.core.operations._now", side_effect=[later, earlier]):
+        with patch("src.control.operations._now", side_effect=[later, earlier]):
             self.record("screen", report())
             self.record("screen", report(rows=failed_rows(), unreported=7))
         status = self.service.delivery_status("screen")["collector"]

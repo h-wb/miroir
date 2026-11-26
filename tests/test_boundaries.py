@@ -22,11 +22,11 @@ _ALLOWED = {
     # never the control plane, web, cli, the viewer or the connector registry.
     # The control plane hands it what it reads (src.media.target).
     "media": (_KERNEL,),
-    "core": (_KERNEL, "src.integrations", "src.analyses", _MEDIA),
-    "pipelines": (_KERNEL, "src.core", _MEDIA),
-    "adapters": (_KERNEL, "src.core", "src.pipelines"),
+    "control": (_KERNEL, "src.integrations", "src.analyses", _MEDIA),
+    "pipelines": (_KERNEL, "src.control", _MEDIA),
+    "adapters": (_KERNEL, "src.control", "src.pipelines"),
     # The control plane's admin part, mounted into the shell; never the viewer.
-    "web": (_KERNEL, "src.core", "src.integrations", "src.analyses", _MEDIA),
+    "web": (_KERNEL, "src.control", "src.integrations", "src.analyses", _MEDIA),
     # One HTTP surface (package split, step 8): login, headers, static files,
     # the base page and the navigation; both web and the viewer mount it.
     "web.shell": (_KERNEL,),
@@ -34,7 +34,7 @@ _ALLOWED = {
     # viewer, and reads the analyses' view declarations for the viewer's settings.
     "cli": (
         _KERNEL,
-        "src.core",
+        "src.control",
         "src.integrations",
         "src.analyses",
         "src.adapters",
@@ -65,7 +65,7 @@ _IMAGE_LIBRARIES = ("PIL", "pillow_heif")
 _DECODER = f"{_MEDIA}.decoder"
 # Only the runner imports the derive run that starts the decoder, inside the run.
 _DERIVE = f"{_MEDIA}.derive"
-_DERIVE_IMPORTER = "src.core.runner"
+_DERIVE_IMPORTER = "src.control.runner"
 
 
 def _within(name: str, prefix: str) -> bool:
@@ -174,8 +174,8 @@ class BoundaryTests(unittest.TestCase):
             "src.viewer.timeline_pages",
             "src.viewer.conversations",
             "src.viewer.media",
-            "src.core.service",
-            "src.core.runner",
+            "src.control.service",
+            "src.control.runner",
             "src.viewer.reader",
             "src.adapters.prefect",
             "src.media.backfill",

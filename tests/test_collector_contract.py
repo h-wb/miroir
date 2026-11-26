@@ -21,8 +21,8 @@ import duckdb
 import sqlalchemy as sa
 import uvicorn
 
-from src.core.operations import MetadataStore, collector_reports
-from src.core.service import InlineExecutor, MiroirService
+from src.control.operations import MetadataStore, collector_reports
+from src.control.service import InlineExecutor, MiroirService
 from src.integrations.apple_messages import DEFINITION as APPLE_MESSAGES
 from src.integrations.apple_messages import formats as apple_formats
 from src.integrations.browser_history.formats import read_rows

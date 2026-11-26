@@ -18,10 +18,10 @@ from pathlib import Path
 from prefect import flow
 from prefect.runtime import deployment, flow_run
 
-from src.core.config import load_miroir, metadata_url
-from src.core.operations import MetadataStore
-from src.core.runner import run_connection
-from src.core.secrets import SecretBox, SecretStore, make_resolver
+from src.control.config import load_miroir, metadata_url
+from src.control.operations import MetadataStore
+from src.control.runner import run_connection
+from src.control.secrets import SecretBox, SecretStore, make_resolver
 from src.media.s3 import from_environment
 from src.pipelines.transform import build_connection_models
 

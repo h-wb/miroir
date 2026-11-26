@@ -14,11 +14,11 @@ import requests
 
 from src.analyses.catalog import PACKAGES
 from src.analyses.views import WITHHOLDS
-from src.core.analysis import analysis_plan
-from src.core.artifacts import submit_artifact
-from src.core.config import ConfigurationError, parse_miroir
-from src.core.operations import MetadataStore
-from src.core.sources import open_fetch
+from src.control.analysis import analysis_plan
+from src.control.artifacts import submit_artifact
+from src.control.config import ConfigurationError, parse_miroir
+from src.control.operations import MetadataStore
+from src.control.sources import open_fetch
 from src.integrations.checks import CheckFailed
 from src.integrations.registry import INTEGRATIONS
 from src.integrations.validation import InvalidArtifact
@@ -209,7 +209,7 @@ class ConnectorContractTests(unittest.TestCase):
             )
 
     def test_raw_http_errors_use_the_same_failure_classification(self):
-        from src.core.runner import failure_kind
+        from src.control.runner import failure_kind
 
         for status, headers, expected in (
             (403, {"Retry-After": "10"}, "rate_limited"),

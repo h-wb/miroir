@@ -19,10 +19,10 @@ from src.adapters.prefect import (
     media_deployment_name,
 )
 from src.cli.main import main
-from src.core.config import ConfigurationError, load_miroir, parse_miroir
-from src.core.operations import MetadataStore, OrchestratorUnavailable
-from src.core.runner import request_sync
-from src.core.service import MiroirService
+from src.control.config import ConfigurationError, load_miroir, parse_miroir
+from src.control.operations import MetadataStore, OrchestratorUnavailable
+from src.control.runner import request_sync
+from src.control.service import MiroirService
 from src.kernel.errors import OperationError
 from tests.test_miroir import example
 
@@ -316,7 +316,7 @@ class PrefectAdapterTests(unittest.TestCase):
         from prefect import get_client
         from prefect.client.schemas.objects import StateType
 
-        from src.core.runner import request_models
+        from src.control.runner import request_models
         from src.pipelines.miroir import schedule_build
 
         ws = miroir()
@@ -359,7 +359,7 @@ class PrefectAdapterTests(unittest.TestCase):
         from prefect import get_client
         from prefect.client.schemas.objects import StateType
 
-        from src.core.runner import _new_operation
+        from src.control.runner import _new_operation
 
         ws = parse_miroir(json.dumps(with_screen("personal")))
         self.converge(ws)
@@ -387,7 +387,7 @@ class PrefectAdapterTests(unittest.TestCase):
         from prefect import get_client
         from prefect.states import Failed
 
-        from src.core.runner import _new_operation
+        from src.control.runner import _new_operation
 
         ws = parse_miroir(json.dumps(with_screen("personal")))
         self.converge(ws)
@@ -510,7 +510,7 @@ class PrefectAdapterTests(unittest.TestCase):
     def test_derive_runs_go_to_the_media_deployment(self):
         from prefect import get_client
 
-        from src.core.runner import _new_operation
+        from src.control.runner import _new_operation
 
         ws = parse_miroir(json.dumps(with_screen("routing")))
         self.converge(ws)

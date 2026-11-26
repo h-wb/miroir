@@ -13,7 +13,7 @@ from dlt.common.pendulum import pendulum
 from dlt.extract.exceptions import ResourceExtractionError
 from dlt.pipeline.exceptions import PipelineStepFailed
 
-from src.core.runner import failure_kind
+from src.control.runner import failure_kind
 from src.integrations.errors import IntegrationError
 from src.integrations.github import DEFINITION
 from src.integrations.github.source import github_source

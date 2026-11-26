@@ -8,11 +8,11 @@ from datetime import datetime, timedelta, timezone
 
 import sqlalchemy as sa
 
-from src.core.analysis import analysis_plan
-from src.core.config import ConfigurationError, parse_miroir, upgrade_raw
-from src.core.operations import attempts, schema_info
-from src.core.runner import execute_operation, run_connection
-from src.core.service import InlineExecutor
+from src.control.analysis import analysis_plan
+from src.control.config import ConfigurationError, parse_miroir, upgrade_raw
+from src.control.operations import attempts, schema_info
+from src.control.runner import execute_operation, run_connection
+from src.control.service import InlineExecutor
 from tests.test_miroir import example
 from tests.test_web import BEARER, WebFixture
 

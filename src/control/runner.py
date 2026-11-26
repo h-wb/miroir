@@ -21,14 +21,14 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.core.analysis import (
+from src.control.analysis import (
     AnalysisPlan,
     analyses_linking,
     analysis_plan,
     find_analysis,
 )
-from src.core.config import ResolvedAnalysis, ResolvedConnection, ResolvedMiroir
-from src.core.operations import (
+from src.control.config import ResolvedAnalysis, ResolvedConnection, ResolvedMiroir
+from src.control.operations import (
     ArtifactOrigin,
     ConnectionBusy,
     MetadataStore,
@@ -132,7 +132,7 @@ def redact(error: BaseException, secrets: list[str]) -> tuple[str, str]:
 
 def failure_kind(error: BaseException) -> str | None:
     """Classify a failure from its exception chain (dlt wraps source errors)."""
-    from src.core.secrets import SecretKeyError, SecretResolutionError
+    from src.control.secrets import SecretKeyError, SecretResolutionError
     from src.integrations.errors import IntegrationError, is_rate_limited
 
     seen: set[int] = set()
@@ -410,8 +410,8 @@ def _execute_operation(
     operation_id: str,
     backend_run_id: str | None = None,
 ) -> RunOutcome:
-    from src.core.artifacts import stored_copy_is_intact
-    from src.core.sources import open_fetch, open_import
+    from src.control.artifacts import stored_copy_is_intact
+    from src.control.sources import open_fetch, open_import
 
     store = run.store
     operation = store.get_operation(operation_id)
@@ -554,7 +554,7 @@ def collect_folder(
     A file still in the folder is not a new arrival: its artifact is neither
     copied again nor re-dated, and a copy retention removed stays removed.
     """
-    from src.core.artifacts import file_sha256, submit_artifact
+    from src.control.artifacts import file_sha256, submit_artifact
     from src.integrations.validation import InvalidArtifact
 
     folder = connection.config.folder

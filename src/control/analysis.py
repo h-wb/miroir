@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from src.core.config import ResolvedAnalysis, ResolvedMiroir
+from src.control.config import ResolvedAnalysis, ResolvedMiroir
 
 # Unlinked inputs use this placeholder and are excluded from table discovery;
 # they never fall back to a legacy source schema.

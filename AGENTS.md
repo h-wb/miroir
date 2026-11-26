@@ -12,7 +12,7 @@ This repo is public and general. Work on it with made-up data only.
 
 ## Layout
 
-- `src/`: the server. `core/` the product, `integrations/` one package per connector, `analyses/catalog.py` the analysis packages, `web/` and `cli/` the two transports, `adapters/` Prefect and S3, `pipelines/` the flow entry points. Who may import whom: [docs/architecture.md](docs/architecture.md), enforced by `tests/test_boundaries.py`; a new folder under `src/` fails it until it gets a rule.
+- `src/`: the server. `control/` the product, `integrations/` one package per connector, `analyses/catalog.py` the analysis packages, `web/` and `cli/` the two transports, `adapters/` Prefect and S3, `pipelines/` the flow entry points. Who may import whom: [docs/architecture.md](docs/architecture.md), enforced by `tests/test_boundaries.py`; a new folder under `src/` fails it until it gets a rule.
 - `collector/`: its own package, standard library plus urllib3, pydantic and the Kingfisher scanner. It never imports `src/` and nothing in `src/` imports it. Its rules are in `collector/tests/test_boundaries.py`.
 - `dbt/`: the models the analyses build. `examples/`: a synthetic configuration.
 - Pages: [docs/README.md](docs/README.md) is the index. Design decisions: [docs/miroir/decisions.md](docs/miroir/decisions.md), cited by number from code and pages.
@@ -38,7 +38,7 @@ uv run --locked mypy --strict --config-file collector/pyproject.toml collector/m
 - A change that makes a page wrong fixes the page in the same pull request.
 - A design choice is written down with the code. A change to an existing decision is an amendment under its number. A new decision gets a page of its own in `docs/decisions/`, named by its day, as the handbook's [Write a page](https://github.com/h-wb/handbook/blob/main/Resources/Write%20a%20page.md) says; `docs/miroir/decisions.md` takes no new number.
 - Persistent identities do not move: source, resource and table names, primary keys, dlt state keys, generated dataset names. Changing one is a data migration ([integrations](docs/miroir/integrations.md#compatibility-and-tests)).
-- A new metadata schema (`SCHEMA_VERSION` in `src/core/operations.py`) means server, worker and flow-run image are released together; say so in the pull request.
+- A new metadata schema (`SCHEMA_VERSION` in `src/control/operations.py`) means server, worker and flow-run image are released together; say so in the pull request.
 - Product errors raise `OperationError`, so the interface and the CLI show them; no raw HTTP error or traceback reaches a user.
 - Templates hold no inline style or script: the content security policy refuses them and `tests/test_web_static.py` fails.
 - Container commands call the absolute interpreter, `/app/.venv/bin/python -m src.cli`.

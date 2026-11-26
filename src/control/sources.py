@@ -4,7 +4,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
-from src.core.config import ResolvedConnection
+from src.control.config import ResolvedConnection
 from src.kernel.errors import OperationError
 
 

@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from src.core.config import ConfigurationError, load_miroir
+from src.control.config import ConfigurationError, load_miroir
 
 
 class MediaConfigTests(unittest.TestCase):

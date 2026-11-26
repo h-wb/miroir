@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
-from src.core.config import (
+from src.control.config import (
     ResolvedAnalysis,
     ResolvedConnection,
     ResolvedMiroir,
@@ -27,8 +27,8 @@ from src.core.config import (
     load_miroir,
     save_miroir,
 )
-from src.core.operations import ArtifactOrigin, ConnectionBusy, MetadataStore
-from src.core.secrets import SecretResolutionError, SecretStore, make_resolver
+from src.control.operations import ArtifactOrigin, ConnectionBusy, MetadataStore
+from src.control.secrets import SecretResolutionError, SecretStore, make_resolver
 from src.kernel.errors import OperationError
 from src.media import uploads
 from src.media.backfill import backfill_options
@@ -202,7 +202,7 @@ class MiroirService:
         origin: Any,
         backfill: dict[str, Any] | None = None,
     ) -> str | None:
-        from src.core.runner import request_derive
+        from src.control.runner import request_derive
 
         def submit(operation: Any) -> None:
             # Prepared only when a run is recorded, not on every confirmation.
@@ -253,7 +253,7 @@ class MiroirService:
     def analysis_summary(
         self, miroir: ResolvedMiroir, analysis: ResolvedAnalysis
     ) -> dict[str, Any]:
-        from src.core.analysis import analysis_plan
+        from src.control.analysis import analysis_plan
 
         plan = analysis_plan(analysis)
         status = self.store.analysis_status(
@@ -294,7 +294,7 @@ class MiroirService:
         return [self.analysis_summary(miroir, a) for a in miroir.analyses]
 
     def analysis(self, analysis_id: str) -> dict[str, Any]:
-        from src.core.analysis import find_analysis
+        from src.control.analysis import find_analysis
 
         miroir = self.miroir()
         analysis = find_analysis(miroir, analysis_id)
@@ -328,7 +328,7 @@ class MiroirService:
         """Add an analysis linking connections to a package's roles explicitly."""
         raw = self._raw_for_edit(expected_revision)
         if any(a.get("id") == analysis_id for a in raw["analyses"]):
-            from src.core.config import ConfigurationError
+            from src.control.config import ConfigurationError
 
             raise ConfigurationError("An analysis with this ID already exists")
         raw["analyses"].append(
@@ -372,7 +372,7 @@ class MiroirService:
         self._write_config(raw, expected_revision)
 
     def _raw_for_edit(self, expected_revision: str) -> dict[str, Any]:
-        from src.core.config import ConfigurationConflict
+        from src.control.config import ConfigurationConflict
 
         if not expected_revision:
             raise OperationError("Reload before saving")
@@ -401,7 +401,7 @@ class MiroirService:
         }
 
     def _summary(self, miroir: ResolvedMiroir, connection: ResolvedConnection) -> dict:
-        from src.core.analysis import analyses_linking
+        from src.control.analysis import analyses_linking
 
         status = self.store.connection_status(miroir.id, connection.config.id)
         last = status["last_attempt"]
@@ -521,7 +521,7 @@ class MiroirService:
         ]
 
     def request_sync(self, connection_id: str, origin: Any = "request") -> str:
-        from src.core.runner import request_sync
+        from src.control.runner import request_sync
 
         self.prepare_connection(connection_id)
         operation = request_sync(
@@ -534,7 +534,7 @@ class MiroirService:
         """Hand a recorded operation to the executor, after making connection
         `prepare` executable when given. If either fails, close it with a
         `blocked` attempt so it does not look requested forever."""
-        from src.core.runner import MAX_ERROR_LENGTH
+        from src.control.runner import MAX_ERROR_LENGTH
 
         try:
             if prepare is not None:
@@ -568,8 +568,8 @@ class MiroirService:
         `options` are the format's import options; received files take its
         defaults. `origin` is the operation origin ("webhook" for the URL).
         """
-        from src.core.artifacts import submit_artifact
-        from src.core.runner import AlreadyImported
+        from src.control.artifacts import submit_artifact
+        from src.control.runner import AlreadyImported
 
         miroir = self.miroir()
         connection = self._connection(miroir, connection_id)
@@ -623,7 +623,7 @@ class MiroirService:
     def record_collector_report(
         self, connection_id: str, report: dict[str, Any], token: str
     ) -> bool:
-        """Store a collector's report, already validated (`src.core.reports`).
+        """Store a collector's report, already validated (`src.control.reports`).
 
         The delivery token is checked again as the report is written: False
         when it no longer verifies (the connection was removed meanwhile).
@@ -686,7 +686,7 @@ class MiroirService:
         replay: bool = False,
         origin: Any = "request",
     ) -> str:
-        from src.core.runner import request_import
+        from src.control.runner import request_import
 
         self.prepare_connection(connection_id)
         operation = request_import(
@@ -701,8 +701,8 @@ class MiroirService:
         return operation.id
 
     def request_models(self, analysis_id: str, full_refresh: bool = False) -> str:
-        from src.core.analysis import find_analysis
-        from src.core.runner import request_models
+        from src.control.analysis import find_analysis
+        from src.control.runner import request_models
 
         miroir = self.miroir()
         # Rebuilds run through the first linked input's deployment (runner).
@@ -719,7 +719,7 @@ class MiroirService:
         return operation.id
 
     def configuration(self) -> dict[str, Any]:
-        from src.core.config import ConfigurationError
+        from src.control.config import ConfigurationError
 
         try:
             text = self.config_path.read_text(encoding="utf-8")
@@ -756,7 +756,7 @@ class MiroirService:
     def connection_settings(self, connection_id: str) -> dict[str, Any]:
         import json
 
-        from src.core.config import parse_miroir
+        from src.control.config import parse_miroir
 
         raw, revision = self._raw_config()
         miroir = parse_miroir(json.dumps(raw))
@@ -837,7 +837,7 @@ class MiroirService:
         """Validate the edited snapshot and save with a final atomic revision check."""
         import json
 
-        from src.core.config import ConfigurationConflict, parse_miroir
+        from src.control.config import ConfigurationConflict, parse_miroir
 
         if not expected_revision:
             raise OperationError("Reload settings before saving")
@@ -875,7 +875,7 @@ class MiroirService:
         """The file as JSON in the current shape, and the revision of its bytes."""
         import json
 
-        from src.core.config import upgrade_raw
+        from src.control.config import upgrade_raw
 
         data = self.config_path.read_bytes()
         raw = json.loads(data)
@@ -905,7 +905,11 @@ class MiroirService:
         """
         import json
 
-        from src.core.config import ConfigurationError, default_analysis, parse_miroir
+        from src.control.config import (
+            ConfigurationError,
+            default_analysis,
+            parse_miroir,
+        )
         from src.integrations.registry import INTEGRATIONS
 
         definition = INTEGRATIONS.get(integration)
@@ -980,7 +984,7 @@ class MiroirService:
 
     def check_connection(self, connection_id: str) -> dict[str, Any]:
         """Run the integration's check and record the outcome."""
-        from src.core.secrets import SecretKeyError
+        from src.control.secrets import SecretKeyError
         from src.integrations.checks import CheckFailed
         from src.integrations.errors import IntegrationError
 
@@ -1016,7 +1020,7 @@ class MiroirService:
 
         Loaded data, artifacts, and history are kept: purging them is separate.
         """
-        from src.core.analysis import analyses_linking
+        from src.control.analysis import analyses_linking
 
         miroir = self.miroir()
         self._connection(miroir, connection_id)

@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.dev import main
-from src.core.secrets import SecretBox, generate_key
+from src.control.secrets import SecretBox, generate_key
 
 
 class DevLauncherTests(unittest.TestCase):

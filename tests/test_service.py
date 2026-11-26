@@ -11,9 +11,9 @@ from unittest.mock import patch
 import requests
 from sqlalchemy.engine import make_url
 
-from src.core.artifacts import receive_file
-from src.core.config import file_revision, save_miroir
-from src.core.runner import failure_kind
+from src.control.artifacts import receive_file
+from src.control.config import file_revision, save_miroir
+from src.control.runner import failure_kind
 from src.kernel.errors import OperationError
 from tests.test_web import WebFixture
 
@@ -183,7 +183,7 @@ class SmallCoreTests(unittest.TestCase):
     def test_identical_bytes_arriving_together_register_once(self):
         import sqlalchemy as sa
 
-        from src.core.operations import MetadataStore
+        from src.control.operations import MetadataStore
 
         store = MetadataStore(f"sqlite:///{self.root / 'meta.sqlite'}")
         self.addCleanup(store.engine.dispose)
@@ -216,7 +216,7 @@ class SmallCoreTests(unittest.TestCase):
     def test_a_secret_set_concurrently_ends_as_the_later_value(self):
         import sqlalchemy as sa
 
-        from src.core.operations import MetadataStore
+        from src.control.operations import MetadataStore
 
         store = MetadataStore(f"sqlite:///{self.root / 'secrets.sqlite'}")
         self.addCleanup(store.engine.dispose)
@@ -264,7 +264,7 @@ class MetadataPasswordTests(unittest.TestCase):
             "MIROIR_METADATA__USERNAME": "u",
             "MIROIR_METADATA__PASSWORD": password,
         }
-        from src.core.config import metadata_url
+        from src.control.config import metadata_url
 
         with patch.dict(os.environ, env, clear=True):
             url = metadata_url()

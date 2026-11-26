@@ -35,10 +35,10 @@ from pillow_heif import register_heif_opener
 
 from src.cli.compose import web_app
 from src.cli.main import main
-from src.core.config import load_miroir
-from src.core.operations import ConnectionBusy, MetadataStore, operations
-from src.core.runner import IngestionFailed, execute_operation, request_derive
-from src.core.service import MiroirService
+from src.control.config import load_miroir
+from src.control.operations import ConnectionBusy, MetadataStore, operations
+from src.control.runner import IngestionFailed, execute_operation, request_derive
+from src.control.service import MiroirService
 from src.kernel.errors import OperationError
 from src.media.derive import Decoder, DecoderLost, DecoderUnavailable, _Lost, _write
 from src.media.profiles import PROFILES
@@ -104,7 +104,7 @@ def without_attachment_thumbnails():
     messages = INTEGRATIONS["apple_messages"]
     media = tuple(replace(kind, profile=None) for kind in messages.media)
     catalog = {**INTEGRATIONS, "apple_messages": replace(messages, media=media)}
-    with patch("src.core.config.INTEGRATIONS", MappingProxyType(catalog)):
+    with patch("src.control.config.INTEGRATIONS", MappingProxyType(catalog)):
         yield
 
 
@@ -356,7 +356,7 @@ class DeriveRequestTests(DeriveFixture):
         orchestrator = FakeOrchestrator(fails=True)
         self.service.orchestrator = orchestrator
         self.overdue(self.executor.submitted[1])
-        with self.assertLogs("src.core.runner", "WARNING"):
+        with self.assertLogs("src.control.runner", "WARNING"):
             self.upload({"c.jpeg": jpeg()})
         self.assertEqual(len(self.executor.submitted), 3)
 
@@ -428,7 +428,7 @@ class DeriveRequestTests(DeriveFixture):
 
     def test_a_refused_submission_keeps_the_files_and_the_answer(self):
         self.executor.refuse = True
-        with self.assertLogs("src.core.service", "WARNING"):
+        with self.assertLogs("src.control.service", "WARNING"):
             self.upload({"a.jpeg": jpeg()})
         self.assertEqual(self.pending(), ["a.jpeg"])
         refused = self.store.recent_operations("test", "screen")[0]
@@ -445,7 +445,7 @@ class DeriveRequestTests(DeriveFixture):
                 "prepare_connection",
                 side_effect=OperationError("Prefect is down"),
             ),
-            self.assertLogs("src.core.service", "WARNING"),
+            self.assertLogs("src.control.service", "WARNING"),
         ):
             self.upload({"a.jpeg": jpeg()})
         self.assertEqual(self.store.unstarted_derives("test", "screen"), [])
@@ -454,7 +454,7 @@ class DeriveRequestTests(DeriveFixture):
 
     def test_another_request_deciding_is_enough(self):
         with patch(
-            "src.core.runner.request_derive", side_effect=ConnectionBusy("busy")
+            "src.control.runner.request_derive", side_effect=ConnectionBusy("busy")
         ):
             self.upload({"a.jpeg": jpeg()})
         self.assertEqual((self.pending(), self.executor.submitted), (["a.jpeg"], []))
@@ -466,7 +466,7 @@ class DeriveRequestTests(DeriveFixture):
             patch.object(
                 self.store.media_queue, "add_pending_media", side_effect=failure
             ),
-            self.assertLogs("src.core.service", "ERROR"),
+            self.assertLogs("src.control.service", "ERROR"),
         ):
             response = self.client.post(
                 CONFIRM,
@@ -1121,7 +1121,7 @@ class DeriveBatchTests(DeriveFixture):
         def refuse(operation_id, start_at):
             raise RuntimeError("Prefect is down")
 
-        with self.assertLogs("src.core.runner", "WARNING"):
+        with self.assertLogs("src.control.runner", "WARNING"):
             self.derive(self.request(), defer=refuse)
         [waiting] = [
             o
