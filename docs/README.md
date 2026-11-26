@@ -49,7 +49,7 @@ interface edits: read them there, or with `pipelines-miroir connections`.
 | [ListenBrainz](sources/listenbrainz.md) | Every listen, from the API | [`listenbrainz`](../src/integrations/listenbrainz/) | | `listens` | `music`, `crossovers` |
 | [GitHub](sources/github.md) | Repos, commits, pull requests, issues, comments, releases, stars, events, contributions, from the API | [`github`](../src/integrations/github/) | | `repos`, `commits`, `pull_requests`, … | `github` |
 | [Bike Share](sources/bikeshare.md) | Every rental, from the mobile app's API | [`bikeshare`](../src/integrations/bikeshare/) | | `trips` | `biking`, `crossovers` |
-| [Apple Health](sources/apple-health.md) | Health Auto Export JSON files | [`apple_health`](../src/integrations/apple_health/) | | `metrics`, `workouts`, `state_of_mind`, `medications` | `health`, `crossovers` |
+| [Apple Health](sources/apple-health.md) | Health Auto Export JSON files | [`apple_health`](../src/integrations/apple_health/) | | `metrics`, `workouts`, `state_of_mind`, `medications`, `other_records`, `other_collections` | `health`, `crossovers` |
 | [Browser history](sources/browser-history.md) | Zen or Firefox history: collector batches or a Places snapshot | [`browser_history`](../src/integrations/browser_history/) | `zen_history` | `zen_*` | `browser`, `timeline` |
 | [ScreenMemory](sources/screenmemory.md) | Screen text, front app, screenshots as media | [`screenmemory`](../src/integrations/screenmemory/) | `screenmemory` | `frames`, `app_usage` | `timeline` |
 | [Apple Messages](sources/apple-messages.md) | Messages, chats, contacts, attachments as media | [`apple_messages`](../src/integrations/apple_messages/) | `apple_messages` | `messages`, `chats`, `handles`, `attachments`, … | `messages` |

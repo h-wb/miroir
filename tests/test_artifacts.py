@@ -116,6 +116,11 @@ class ArtifactTests(unittest.TestCase):
             {"data": []},
             {"data": {}},
             {"data": {"metrics": [1]}},
+            {"data": {"workouts": {"id": "w"}}},
+            # Another JSON file with a `data` object is not an export.
+            {"data": {"foo": 1}},
+            {"data": {"foo": []}},
+            {"data": {"symptoms": 1}},
         ):
             with self.subTest(content=content), self.assertRaises(InvalidArtifact):
                 self.submit(self.write("bad.json", content))
@@ -174,13 +179,14 @@ class ArtifactTests(unittest.TestCase):
         artifact, _ = self.submit(self.write("a.json", export(("2026-06-05", 1))))
         self.load(artifact)
         health = self.health.integration
-        newer = replace(health, formats=(replace(health.formats[0], version=2),))
+        version = health.formats[0].version + 1
+        newer = replace(health, formats=(replace(health.formats[0], version=version),))
         registry = {**INTEGRATIONS, "apple_health": newer}
         with patch("src.control.config.INTEGRATIONS", registry):
             self.miroir = parse_miroir(json.dumps(self.config))
         outcome = self.load(artifact)
         self.assertEqual(
-            self.store.get_operation(outcome.operation_id).parser_version, 2
+            self.store.get_operation(outcome.operation_id).parser_version, version
         )
 
     def test_crash_window_after_commit_reimports_safely(self):
@@ -292,6 +298,130 @@ class ArtifactTests(unittest.TestCase):
         )
         with self.assertRaises(AlreadyImported):
             self.load(upgraded)
+
+    def table(self, name, connection=None, columns="*"):
+        dataset = (connection or self.health).binding.dataset_name
+        with duckdb.connect(str(self.database)) as db:
+            exists = db.execute(
+                "SELECT count(*) FROM information_schema.tables"
+                " WHERE table_schema = ? AND table_name = ?",
+                [dataset, name],
+            ).fetchone()[0]
+            if not exists:
+                return None
+            cursor = db.execute(f'SELECT {columns} FROM "{dataset}"."{name}"')
+            names = [d[0] for d in cursor.description]
+            rows = [
+                {k: v for k, v in zip(names, row) if not k.startswith("_dlt")}
+                for row in cursor.fetchall()
+            ]
+        return sorted(
+            rows, key=lambda row: json.dumps(row, sort_keys=True, default=str)
+        )
+
+    def test_other_collections_load_into_the_generic_table_and_are_counted(self):
+        symptom = {"name": "Headache", "start": "2026-06-05 08:00:00 -0400"}
+        undated = {"classification": "Sinus Rhythm", "voltage": [[0, 1], [1, 2]]}
+        document = export(("2026-06-05", 1))
+        document["data"]["symptoms"] = [
+            symptom,
+            {"name": "Cough", "start": "2026-06-01 08:00:00 -0400"},
+            "not an object",
+        ]
+        document["data"]["ecg"] = [undated]
+        artifact, _ = self.submit(self.write("a.json", document))
+        self.load(artifact)
+        records = self.table(
+            "other_records", columns="collection, CAST(item AS VARCHAR) AS item, role"
+        )
+        # The cough is dated before the cutoff, so an ongoing file leaves it to
+        # the historical one; the undated reading is loaded by every role.
+        self.assertEqual(
+            [(r["collection"], json.loads(r["item"]), r["role"]) for r in records],
+            [("ecg", undated, "ongoing"), ("symptoms", symptom, "ongoing")],
+        )
+        report = self.table(
+            "other_collections",
+            columns="collection, entries, loaded, unreadable, file_sha256, role",
+        )
+        self.assertEqual(
+            [
+                (r["collection"], r["entries"], r["loaded"], r["unreadable"])
+                for r in report
+            ],
+            [("ecg", 1, 1, 0), ("symptoms", 3, 1, 1)],
+        )
+        self.assertEqual({r["file_sha256"] for r in report}, {artifact["sha256"]})
+        self.assertEqual({r["role"] for r in report}, {"ongoing"})
+
+    def test_a_replay_or_an_overlapping_file_adds_no_duplicate(self):
+        document = export(("2026-06-05", 1))
+        document["data"]["heartRateNotifications"] = [
+            {"start": "2026-06-05 09:00:00 -0400", "threshold": 120}
+        ]
+        artifact, _ = self.submit(self.write("a.json", document))
+        self.load(artifact)
+        self.load(artifact, replay=True)
+        document["data"]["heartRateNotifications"].append(
+            {"start": "2026-06-06 09:00:00 -0400", "threshold": 120}
+        )
+        overlap, _ = self.submit(self.write("b.json", document))
+        self.load(overlap)
+        self.load(overlap, replay=True)
+        self.assertEqual(len(self.table("other_records")), 2)
+        self.assertEqual(len(self.metrics()), 1)
+        report = self.table("other_collections", columns="file_sha256, loaded")
+        self.assertEqual(
+            sorted((r["file_sha256"], r["loaded"]) for r in report),
+            sorted([(artifact["sha256"], 1), (overlap["sha256"], 2)]),
+        )
+
+    def test_known_collections_load_as_before_beside_other_ones(self):
+        known = export(("2026-06-05", 1), ("2026-06-06", 2))
+        known["data"].update(
+            {
+                "workouts": [{"id": "w1", "start": "2026-06-05 07:00:00 -0400"}],
+                "stateOfMind": [{"id": "s1", "start": "2026-06-05 20:00:00 -0400"}],
+                "medications": [
+                    {"displayText": "Vitamin", "start": "2026-06-05 08:00:00 -0400"}
+                ],
+            }
+        )
+        extended = copy.deepcopy(known)
+        extended["data"]["cycleTracking"] = [{"date": "2026-06-05", "flow": "light"}]
+        plain = self.miroir.connections[1]
+        self.load(self.submit(self.write("known.json", known), connection=plain)[0])
+        self.load(self.submit(self.write("extended.json", extended))[0])
+        for name in ("metrics", "workouts", "state_of_mind", "medications"):
+            with self.subTest(table=name):
+                rows = self.table(name)
+                self.assertTrue(rows)
+                self.assertEqual(rows, self.table(name, plain))
+        self.assertIsNone(self.table("other_records", plain))
+        self.assertEqual(len(self.table("other_records")), 1)
+
+    def test_an_export_of_a_documented_other_collection_only_is_accepted(self):
+        document = {"data": {"symptoms": [{"name": "Fatigue"}]}}
+        artifact, created = self.submit(self.write("symptoms.json", document))
+        self.assertTrue(created)
+        self.load(artifact)
+        self.assertEqual(len(self.table("other_records")), 1)
+        self.assertIsNone(self.table("metrics"))
+
+    def test_an_unknown_collection_beside_a_documented_one_loads_both(self):
+        document = export(("2026-06-05", 1))
+        document["data"]["foo"] = [{"bar": 1}]
+        artifact, created = self.submit(self.write("foo.json", document))
+        self.assertTrue(created)
+        self.load(artifact)
+        self.assertEqual(len(self.metrics()), 1)
+        records = self.table(
+            "other_records", columns="collection, CAST(item AS VARCHAR) AS item"
+        )
+        self.assertEqual(
+            [(r["collection"], json.loads(r["item"])) for r in records],
+            [("foo", {"bar": 1})],
+        )
 
 
 class ArtifactCliTests(unittest.TestCase):

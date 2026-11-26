@@ -60,11 +60,23 @@ DEFINITION = IntegrationDefinition(
         ResourceDefinition("workouts", "Workouts"),
         ResourceDefinition("state_of_mind", "State of mind"),
         ResourceDefinition("medications", "Medications"),
+        ResourceDefinition(
+            "other_records",
+            "Other collections",
+            "Each object of a collection without a table of its own, as JSON",
+        ),
+        ResourceDefinition(
+            "other_collections",
+            "Other collections found",
+            "Per imported file and role, how many objects each other collection held",
+            record_kind="snapshot",
+        ),
     ),
     formats=(
         FileFormat(
             id="health_auto_export_json",
-            version=1,
+            # 2: every other collection loads into other_records.
+            version=2,
             label="Health Auto Export JSON",
             accept=".json,application/json",
             content_type="application/json",
