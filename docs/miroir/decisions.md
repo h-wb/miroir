@@ -1820,7 +1820,7 @@ disagree, the collector reports ambiguity and sends no name for that handle.
 
 ### 038 amendment — The Apple date rule is in dbt
 
-Status: accepted, 2026-11-26. Step 12 of
+Status: accepted, 2026-11-26, with pull request #70. Step 12 of
 [the package split](../decisions/2026-11-25-package-split.md) for Apple
 Messages (its *ELT* rule). Revises where the dates are turned into times: the
 connector's `*_at` columns (this decision's tables), which the messages
