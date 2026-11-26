@@ -36,6 +36,27 @@ class GitHubResourceTests(unittest.TestCase):
         self.links_by_path = {}
         self.graphql_requests = []
         self.calendar_count = 2
+        self.files_by_sha = {
+            "abc": [
+                {
+                    "filename": "src/a.py",
+                    "status": "modified",
+                    "additions": 2,
+                    "deletions": 1,
+                    "changes": 3,
+                    "patch": "@@ secret diff text @@",
+                    "sha": "blob1",
+                },
+                {
+                    "filename": "src/new.py",
+                    "previous_filename": "src/old.py",
+                    "status": "renamed",
+                    "additions": 0,
+                    "deletions": 0,
+                    "changes": 0,
+                },
+            ]
+        }
         self.pipeline = dlt.pipeline(
             pipeline_name="github",
             pipelines_dir=str(self.root / "state"),
@@ -79,7 +100,7 @@ class GitHubResourceTests(unittest.TestCase):
                 "sha": "abc",
                 "html_url": f"https://github.com{url.path}",
                 "stats": {"additions": 2, "deletions": 1},
-                "files": [{"patch": "not retained"}],
+                "files": self.files_by_sha.get(url.path.rsplit("/", 1)[1], []),
             }
         elif url.path == "/user/starred":
             body = [{"starred_at": self.date, "repo": {"id": 2}}]
@@ -186,7 +207,8 @@ class GitHubResourceTests(unittest.TestCase):
             self.states()["contributions_daily"]["incremental"]["date"]["last_value"],
             "2026-11-01",
         )
-        self.assertNotIn("commits__files", tables)
+        self.assertIn("commits__files", tables)
+        self.assertIn("external_commits__files", tables)
         self.assertEqual(sum(p == "/user" for p, q in self.calls), 1)
 
     def test_selection_fetches_dependencies_without_loading_them_and_resumes(self):
@@ -216,6 +238,44 @@ class GitHubResourceTests(unittest.TestCase):
             pendulum.parse(since),
             pendulum.parse(committed).subtract(days=3).replace(microsecond=0),
         )
+        with self.pipeline.sql_client() as sql:
+            self.assertEqual(sql.execute_sql("select count(*) from commits")[0][0], 1)
+
+    def file_rows(self, table="commits__files"):
+        with self.pipeline.sql_client() as sql:
+            return sql.execute_sql(
+                f"select filename, status, additions, deletions, changes,"
+                f" previous_filename from {table} order by filename"
+            )
+
+    def test_commit_keeps_a_summary_of_each_changed_file_without_patches(self):
+        self.load("commits", "external_commits")
+        self.assertEqual(
+            self.file_rows(),
+            [
+                ("src/a.py", "modified", 2, 1, 3, None),
+                ("src/new.py", "renamed", 0, 0, 0, "src/old.py"),
+            ],
+        )
+        self.assertEqual(len(self.file_rows("external_commits__files")), 2)
+        for table in ("commits__files", "external_commits__files"):
+            columns = self.pipeline.default_schema.tables[table]["columns"]
+            self.assertNotIn("patch", columns)
+            self.assertNotIn("sha", columns)
+        with self.pipeline.sql_client() as sql:
+            self.assertEqual(sql.execute_sql("select count(*) from commits")[0][0], 1)
+            self.assertNotIn(
+                "files",
+                [c[0] for c in sql.execute_sql("describe commits")],
+            )
+
+    def test_files_are_replaced_on_a_refetch_and_a_commit_with_none_loads(self):
+        self.load("commits")
+        self.files_by_sha["abc"] = self.files_by_sha["abc"][:1]
+        self.load("commits")
+        self.assertEqual(len(self.file_rows()), 1)
+        self.files_by_sha["abc"] = []
+        self.load("commits")
         with self.pipeline.sql_client() as sql:
             self.assertEqual(sql.execute_sql("select count(*) from commits")[0][0], 1)
 
