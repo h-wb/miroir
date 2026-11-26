@@ -270,7 +270,7 @@ transformation-only retries, and native Apple Health XML or other formats.
 
 ### 008 amendment — Health loads every collection of the export
 
-Status: accepted, 2026-11-26. Step 12 of
+Status: accepted, 2026-11-26, with pull request #71. Step 12 of
 [the package split](../decisions/2026-11-25-package-split.md) (*ELT*), for Apple
 Health.
 
