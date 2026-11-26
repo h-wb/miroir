@@ -499,8 +499,13 @@ class ConversationPageTests(ConversationsFixture):
         )
         self.assertIn('<a href="/timeline/2026-01-09" class="heat heat-1"', day)
         self.assertEqual(counts["2026-01-09"], 6)
+        # The lanes are the page's data; the thread's plugin links each mark.
+        self.assertIn(
+            'data-lane="messages" data-plugin="thread" data-colour="lane"', day
+        )
         script = (STATIC_DIR / "timeline.js").read_text()
-        self.assertIn('source: "messages"', script)
+        self.assertIn("source: lane.source", script)
+        self.assertNotIn('"messages"', script)
         self.assertIn("threadUrl(event.group, payload.guid)", script)
 
     def test_without_messages_the_pages_are_as_before(self):

@@ -24,7 +24,6 @@ from fastapi.responses import HTMLResponse, Response
 
 from src.kernel.errors import OperationError
 from src.viewer.reader import (
-    ATTACHMENTS,
     MAX_GUID,
     NO_ANALYSIS,
     NO_MESSAGES,
@@ -76,11 +75,14 @@ def thread_url(conversation_id: str, around: str | None = None) -> str:
     return url + (f"?{urlencode({'around': around})}" if around else "")
 
 
-def attachment_url(connection: str | None, key: str, size: int | None) -> str:
-    """An attachment's file through the media route: a thumbnail with `size`,
-    else the redirect to storage (so a video streams from there)."""
+def attachment_url(
+    connection: str | None, kind: str, key: str, size: int | None
+) -> str:
+    """An attachment's file through the media route, from its row's connection
+    and kind: a thumbnail with `size`, else the redirect to storage (so a video
+    streams from there)."""
     url = (
-        f"/media/{quote(connection or '', safe='')}/{ATTACHMENTS}/"
+        f"/media/{quote(connection or '', safe='')}/{quote(kind, safe='')}/"
         f"{quote(key, safe='/')}"
     )
     return url + (f"?size={size}" if size else "")
@@ -164,15 +166,15 @@ def _attachment(item: dict[str, Any]) -> dict[str, Any]:
     }
     if media is None:
         return {**view, "state": FILE_MISSING}
-    key = media["key"]
+    key, kind = media["key"], media["kind"]
     if media["state"] == "thumbnails":
         return {
             **view,
-            "image": attachment_url(media["connection"], key, 360),
-            "open": attachment_url(media["connection"], key, 1280),
+            "image": attachment_url(media["connection"], kind, key, 360),
+            "open": attachment_url(media["connection"], kind, key, 1280),
         }
     if media["state"] == "stored":
-        return {**view, "open": attachment_url(media["connection"], key, None)}
+        return {**view, "open": attachment_url(media["connection"], kind, key, None)}
     return {**view, "state": FILE_UNKNOWN}
 
 
@@ -328,7 +330,7 @@ def conversation_pages(settings: ViewerSettings, page: Page) -> APIRouter:
         source = timeline_source(settings.configuration())
         if source is None:
             return unavailable(request, NO_ANALYSIS, 503)
-        if not source.messages:
+        if source.thread is None:
             return unavailable(request, NO_MESSAGES, 503)
         try:
             return render(TimelineReader(database, source))
@@ -440,6 +442,10 @@ def conversation_pages(settings: ViewerSettings, page: Page) -> APIRouter:
                 "at_day": at.date().isoformat()
                 if isinstance(at, datetime)
                 else (at.isoformat() if at else ""),
+                # The thread's kind of search, within this conversation.
+                "search_kind": reader.source.thread.source
+                if reader.source.thread
+                else "",
             }
             return _no_store(page(request, "conversation.html", **context), 200)
 

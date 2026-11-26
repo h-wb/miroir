@@ -24,7 +24,7 @@ towards its parts, one step at a time, and this page says where it is now.
 |---|---|---|
 | `src/kernel/` | The shared vocabulary: `models.py` (`StrictModel`, `Identifier`, `DatabaseIdentifier`, `SecretKey`) and `errors.py` (`OperationError`, the product error the interface and the CLI show, and its bases `Unavailable` and `Timeout`) | Import anything but the standard library and pydantic |
 | `src/integrations/` (connectors) | Know one source: what it can read (a fetch, file formats) and how to turn it into tables | Know how a file arrived, when anything runs, or where it is stored |
-| `src/analyses/` | Catalog of analysis packages (dbt models and dashboards) and the inputs they need; what the viewer shows of them, as data (`views.py`: `Withhold`, where rows hide their files) | Load data |
+| `src/analyses/` | Catalog of analysis packages (dbt models and dashboards) and the inputs they need; what the viewer shows of them, as data (`views.py`: `Withhold`, where rows hide their files; `Lane`, each source of the timeline's `events`, with the plugin names the viewer implements; the tables' contract version) | Load data |
 | `src/media/` | The files rows point at: the object store and its S3 client, names, upload and view links, the `media` section, media kinds and profiles, the derive queue's tables and repository, the derive run and its decoder | Have routes, or know about HTTP, the scheduler, the viewer or the connector registry |
 | `src/control/` | Configuration, receiving and storing files, opening a connection's inputs, running and recording loads, secrets | Know about HTTP, the command line or the scheduler |
 | `src/viewer/` | Reading the warehouse and showing it (decision 040): the reader and its read-only sessions, the timeline's API, Day view, search and conversation pages, the `/media` view route and its withheld check, their templates and static files, and `ViewerSettings`, what it reads of the installation | Import the control plane, web, the connectors, dlt, prefect, Pillow or boto3, or read the configuration file |
@@ -66,10 +66,11 @@ The viewer (package split, step 6) is the server's only access to the
 warehouse, read-only (decision 040). It reads nothing of the configuration: it
 is handed a `ViewerSettings` (`src/viewer/settings.py`), the reader database
 opened from `MIROIR_TIMELINE_DATABASE*` and a function that gives the
-configuration as the viewer reads it when it answers: the timeline analyses
-with their schema (named as the build names it, by `analysis_plan`), time zone,
-linked inputs and whether the build grants the reader role, each connection's
-media kinds, the `media` section, and the analyses whose package declares a
+configuration as the viewer reads it when it answers: the analyses of a package
+that declares lanes (the timeline's) with their schema (named as the build names
+it, by `analysis_plan`), time zone, linked inputs, lanes and whether the build
+grants the reader role (the analysis's own `reader_role` parameter, for any
+package that declares views), each connection's media kinds, the `media` section, and the analyses whose package declares a
 `Withhold` (`src/analyses/views.py`); and the media object store `serve` built.
 `serve` and `view` build it (`src/cli/main.py`, through `src/cli/view.py`);
 `web_app` builds the same when given only the reader database. The `/media` view route is
@@ -82,6 +83,15 @@ the admin part's, its pages extend `base.html` by name, and its static files are
 served under a prefix of their own, `/static/viewer/` (step 10), so a gateway
 can route them. A test imports every viewer module in a fresh interpreter
 and checks that none of dlt, prefect, Pillow or boto3 loaded.
+
+The viewer names no source and no media kind (step 11): the Day view, its
+totals, the calendar, search and the API's sources come from the lanes and
+`events`, and every link to a file from its row's connection and kind. Plugins,
+the scrubber's frames and the thread's conversations, are its own code, chosen
+by the plugin name a lane declares. It reads the tables' version from the
+package's `contract` relation and refuses a major it does not know. In dbt,
+media's `media_ref` (`dbt/macros/media.sql`) is the only join on
+`media_objects`, and `events` takes its sources from the lanes the build passes.
 
 The web shell (`src/web/shell/`, package split, step 8) is the one HTTP
 surface; neither the admin part nor the viewer imports the other. A part is

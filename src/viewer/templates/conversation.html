@@ -19,7 +19,7 @@
         <summary>Search or go to a day</summary>
         {# POST: search words are never in an address (decision 040). #}
         <form class="thread-search" method="post" action="/timeline/search" role="search">
-          <input type="hidden" name="kind" value="messages">
+          <input type="hidden" name="kind" value="{{ search_kind }}">
           <input type="hidden" name="conversation" value="{{ conversation_id }}">
           <label>Search this conversation <input type="search" name="q" maxlength="200" required></label>
           <button>Search</button>

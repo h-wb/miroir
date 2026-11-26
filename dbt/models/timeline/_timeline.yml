@@ -21,9 +21,18 @@ models:
     description: >
       Browser events: one row per page visit. Internal: keeps visits that are not
       navigations as deleted rows for events.
+  - name: timeline_messages
+    description: >
+      Message events, a view over messages with the columns every source's
+      model gives events. Internal.
+  - name: contract
+    description: >
+      One row: version (the tables' version as the viewer reads them,
+      major.minor) and lanes (the lanes the build declared, as JSON).
   - name: events
     description: >
-      Every source's events with the same columns: source, connection, event_id,
+      Every lane's events (one model timeline_<source> per lane the build
+      declares) with the same columns: source, connection, event_id,
       started_at, ended_at, kind, title, body, media_kind, media_key,
       media_status, thumbnail_w360, thumbnail_w1280 (as on screen_frames; for a
       screen session, its first frame's), group_key, payload, and search (title

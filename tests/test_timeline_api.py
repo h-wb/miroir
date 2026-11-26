@@ -23,6 +23,7 @@ import psycopg2
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
 
+from src.analyses.views import LANES
 from src.cli.compose import web_app
 from src.control.analysis import analysis_plan
 from src.control.config import parse_miroir
@@ -235,7 +236,8 @@ class TimelineQueryTests(TimelineApiFixture):
 
     def test_tables_not_built_yet_are_a_clear_error(self):
         missing = TimelineReader(
-            self.database, TimelineSource("other", "miroir_not_built", "UTC")
+            self.database,
+            TimelineSource("other", "miroir_not_built", "UTC", lanes=LANES["timeline"]),
         )
         with self.assertRaisesRegex(TimelineUnavailable, NOT_BUILT):
             missing.screen_day(datetime(2026, 11, 20).date())
@@ -468,7 +470,7 @@ class TimelineQueryTests(TimelineApiFixture):
                 self.reader.search_screen(words, None, None, None, 20, None)
 
     def test_browser_search_finds_titles_newest_first(self):
-        found = self.reader.search_browser("invoice", None, None, 50, None)
+        found = self.reader.search_events("browser", "invoice", None, None, 50, None)
         self.assertEqual(
             [v["event_id"] for v in found["visits"]],
             [f"browser:{n}" for n in (5, 4, 3, 2, 1, 7)],
@@ -477,7 +479,9 @@ class TimelineQueryTests(TimelineApiFixture):
         self.assertEqual(found["visits"][0]["site"], "billing.example.com")
         pages, before = [], None
         while True:
-            page = self.reader.search_browser("invoice", None, None, 4, before)
+            page = self.reader.search_events(
+                "browser", "invoice", None, None, 4, before
+            )
             pages += [v["event_id"] for v in page["visits"]]
             if page["next"] is None:
                 break
@@ -485,7 +489,7 @@ class TimelineQueryTests(TimelineApiFixture):
             before = (datetime.fromisoformat(stamp), event_id)
         self.assertEqual(pages, [v["event_id"] for v in found["visits"]])
         day = datetime(2026, 11, 19).date()
-        evening = self.reader.search_browser("invoice", day, day, 50, None)
+        evening = self.reader.search_events("browser", "invoice", day, day, 50, None)
         self.assertEqual([v["event_id"] for v in evening["visits"]], ["browser:7"])
 
     def test_snippets_split_marks_and_cursors_refuse_forgeries(self):
@@ -808,7 +812,7 @@ class TimelineQueryTests(TimelineApiFixture):
         ):
             for search in (
                 lambda w: self.reader.search_screen(w, None, None, None, 20, None),
-                lambda w: self.reader.search_browser(w, None, None, 20, None),
+                lambda w: self.reader.search_events("browser", w, None, None, 20, None),
             ):
                 with (
                     self.subTest(words=words),
@@ -954,7 +958,12 @@ class TimelineDayBoundTests(TimelineBuildFixture):
         def reader(index):
             analysis = miroir.analyses[index]
             schema = analysis_plan(analysis).relations[0].split(".")[0]
-            source = TimelineSource(analysis.id, schema, analysis.config.timezone)
+            source = TimelineSource(
+                analysis.id,
+                schema,
+                analysis.config.timezone,
+                lanes=LANES["timeline"],
+            )
             return TimelineReader(database, source)
 
         def where(reader, ts):
@@ -1274,6 +1283,7 @@ class TimelinePageTests(TimelineApiFixture):
         shell.mount(Part(templates=TEMPLATES_DIR))
         rendered = shell.templates.get_template("_timeline_results.html").render(
             kind="screen",
+            plugin="scrubber",
             labels=MEDIA_LABELS,
             more=None,
             results=[

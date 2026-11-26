@@ -1,6 +1,10 @@
 """The timeline's pages (decision 040, phase 1c): the Day view and search. The
-conversation pages are in `conversations.py`; the Day view's Messages lane and
-the search's Messages kind are here, where those pages live (phase 2c).
+conversation pages are in `conversations.py`.
+
+The lanes are the analysis's (`src.analyses.views`, package split step 11):
+the Day view draws one per lane shown, with its day totals and the events
+around a moment, and search has one kind per lane. A lane's plugin, named by
+it, adds what is its own: the scrubber's frames, the thread's conversations.
 
 Rendered on the server from the same reader the JSON API uses; the Day view's
 scrubber and lanes are filled in the browser by `/static/viewer/timeline.js`
@@ -21,20 +25,20 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 from starlette.formparsers import MultiPartException
 
+from src.analyses.views import SCRUBBER, THREAD, Lane
 from src.kernel.errors import OperationError
 from src.viewer import reader as timeline
 from src.viewer.conversations import thread_url
 from src.viewer.reader import (
-    FRAMES_KIND,
     MAX_QUERY,
     MEDIA_NO_THUMBNAILS,
     MEDIA_THUMBNAILS,
     MEDIA_UNKNOWN,
     MEDIA_WITHHELD,
-    MESSAGES,
     NO_ANALYSIS,
     NOT_CONFIGURED,
     TimelineReader,
+    TimelineSource,
     TimelineTimeout,
     TimelineUnavailable,
     timeline_source,
@@ -43,12 +47,11 @@ from src.viewer.reader import (
 from src.viewer.settings import ViewerSettings
 from src.viewer.timeline import (
     NO_STORE,
-    PAGE_KINDS,
-    SEARCH_KINDS,
     USE_POST,
     _day,
     _plain,
     search_fields,
+    search_kinds,
 )
 
 Page = Callable[..., HTMLResponse]
@@ -70,9 +73,11 @@ FORM_TOO_LARGE = "The search form was too large; search again."
 ECHO_LIMIT = 255
 
 
-def media_url(connection: str | None, key: str, size: int | str) -> str:
+def media_url(connection: str | None, kind: str, key: str, size: int | str) -> str:
+    """A file's address in the `/media` view route, from its row's connection
+    and kind."""
     return (
-        f"/media/{quote(connection or '', safe='')}/{FRAMES_KIND}/"
+        f"/media/{quote(connection or '', safe='')}/{quote(kind, safe='')}/"
         f"{quote(key, safe='/')}?size={size}"
     )
 
@@ -90,15 +95,55 @@ def _level(count: int) -> int:
     return min(4, len(str(count))) if count > 0 else 0
 
 
+def _count(counts: dict[str, int] | None) -> int:
+    """A source's count on a day: its frames where it has them (the scrubber's),
+    else its events."""
+    counts = counts or {}
+    return int(counts.get("frames", counts.get("events", 0)))
+
+
 def _activity(row: dict[str, Any]) -> int:
-    """Frames of the screen, visits of the browser, messages where linked."""
-    screen, browser = row.get("screen") or {}, row.get("browser") or {}
-    messages = row.get(MESSAGES) or {}
-    return (
-        int(screen.get("frames", 0))
-        + int(browser.get("events", 0))
-        + int(messages.get("events", 0))
-    )
+    """Every lane's count on a day, summed."""
+    return sum(_count(counts) for name, counts in row.items() if name != "day")
+
+
+def _capital(text: str) -> str:
+    return text[:1].upper() + text[1:]
+
+
+def _lanes(source: TimelineSource, totals: dict[str, Any]) -> list[dict[str, Any]]:
+    """The Day view's lanes, as data the page renders and its script reads."""
+    lanes = []
+    for lane in source.shown:
+        count = _count(totals.get(lane.source))
+        lanes.append(
+            {
+                "source": lane.source,
+                "label": lane.label,
+                "plugin": lane.plugin or "",
+                "colour": lane.colour,
+                "count": count,
+                "unit": lane.units[0] if count == 1 else lane.units[1],
+                "near": f"{_capital(lane.units[1])} around this time",
+            }
+        )
+    return lanes
+
+
+def _kinds(source: TimelineSource) -> list[dict[str, str]]:
+    """The search form's kinds, one per lane shown."""
+    return [
+        {"value": lane.source, "label": _kind_label(lane), "search_in": lane.search_in}
+        for lane in (source.lane(kind) for kind in search_kinds(source))
+        if lane is not None
+    ]
+
+
+def _kind_label(lane: Lane) -> str:
+    # The scrubber searches its frames' text; another lane its events.
+    if lane.plugin == SCRUBBER:
+        return f"{lane.label} text"
+    return _capital(lane.units[1])
 
 
 def _month(reader: TimelineReader, day: date) -> list[list[dict[str, Any]]]:
@@ -236,10 +281,10 @@ def timeline_page_routes(settings: ViewerSettings, page: Page) -> APIRouter:
                     status_code=303,
                     headers={"Cache-Control": NO_STORE},
                 )
-            # Messages count only where linked: the sources are the analysis's.
+            # A lane counts where it is shown: the sources are the analysis's.
             counts = reader.days(chosen, chosen, reader.source.sources)["days"]
             totals = counts[0] if counts else {}
-            linked = bool(reader.source.messages)
+            lanes = _lanes(reader.source, totals)
             context = {
                 "source": reader.source.describe(),
                 "day": chosen.isoformat(),
@@ -254,15 +299,15 @@ def timeline_page_routes(settings: ViewerSettings, page: Page) -> APIRouter:
                 "next_month": (chosen.replace(day=28) + timedelta(days=4))
                 .replace(day=1)
                 .isoformat(),
-                "frames": (totals.get("screen") or {}).get("frames", 0),
-                "visits": (totals.get("browser") or {}).get("events", 0),
+                "lanes": lanes,
+                "recorded": any(lane["count"] for lane in lanes),
+                # Each lane but the scrubber lists its events around the frame.
+                "near": [lane for lane in lanes if lane["plugin"] != SCRUBBER],
+                "kinds": _kinds(reader.source),
                 "frame": _frame_view(frame) if frame else None,
                 "missing_frame": bool(key) and frame is None,
                 "labels": MEDIA_LABELS,
             }
-            if linked:
-                context["messages_linked"] = True
-                context["messages"] = (totals.get(MESSAGES) or {}).get("events", 0)
             return _no_store(page(request, "timeline_day.html", **context), 200)
 
         return guarded(request, render)
@@ -282,11 +327,13 @@ def _frame_view(frame: dict[str, Any]) -> dict[str, Any]:
         **frame,
         "clock": _clock(frame["captured_at"]),
         "code": code,
-        "image": media_url(media["connection"], frame["key"], 1280)
+        "image": media_url(media["connection"], media["kind"], frame["key"], 1280)
         if code == MEDIA_THUMBNAILS
         else None,
         # A stored file, with or without thumbnails, may be opened as it is.
-        "original": media_url(media["connection"], frame["key"], "original")
+        "original": media_url(
+            media["connection"], media["kind"], frame["key"], "original"
+        )
         if code in (MEDIA_THUMBNAILS, MEDIA_NO_THUMBNAILS)
         else None,
     }
@@ -300,14 +347,16 @@ def _search(
     refused: str | None = None,
 ) -> Response:
     words = fields.get("q", "")
-    kind = fields.get("kind", "screen")
-    linked = bool(reader.source.messages)
-    kinds = SEARCH_KINDS if linked else PAGE_KINDS
-    if kind not in kinds:
-        kind = "screen"
-    # The conversation filter is for messages; another kind leaves it.
+    kinds = _kinds(reader.source)
+    values = [option["value"] for option in kinds]
+    kind = fields.get("kind", values[0] if values else "")
+    if kind not in values:
+        kind = values[0] if values else ""
+    lane = reader.source.lane(kind)
+    plugin = lane.plugin if lane else None
+    # The conversation filter is for the thread's kind; another kind leaves it.
     conversation_id = fields.get("conversation", "")
-    if kind != MESSAGES or not linked:
+    if plugin != THREAD:
         fields = {k: v for k, v in fields.items() if k != "conversation"}
         conversation_id = ""
     context: dict[str, Any] = {
@@ -316,6 +365,9 @@ def _search(
         # search could have taken: an oversized value is refused, not echoed.
         "q": words if len(words) <= MAX_QUERY else "",
         "kind": kind,
+        "kinds": kinds,
+        "plugin": plugin or "",
+        "searched": lane.search_in if lane else "",
         "app": _echo(fields.get("app", "")),
         "from_day": _echo(fields.get("from", "")),
         "to_day": _echo(fields.get("to", "")),
@@ -324,35 +376,32 @@ def _search(
         "refused": refused,
         "more": None,
     }
-    if linked:
-        context["messages_linked"] = True
-        context["conversation"] = None
-        if valid_conversation_id(conversation_id):
-            found_conversation = reader.conversation(conversation_id)
-            context["conversation"] = {
-                "id": conversation_id,
-                "name": found_conversation["display_name"]
-                if found_conversation
-                else "this conversation",
-            }
+    context["conversation"] = None
+    if reader.source.thread is not None and valid_conversation_id(conversation_id):
+        found_conversation = reader.conversation(conversation_id)
+        context["conversation"] = {
+            "id": conversation_id,
+            "name": found_conversation["display_name"]
+            if found_conversation
+            else "this conversation",
+        }
     fragment = request.headers.get("hx-request") == "true"
     status = 400 if refused else 200
     if words.strip() and not refused:
         try:
-            found = search_fields(
-                lambda: reader, {**fields, "limit": str(SEARCH_PAGE)}, kinds
-            )
+            found = search_fields(lambda: reader, {**fields, "limit": str(SEARCH_PAGE)})
         except (TimelineUnavailable, TimelineTimeout):
             raise  # the page's own error, from `guarded`
         except OperationError as error:
             context["refused"] = str(error)
             status = 400
         else:
-            if kind == "screen":
+            if plugin == SCRUBBER:
                 context["results"] = [
-                    _moment(m, found["apps"]) for m in found["moments"]
+                    _moment(m, found["apps"], found["media_kind"])
+                    for m in found["moments"]
                 ]
-            elif kind == MESSAGES:
+            elif plugin == THREAD:
                 context["results"] = [_message(m) for m in found["messages"]]
             else:
                 context["results"] = [_visit(v) for v in found["visits"]]
@@ -370,7 +419,9 @@ def _echo(value: str) -> str:
     return value if len(value) <= ECHO_LIMIT else ""
 
 
-def _moment(moment: dict[str, Any], apps: list[dict[str, str]]) -> dict[str, Any]:
+def _moment(
+    moment: dict[str, Any], apps: list[dict[str, str]], kind: str
+) -> dict[str, Any]:
     app = apps[moment["app"]] if moment["app"] is not None else None
     code = moment["media"]
     return {
@@ -378,7 +429,7 @@ def _moment(moment: dict[str, Any], apps: list[dict[str, str]]) -> dict[str, Any
         "clock": _clock(moment["at"]),
         "until_clock": _clock(moment["until"]),
         "app": app,
-        "thumbnail": media_url(moment["connection"], moment["key"], 360)
+        "thumbnail": media_url(moment["connection"], kind, moment["key"], 360)
         if code == MEDIA_THUMBNAILS
         else None,
         "code": code,

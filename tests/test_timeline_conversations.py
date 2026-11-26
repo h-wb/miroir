@@ -16,6 +16,7 @@ from unittest.mock import patch
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
 
+from src.analyses.views import LANES
 from src.cli.compose import web_app
 from src.control.analysis import analysis_plan
 from src.control.config import parse_miroir
@@ -263,9 +264,13 @@ class ConversationQueryTests(ConversationsFixture):
 
     def test_messages_are_a_source_only_where_linked(self):
         self.assertEqual(self.source.sources, ("screen", "browser", "messages"))
-        self.assertEqual(self.source.messages, "m")
-        unlinked = TimelineSource("other", self.source.schema, ZONE)
+        self.assertEqual(self.source.thread, LANES["timeline"][2])
+        self.assertEqual(self.source.default_sources, ("screen", "browser"))
+        unlinked = TimelineSource(
+            "other", self.source.schema, ZONE, lanes=LANES["timeline"]
+        )
         self.assertEqual(unlinked.sources, ("screen", "browser"))
+        self.assertIsNone(unlinked.thread)
         with self.assertRaisesRegex(TimelineUnavailable, NO_MESSAGES):
             TimelineReader(self.database, unlinked).conversations(10, None)
         with self.assertRaisesRegex(OperationError, "Sources are screen, browser"):
@@ -878,7 +883,15 @@ class ConversationRouteTests(ConversationsFixture):
                     self.call(unconfigured, route, headers=BEARER).status_code, 503
                 )
         missing = TimelineReader(
-            self.database, TimelineSource("other", "miroir_not_built", ZONE, (), "m")
+            self.database,
+            TimelineSource(
+                "other",
+                "miroir_not_built",
+                ZONE,
+                (),
+                {"messages": "m"},
+                LANES["timeline"],
+            ),
         )
         for call in (
             lambda: missing.conversations(10, None),

@@ -1,9 +1,12 @@
 // The timeline's pages (decision 040): app colours on every page, and on the
-// Day view the lanes, the scrubber and the frame shown; where the analysis
-// links messages, their lane and the messages around the frame (phase 2c). Data from the API is
-// only ever set as text (textContent) or as a validated colour; nothing is
-// parsed as markup. No storage: nothing is kept outside the page and the
-// browser's HTTP cache, which logging out clears.
+// Day view the lanes, the scrubber and the frame shown. The lanes are the
+// page's data (one canvas per lane, with its source, plugin and colouring;
+// package split, step 11): each draws its events from the API and lists those
+// around the frame. Plugins, named by a lane, add their own: the scrubber's
+// frames and the thread's links to conversations. Data from the API is only
+// ever set as text (textContent) or as a validated colour; nothing is parsed
+// as markup. No storage: nothing is kept outside the page and the browser's
+// HTTP cache, which logging out clears.
 
 import {
   LatestOnly,
@@ -14,6 +17,7 @@ import {
   clock,
   frameAt,
   frameUrl,
+  groupColour,
   imageFor,
   keyStep,
   mediaUrl,
@@ -26,8 +30,29 @@ import { messageLine, threadUrl } from "./conversations-core.js";
 
 const REST_MS = 250; // after this long without moving, the scrubber rests
 const NEAR_SECONDS = 15 * 60;
-const VISIT_PAGES = 4; // at most 2,000 visits a day are drawn
-const MESSAGE_PAGES = 4; // and as many messages
+const LANE_PAGES = 4; // at most 2,000 events a day are drawn per lane
+const SCRUBBER = "scrubber";
+const THREAD = "thread";
+
+// What a lane's plugin makes of an event, for its marks and the list around
+// the frame; a lane without one shows its title, linked when its body is a
+// web address, and its group.
+const ITEMS = {
+  [THREAD]: (event, t) => {
+    const payload = event.payload || {};
+    return {
+      t,
+      group: event.group,
+      name: payload.display_name || "A conversation",
+      line: messageLine(event.title, payload),
+      open: threadUrl(event.group, payload.guid),
+    };
+  },
+};
+
+function eventItem(event, t) {
+  return { t, group: event.group, title: event.title, url: event.body, site: event.group };
+}
 
 // Through the CSSOM, which the policy allows (it refuses style attributes).
 function paint(element, value) {
@@ -68,16 +93,18 @@ class DayView {
     this.state = document.getElementById("frame-state");
     this.text = document.getElementById("frame-text");
     this.original = document.getElementById("frame-original");
-    this.screenLane = document.getElementById("lane-screen");
-    this.browserLane = document.getElementById("lane-browser");
-    this.near = document.getElementById("visits-near");
-    // Only where the analysis links messages.
-    this.messageLane = document.getElementById("lane-messages");
+    // One per lane shown, in the page's order.
+    this.lanes = [...root.querySelectorAll("canvas[data-lane]")].map((canvas) => ({
+      source: canvas.dataset.lane,
+      plugin: canvas.dataset.plugin,
+      colour: canvas.dataset.colour,
+      canvas,
+      near: document.getElementById(`${canvas.dataset.lane}-near`),
+      items: [],
+    }));
+    this.screenLane = this.lanes.find((lane) => lane.plugin === SCRUBBER);
     this.messageMarks = document.getElementById("message-marks");
-    this.messagesNear = document.getElementById("messages-near");
     this.current = -1;
-    this.visits = [];
-    this.messages = [];
     this.restTimer = 0;
     this.preloaded = new Set();
     // At most ten small images a second while dragging.
@@ -101,7 +128,7 @@ class DayView {
     this.#legend();
     this.#wire();
     this.#drawLanes();
-    new ResizeObserver(() => this.#drawLanes()).observe(this.screenLane.parentElement);
+    new ResizeObserver(() => this.#drawLanes()).observe(this.lanes[0].canvas.parentElement);
     if (this.times.length === 0) {
       this.say("No screen frames on this day.");
       this.#showNothing();
@@ -113,8 +140,7 @@ class DayView {
       this.say(this.index.truncated ? "Only the first frames of this day are shown." : "");
       this.show(found >= 0 ? found : 0, true);
     }
-    this.#loadVisits();
-    if (this.messageLane) this.#loadMessages();
+    for (const lane of this.lanes) if (lane.plugin !== SCRUBBER) this.#loadLane(lane);
   }
 
   say(message) {
@@ -281,26 +307,24 @@ class DayView {
 
   #drawLanes() {
     if (!this.index) return;
-    const screen = this.#canvas(this.screenLane);
-    for (const run of appRuns(this.times, this.index.frames.app)) {
-      const app = run.app === null ? null : this.apps[run.app];
-      screen.context.fillStyle = app ? safeColour(app.colour) : "#9e9e9e";
-      const x = xForTime(run.from, this.length, screen.width);
-      const w = Math.max(1, xForTime(run.to, this.length, screen.width) - x);
-      screen.context.fillRect(x, 0, w, screen.height);
+    if (this.screenLane) {
+      const screen = this.#canvas(this.screenLane.canvas);
+      for (const run of appRuns(this.times, this.index.frames.app)) {
+        const app = run.app === null ? null : this.apps[run.app];
+        screen.context.fillStyle = app ? safeColour(app.colour) : "#9e9e9e";
+        const x = xForTime(run.from, this.length, screen.width);
+        const w = Math.max(1, xForTime(run.to, this.length, screen.width) - x);
+        screen.context.fillRect(x, 0, w, screen.height);
+      }
     }
-    const browser = this.#canvas(this.browserLane);
-    browser.context.fillStyle = getComputedStyle(this.browserLane).color;
-    for (const visit of this.visits) {
-      const x = xForTime(visit.t, this.length, browser.width);
-      browser.context.fillRect(Math.floor(x), 0, 2, browser.height);
-    }
-    if (this.messageLane) {
-      const lane = this.#canvas(this.messageLane);
-      lane.context.fillStyle = getComputedStyle(this.messageLane).color;
-      for (const message of this.messages) {
-        const x = xForTime(message.t, this.length, lane.width);
-        lane.context.fillRect(Math.floor(x), 0, 2, lane.height);
+    for (const lane of this.lanes) {
+      if (lane.plugin === SCRUBBER) continue;
+      const drawn = this.#canvas(lane.canvas);
+      const own = getComputedStyle(lane.canvas).color;
+      for (const item of lane.items) {
+        drawn.context.fillStyle = lane.colour === "group" ? groupColour(item.group) : own;
+        const x = xForTime(item.t, this.length, drawn.width);
+        drawn.context.fillRect(Math.floor(x), 0, 2, drawn.height);
       }
     }
     if (this.current >= 0) this.#cursor(this.times[this.current]);
@@ -313,26 +337,22 @@ class DayView {
     }
   }
 
-  async #loadVisits() {
+  async #loadLane(lane) {
     const start = Date.parse(this.index.start);
+    const item = ITEMS[lane.plugin] || eventItem;
     let after = null;
     try {
-      for (let page = 0; page < VISIT_PAGES; page++) {
+      for (let page = 0; page < LANE_PAGES; page++) {
         const query = new URLSearchParams({
           from: this.day,
           to: this.day,
-          source: "browser",
+          source: lane.source,
           limit: "500",
         });
         if (after) query.set("after", after);
         const found = await getJson(`/api/timeline/events?${query}`);
         for (const event of found.events) {
-          this.visits.push({
-            t: (Date.parse(event.started_at) - start) / 1000,
-            title: event.title,
-            url: event.body,
-            site: event.group,
-          });
+          lane.items.push(item(event, (Date.parse(event.started_at) - start) / 1000));
         }
         after = found.next;
         if (!after) break;
@@ -340,51 +360,19 @@ class DayView {
     } catch (error) {
       this.say(error.message);
     }
+    if (lane.plugin === THREAD) this.#marks(lane);
     this.#drawLanes();
     if (this.current >= 0) this.#near(this.times[this.current]);
-    else if (this.visits.length) this.#near(this.visits[0].t);
-  }
-
-  async #loadMessages() {
-    const start = Date.parse(this.index.start);
-    let after = null;
-    try {
-      for (let page = 0; page < MESSAGE_PAGES; page++) {
-        const query = new URLSearchParams({
-          from: this.day,
-          to: this.day,
-          source: "messages",
-          limit: "500",
-        });
-        if (after) query.set("after", after);
-        const found = await getJson(`/api/timeline/events?${query}`);
-        for (const event of found.events) {
-          const payload = event.payload || {};
-          this.messages.push({
-            t: (Date.parse(event.started_at) - start) / 1000,
-            name: payload.display_name || "A conversation",
-            line: messageLine(event.title, payload),
-            open: threadUrl(event.group, payload.guid),
-          });
-        }
-        after = found.next;
-        if (!after) break;
-      }
-    } catch (error) {
-      this.say(error.message);
-    }
-    this.#marks();
-    this.#drawLanes();
-    if (this.current >= 0) this.#near(this.times[this.current]);
-    else if (this.messages.length) this.#nearMessages(this.messages[0].t);
+    else if (lane.items.length) this.#nearLane(lane, lane.items[0].t);
   }
 
   // A link over each message's mark, placed in percent of the day, so a
   // resize moves it with the lane. Out of the tab order: the list of
   // messages around the frame holds the same links.
-  #marks() {
+  #marks(lane) {
+    if (!this.messageMarks) return;
     this.messageMarks.replaceChildren(
-      ...this.messages
+      ...lane.items
         .filter((message) => message.open)
         .map((message) => {
           const mark = document.createElement("a");
@@ -398,68 +386,58 @@ class DayView {
     );
   }
 
-  #nearMessages(t) {
-    if (!this.messagesNear) return;
-    const close = this.messages
-      .filter((message) => Math.abs(message.t - t) <= NEAR_SECONDS)
+  #near(t) {
+    for (const lane of this.lanes) if (lane.near) this.#nearLane(lane, t);
+  }
+
+  // The lane's events within fifteen minutes of `t`, the eight closest.
+  #nearLane(lane, t) {
+    if (!lane.near) return;
+    const close = lane.items
+      .filter((item) => Math.abs(item.t - t) <= NEAR_SECONDS)
       .sort((a, b) => Math.abs(a.t - t) - Math.abs(b.t - t))
       .slice(0, 8)
       .sort((a, b) => a.t - b.t);
-    this.messagesNear.replaceChildren(
-      ...close.map((message) => {
-        const item = document.createElement("li");
-        const at = document.createElement("time");
-        at.textContent = clock(this.index.start, message.t, this.timeZone);
-        const name = document.createElement(message.open ? "a" : "span");
-        name.textContent = message.name;
-        if (message.open) name.href = message.open;
-        const line = document.createElement("span");
-        line.className = "muted";
-        line.textContent = message.line;
-        item.append(at, " ", name, " ", line);
-        return item;
-      }),
-    );
+    const line = lane.plugin === THREAD ? this.#messageLine : this.#eventLine;
+    lane.near.replaceChildren(...close.map((item) => line.call(this, item)));
     if (close.length === 0) {
       const item = document.createElement("li");
       item.className = "muted";
       item.textContent = "None within fifteen minutes.";
-      this.messagesNear.replaceChildren(item);
+      lane.near.replaceChildren(item);
     }
   }
 
-  #near(t) {
-    this.#nearMessages(t);
-    const close = this.visits
-      .filter((visit) => Math.abs(visit.t - t) <= NEAR_SECONDS)
-      .sort((a, b) => Math.abs(a.t - t) - Math.abs(b.t - t))
-      .slice(0, 8)
-      .sort((a, b) => a.t - b.t);
-    this.near.replaceChildren(
-      ...close.map((visit) => {
-        const item = document.createElement("li");
-        const at = document.createElement("time");
-        at.textContent = clock(this.index.start, visit.t, this.timeZone);
-        const title = document.createElement(/^https?:\/\//.test(visit.url || "") ? "a" : "span");
-        title.textContent = visit.title || visit.url || "";
-        if (title.tagName === "A") {
-          title.href = visit.url;
-          title.rel = "noreferrer noopener";
-          title.target = "_blank";
-        }
-        const site = document.createElement("span");
-        site.className = "muted";
-        site.textContent = visit.site || "";
-        item.append(at, " ", title, " ", site);
-        return item;
-      }),
-    );
-    if (close.length === 0) {
-      const item = document.createElement("li");
-      item.className = "muted";
-      item.textContent = "None within fifteen minutes.";
-      this.near.replaceChildren(item);
+  #messageLine(message) {
+    const item = document.createElement("li");
+    const at = document.createElement("time");
+    at.textContent = clock(this.index.start, message.t, this.timeZone);
+    const name = document.createElement(message.open ? "a" : "span");
+    name.textContent = message.name;
+    if (message.open) name.href = message.open;
+    const line = document.createElement("span");
+    line.className = "muted";
+    line.textContent = message.line;
+    item.append(at, " ", name, " ", line);
+    return item;
+  }
+
+  #eventLine(event) {
+    const item = document.createElement("li");
+    const at = document.createElement("time");
+    at.textContent = clock(this.index.start, event.t, this.timeZone);
+    const title = document.createElement(/^https?:\/\//.test(event.url || "") ? "a" : "span");
+    title.textContent = event.title || event.url || "";
+    if (title.tagName === "A") {
+      title.href = event.url;
+      title.rel = "noreferrer noopener";
+      title.target = "_blank";
     }
+    const site = document.createElement("span");
+    site.className = "muted";
+    site.textContent = event.site || "";
+    item.append(at, " ", title, " ", site);
+    return item;
   }
 
   // ---- input --------------------------------------------------------------------
@@ -476,7 +454,7 @@ class DayView {
       this.move(frameAt(this.times, Number(this.scrubber.value)));
     });
     this.scrubber.addEventListener("change", () => this.rest(this.current));
-    for (const lane of [this.screenLane, this.browserLane, this.messageLane].filter(Boolean)) {
+    for (const lane of this.lanes.map((found) => found.canvas)) {
       lane.addEventListener("keydown", key);
       const seek = (event) => {
         if (this.times.length === 0) return;

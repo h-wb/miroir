@@ -161,6 +161,20 @@ queued, its kind may not be derived, it may predate thumbnails and not have been
 gone when the run reached it. A file replaced by another with the same key and
 size is not derived again.
 
+### In the models
+
+A model reads these records only through media's dbt macro `media_ref(role,
+kind, key_column)` (`dbt/macros/media.sql`): the files of `kind` that the input
+linked as `role` points at through `key_column`. It returns the pieces a model
+puts in its own query: `kind`, the kind as a literal for a `media_kind` column;
+`records`, the role's connection's records of that kind (the dataset could hold
+another connection's), for a CTE named `media`; and `record`, the first record
+of a key among them whose load completed. A record's `thumbnail_status` is the
+row's `media_status`. The timeline's `screen_frames`, `messages`,
+`timeline_screen` and `timeline_messages` use it; a catalog test checks that each
+call names a kind its role's connector declares, and that no model joins
+`media_objects` otherwise.
+
 A derive is not a load: the connection's status, last sync, history and analyses
 ignore it, and a settings edit does not block it. The connection page shows one
 line for it: files waiting, and the last derive run with its counts

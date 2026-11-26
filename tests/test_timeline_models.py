@@ -181,6 +181,7 @@ class TimelinePackageTests(unittest.TestCase):
                 "conversations",
                 "messages",
                 "people",
+                "contract",
             ),
         )
         for inputs in ({"screen": "screen"}, {"browser": "browser"}):

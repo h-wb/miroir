@@ -36,11 +36,13 @@
 -- Internal: the reader has no access (an empty grant list makes dbt revoke).
 -- The windows are found first, by a query of their own, and inlined as
 -- literal ranges, so frames and sessions are read through their time indexes.
--- A session's media is its first frame's, with what the worker recorded of it;
+-- A session's media is its first frame's (media_ref), with what the worker
+-- recorded of it as screen_frames read it;
 -- a frame whose record arrives later is a changed frame of screen_frames. A
 -- table holding sessions built before the media columns recomputes every
 -- session once (timeline_media_pending, by its rows).
 {% set gap_seconds = 300 %}
+{% set screenshots = media_ref('screen', 'screenshots', 's.first_frame') %}
 {% set upper = timeline_resume(ref('screen_frames')) %}
 {% set replaced = timeline_replaced(['screen']) | length > 0 %}
 {% set incremental = is_incremental() and not replaced %}
@@ -152,7 +154,7 @@ current_sessions as (
         'app_session'::text as kind,
         {{ timeline_app_name('s.bundle_id', 'k.name') }} as title,
         null::text as body,
-        'screenshots'::text as media_kind,
+        {{ screenshots.kind }} as media_kind,
         s.first_frame as media_key,
         f.media_status,
         f.thumbnail_w360,

@@ -116,6 +116,24 @@ export function frameUrl(key) {
   return `/api/timeline/frames/${key.split("/").map(encodeURIComponent).join("/")}`;
 }
 
+// A mark's colour on a lane coloured by group: one of the palette the models
+// give apps (timeline_app_colour), picked by a stable hash (FNV-1a) of the
+// event's group, so a site or a conversation keeps its colour. No group is grey.
+const GROUP_PALETTE = [
+  "#4e79a7", "#f28e2b", "#e15759", "#76b7b2", "#59a14f",
+  "#edc948", "#b07aa1", "#ff9da7", "#9c755f", "#bab0ac",
+];
+
+export function groupColour(group) {
+  if (typeof group !== "string" || group === "") return "#9e9e9e";
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < group.length; i++) {
+    hash ^= group.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return GROUP_PALETTE[hash % GROUP_PALETTE.length];
+}
+
 // A colour the API gave, if it is one; never anything that could be read as
 // more than a colour.
 export function safeColour(value) {

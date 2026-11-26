@@ -15,9 +15,9 @@
     <a href="/timeline/search">Search</a>
   </nav>
   {% if source.warning %}<p class="notice">{{ source.warning }}</p>{% endif %}
-  <p class="muted" id="day-summary">{{ frames }} screen frame{{ "" if frames == 1 else "s" }}, {{ visits }} browser visit{{ "" if visits == 1 else "s" }}{% if messages_linked %}, {{ messages }} message{{ "" if messages == 1 else "s" }}{% endif %}. Times in {{ source.timezone }}.</p>
+  <p class="muted" id="day-summary">{% for lane in lanes %}{{ lane.count }} {{ lane.unit }}{{ ", " if not loop.last else "" }}{% endfor %}. Times in {{ source.timezone }}.</p>
   {% if missing_frame %}<p class="error">That frame is not in the timeline.</p>{% endif %}
-  {% if frames == 0 and visits == 0 and not messages %}
+  {% if not recorded %}
   <p class="empty-day" id="empty-day">Nothing was recorded on this day.</p>
   {% else %}
   <section class="viewer" aria-label="Screen">
@@ -35,38 +35,30 @@
     </aside>
   </section>
   <section class="lanes" aria-label="Lanes through the day">
+    {#- One per lane shown, as data its script reads: the source its events
+        carry, its plugin, how its marks are coloured. The thread's lane holds
+        a mark per message, each a link to its thread for a pointer; the list
+        of messages around the frame holds the same links for the keyboard. #}
+    {%- for lane in lanes %}
     <div class="lane">
-      <span class="lane-name" id="lane-screen-name">Screen</span>
-      <div class="lane-track"><canvas id="lane-screen" tabindex="0" aria-labelledby="lane-screen-name" aria-describedby="lane-help"></canvas><span class="cursor" aria-hidden="true"></span></div>
+      <span class="lane-name" id="lane-{{ lane.source }}-name">{{ lane.label }}</span>
+      <div class="lane-track"><canvas id="lane-{{ lane.source }}" tabindex="0" aria-labelledby="lane-{{ lane.source }}-name" aria-describedby="lane-help" data-lane="{{ lane.source }}" data-plugin="{{ lane.plugin }}" data-colour="{{ lane.colour }}"></canvas>{% if lane.plugin == "thread" %}<span class="message-marks" id="message-marks"></span>{% endif %}<span class="cursor" aria-hidden="true"></span></div>
     </div>
-    <div class="lane">
-      <span class="lane-name" id="lane-browser-name">Browser</span>
-      <div class="lane-track"><canvas id="lane-browser" tabindex="0" aria-labelledby="lane-browser-name" aria-describedby="lane-help"></canvas><span class="cursor" aria-hidden="true"></span></div>
-    </div>
-    {%- if messages_linked %}<div class="lane">
-      <span class="lane-name" id="lane-messages-name">Messages</span>
-      {# A mark per message, each a link to its thread for a pointer; the list
-         of messages around the frame holds the same links for the keyboard. #}
-      <div class="lane-track"><canvas id="lane-messages" tabindex="0" aria-labelledby="lane-messages-name" aria-describedby="lane-help"></canvas><span class="message-marks" id="message-marks"></span><span class="cursor" aria-hidden="true"></span></div>
-    </div>
-    {%- endif %}
+    {%- endfor %}
     <div class="hours" aria-hidden="true"><span>0</span><span>6</span><span>12</span><span>18</span><span>24</span></div>
   </section>
   <label class="scrubber-label" for="scrubber">Frame</label>
   <input type="range" id="scrubber" class="scrubber" min="0" max="0" step="1" value="0" disabled>
   <p class="muted" id="lane-help">Drag or tap the lanes or the slider. Arrow keys: a frame; Shift: a minute; Page Up and Page Down: an hour; Home and End: the first and last frame.</p>
   <ul class="app-legend" id="app-legend" aria-label="Apps"></ul>
-  {%- if messages_linked %}<div class="near-pair">{% endif %}
-  <section class="near" aria-labelledby="near-heading">
-    <h2 id="near-heading">Browser visits around this time</h2>
-    <ul id="visits-near" class="visits"></ul>
+  {%- if near | length > 1 %}<div class="near-pair">{% endif %}
+  {%- for lane in near %}
+  <section class="near" aria-labelledby="near-{{ lane.source }}-heading">
+    <h2 id="near-{{ lane.source }}-heading">{{ lane.near }}</h2>
+    <ul id="{{ lane.source }}-near" class="visits"></ul>
   </section>
-  {%- if messages_linked %}<section class="near" aria-labelledby="near-messages-heading">
-    <h2 id="near-messages-heading">Messages around this time</h2>
-    <ul id="messages-near" class="visits"></ul>
-  </section>
-  </div>
-  {%- endif %}
+  {%- endfor %}
+  {%- if near | length > 1 %}</div>{% endif %}
   <noscript><p class="notice">The scrubber and the lanes need JavaScript. Search works without it.</p></noscript>
   {% endif %}
   <p id="timeline-status" class="muted" role="status"></p>
@@ -81,7 +73,7 @@
     </tr>{% endfor %}
     </tbody>
   </table>
-  {{ t.search_form(messages=messages_linked) }}
+  {{ t.search_form(kinds=kinds) }}
 </aside>
 </div>
 {% endblock %}
