@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {# No name in the title: browsers keep titles in their history. #}
 {% block title %}Conversation{% endblock %}
-{% block head %}<link rel="stylesheet" href="/static/conversations.css">
+{% block head %}<link rel="stylesheet" href="/static/viewer/conversations.css">
 <script src="/static/htmx.min.js" defer></script>
-<script type="module" src="/static/conversations.js"></script>{% endblock %}
+<script type="module" src="/static/viewer/conversations.js"></script>{% endblock %}
 {% block body %}
 <div class="conversations-page thread-open">
   <nav class="conversation-pane" aria-labelledby="conversations-heading">

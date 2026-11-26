@@ -30,7 +30,7 @@ towards its parts, one step at a time, and this page says where it is now.
 | `src/viewer/` | Reading the warehouse and showing it (decision 040): the reader and its read-only sessions, the timeline's API, Day view, search and conversation pages, the `/media` view route and its withheld check, their templates and static files, and `ViewerSettings`, what it reads of the installation | Import the control plane, web, the connectors, dlt, prefect, Pillow or boto3, or read the configuration file |
 | `src/pipelines/` | The flow entry points the scheduler runs | Hold product logic; they call control |
 | `src/adapters/` | Talk to the scheduler (Prefect): plan and apply deployments, submit, observe | Decide what a load is |
-| `src/web/`, `src/cli/` | Transport and presentation; both call the same control services. `src/web/app.py` is the control plane's admin part (its API and pages); `src/cli/compose.py` is the web server's composition root | Contain logic of their own; web never imports the viewer |
+| `src/web/`, `src/cli/` | Transport and presentation; both call the same control services. `src/web/app.py` is the control plane's admin part (its API and pages); `src/cli/compose.py` (`serve`) and `src/cli/view.py` (`view`) are the web server's composition roots | Contain logic of their own; web never imports the viewer |
 | `src/web/shell/` (the web shell) | One HTTP surface both the admin part and the viewer mount: the token and session checks, `/login` and `/logout`, the security headers with a content security policy per mounted part, `/static/`, the template loader with `base.html`, `login.html` and `error.html`, and the header's navigation, to which each part adds its links | Import anything of Miroir but the kernel |
 | `collector/` (`miroir-collector`) | On a personal machine: read a local source, withhold secrets, deliver to a receiving URL, remember what was acknowledged | Parse or load anything, or import any server code |
 
@@ -71,15 +71,16 @@ with their schema (named as the build names it, by `analysis_plan`), time zone,
 linked inputs and whether the build grants the reader role, each connection's
 media kinds, the `media` section, and the analyses whose package declares a
 `Withhold` (`src/analyses/views.py`); and the media object store `serve` built.
-`serve` builds it (`src/cli/main.py`, through `src/cli/compose.py`); `web_app`
-builds the same when given only the reader database. The `/media` view route is
+`serve` and `view` build it (`src/cli/main.py`, through `src/cli/view.py`);
+`web_app` builds the same when given only the reader database. The `/media` view route is
 the viewer's (`src/viewer/media.py`, step 7): it asks those declarations whether
 a row hides the file, then calls media's view side (`src/media/links.py`); the
 control plane's service has no viewing reads, and the collector's media routes
 stay in the control plane. Its templates and static files are its own (`src/viewer/templates/`,
 `src/viewer/static/`): the shell's template loader reads them after its own and
-the admin part's, its pages extend `base.html` by name, and `/static/` serves
-them beside the shell's at the same addresses as before. A test imports every viewer module in a fresh interpreter
+the admin part's, its pages extend `base.html` by name, and its static files are
+served under a prefix of their own, `/static/viewer/` (step 10), so a gateway
+can route them. A test imports every viewer module in a fresh interpreter
 and checks that none of dlt, prefect, Pillow or boto3 loaded.
 
 The web shell (`src/web/shell/`, package split, step 8) is the one HTTP
@@ -89,9 +90,9 @@ paths it answers and the sources it adds to the content security policy there,
 the requests that pass without the login because they check a token of their
 own, and its notices. `serve` composes them in `src/cli/compose.py`
 (`web_app`): a shell, the admin part (`mount_admin`, `src/web/app.py`), then the
-viewer (`mount_viewer`), which hands over plain values from
-`src/viewer/part.py` (its routers, `PATHS`, `POLICY` and links) and imports
-nothing of the shell. The login and the headers wrap every part's own
+viewer (`mount_viewer`, `src/cli/view.py`), which hands over plain values from
+`src/viewer/part.py` (its routers, `PATHS`, `POLICY`, `STATIC_URL` and links)
+and imports nothing of the shell. The login and the headers wrap every part's own
 middleware. `create_app` is the admin part alone in a shell of its own; tests
 that need both parts build them through `web_app`. The viewer's
 `img-src 'self' blob:` is on its own paths only (`/timeline`, `/api/timeline`,
@@ -111,6 +112,46 @@ urllib3, pydantic and a pinned secret scanner, and nothing else; its own parts h
 by `collector/tests/test_boundaries.py` (decision 035).
 
 A new folder under `src/` fails the boundary test until it is given a rule.
+
+## Processes
+
+One image runs as up to two processes behind one hostname, routed by path at
+the gateway ([package split](decisions/2026-11-25-package-split.md#runtime),
+step 10). `python -m src.cli` stays the module.
+
+| Command | Mounts | Holds | Never loads or reads |
+|---|---|---|---|
+| `serve` | The admin part and the viewer, as before | Everything below, together | |
+| `serve --without-viewer` | The admin part, composed by `admin_app` (`src/cli/compose.py`) | The metadata store, `MIROIR_SECRET_KEY`, Prefect, the media key for upload links and confirms, `MIROIR_API_TOKEN`, `MIROIR_METRICS_TOKEN` | `MIROIR_TIMELINE_DATABASE*`, the reader; of the viewer it imports only `src/viewer/navigation.py` |
+| `view` | The viewer, composed by `viewer_app` (`src/cli/view.py`), and `/healthz` | The configuration file, read only; `MIROIR_TIMELINE_DATABASE*`; the media key (`MIROIR_MEDIA_*`, read-only in the cluster); `MIROIR_API_TOKEN` | The metadata store, `MIROIR_SECRET_KEY`, Prefect, the control plane's service, runner and operations, dlt, Pillow, pillow-heif, a connector's source; it writes nothing |
+
+Reading the configuration loads the connector registry and pydantic, never a
+connector's dlt source, so `view` reads the configuration file as `serve` does
+and builds its `ViewerSettings` the same way. `tests/test_entry_points.py` runs
+each command in a fresh interpreter up to the moment it would serve and checks
+what it loaded.
+
+Both headers carry the same links: the admin pages' are data in
+`src/web/navigation.py`, which `view` mounts without the admin part; the
+viewer's are declared in `src/viewer/navigation.py`, which needs no reader:
+`view` asks it over its settings, `serve --without-viewer` over the
+configuration alone. Both answer `/login` and `/logout`; the session cookie is
+an HMAC of the same token, so a login on one is a login on both. `serve`'s login
+lands on `/`, `view`'s on `/timeline` when it is reached directly. Behind the
+gateway `/login` is `serve`'s, so a login lands on `/`.
+
+The paths each process answers, for the gateway's routes. A prefix is itself
+and every path below it (`/timeline` and `/timeline/2026-11-20`, not
+`/timelinex`):
+
+| Process | Answers | Route to it |
+|---|---|---|
+| `view` | `/timeline`, `/api/timeline`, `/media` (the `GET /media/{connection}/{kind}/{key}` view route), `/static/viewer`; also `/login`, `/logout`, `/healthz` and the shell's `/static` files, for its own pages | `/timeline`, `/api/timeline`, `/media`, `/static/viewer` |
+| `serve --without-viewer` | Everything else, including `/login`, `/logout`, `/healthz`, `/static`, `/metrics` and the collector's routes (`/api/connections/{id}/receive`, `/report`, `/media/uploads`, `/media/confirm`, all under `/api/connections`) | Every other path |
+
+The collector's media routes are under `/api/connections/`, not `/media/`, so
+the `/media` prefix is the viewer's alone. Each process answers 404 on the
+other's paths.
 
 ## Where data moves
 

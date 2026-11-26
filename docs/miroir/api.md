@@ -25,7 +25,14 @@ uv run --locked pipelines-miroir --config miroir.json serve --duckdb /tmp/miroir
 ```
 
 `--duckdb` is needed only without a `deployment` section, when requests run as
-local subprocesses. Behind a TLS-terminating proxy, set `FORWARDED_ALLOW_IPS` to
+local subprocesses.
+
+`serve` runs both parts in one process, as in development. In two processes
+behind one hostname, `serve --without-viewer` serves the admin part alone and
+never reads `MIROIR_TIMELINE_DATABASE*`, and `view` (port 8766 by default)
+serves the viewer alone, read-only: what it needs and the routes it answers are
+in [Timeline](timeline.md#running-it-alone), and the paths the gateway sends to
+each in [Architecture](../architecture.md#processes). Both accept the same login. Behind a TLS-terminating proxy, set `FORWARDED_ALLOW_IPS` to
 the proxy's addresses so receiving URLs use HTTPS and cookies are Secure.
 
 The overview lists connections and analyses apart: connections own source
@@ -40,7 +47,7 @@ configuration page edits the whole file with the same revision check.
 | `MIROIR_API_TOKEN`, as the login page's password (a session cookie) or `Authorization: Bearer` | Everything below except the delivery and metrics routes |
 | A connection's delivery token, as a bearer | `receive`, `report`, `media/uploads` and `media/confirm` of that connection only |
 | `MIROIR_METRICS_TOKEN`, as a bearer | `GET /metrics` only; the administrator's token and session are refused there |
-| None | `/login`, `/healthz`, `/static/` |
+| None | `/login`, `/healthz`, `/static/` (on both processes when split) |
 
 An API call without a login gets 401 JSON; a page redirects to `/login`; an htmx
 request gets `HX-Redirect: /login`.
@@ -72,8 +79,8 @@ the file changed meanwhile.
 | `POST /api/analyses/{id}/models` | Rebuild without loading (202); needs a successful input load; `?full_refresh=true` from scratch |
 | `GET /api/config`, `PUT /api/config` | Read or replace the configuration |
 | `GET /api/deployments/plan`, `POST /api/deployments/apply`, `POST /api/refresh` | Reconcile with Prefect (needs the `deployment` section) |
-| `GET /api/timeline/…`, `POST /api/timeline/search` | [Timeline](timeline.md#the-api) |
-| `GET /media/{connection}/{kind}/{key}` | A file or its thumbnail ([images](timeline.md#images-through-the-server)) |
+| `GET /api/timeline/…`, `POST /api/timeline/search` | [Timeline](timeline.md#the-api); the viewer's, answered by `view` when split |
+| `GET /media/{connection}/{kind}/{key}` | A file or its thumbnail ([images](timeline.md#images-through-the-server)); the viewer's |
 | `GET /metrics` | Prometheus metrics ([observability](../observability.md#metrics)) |
 | `GET /healthz` | Liveness |
 
@@ -89,8 +96,8 @@ timeline makes from fetched frames; nothing else does. The policy refuses inline
 scripts, so templates load them from files served at `/static/` (without the
 login, revalidated on each load): from `src/web/shell/static/`, `miroir.css`,
 `miroir.js` and the vendored `htmx.min.js`, whose version and SHA-256 are in
-[VENDORED.md](../../src/web/shell/static/VENDORED.md); from `src/viewer/static/`, the
-timeline's scripts and stylesheet. A template in `src/web/shell/templates/`,
+[VENDORED.md](../../src/web/shell/static/VENDORED.md); from `src/viewer/static/`, at
+`/static/viewer/`, the timeline's scripts and stylesheet. A template in `src/web/shell/templates/`,
 `src/web/templates/` or `src/viewer/templates/` with a `style` attribute, a `<style>` element or an
 `on…=` handler fails `tests/test_web_static.py`. The server's access log keeps each request's path and
 drops its query string.

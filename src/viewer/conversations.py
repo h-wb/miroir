@@ -2,9 +2,9 @@
 and the fragments that page them.
 
 Rendered on the server from the reader methods the JSON API uses; nothing here
-writes SQL. `/static/conversations.js` loads further pages of a thread as the
-reader scrolls and keeps their place; without it, links page instead. Every
-page is `Cache-Control: private, no-store`. A conversation is named in an
+writes SQL. `/static/viewer/conversations.js` loads further pages of a thread
+as the reader scrolls and keeps their place; without it, links page instead.
+Every page is `Cache-Control: private, no-store`. A conversation is named in an
 address only by its id; text, names and file names reach templates as values,
 so Jinja escapes them, and only `http` and `https` addresses become links.
 

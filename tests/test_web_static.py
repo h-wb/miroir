@@ -86,13 +86,17 @@ class StaticFileTests(WebFixture):
                 self.assertIn("Content-Security-Policy", response.headers)
 
     def test_static_files_need_no_login_and_revalidate(self):
+        # The viewer's files are under a prefix of their own, which a gateway
+        # routes to `view` (package split, step 10); the shell's are not.
         for name, kind in (
             ("miroir.css", "text/css"),
             ("miroir.js", "javascript"),
             ("htmx.min.js", "javascript"),
-            ("conversations.css", "text/css"),
-            ("conversations.js", "javascript"),
-            ("conversations-core.js", "javascript"),
+            ("viewer/conversations.css", "text/css"),
+            ("viewer/conversations.js", "javascript"),
+            ("viewer/conversations-core.js", "javascript"),
+            ("viewer/timeline.js", "javascript"),
+            ("viewer/timeline-core.js", "javascript"),
         ):
             with self.subTest(name=name):
                 response = self.client.get(f"/static/{name}")
@@ -105,6 +109,11 @@ class StaticFileTests(WebFixture):
             "/static/../__init__.py",
             "/static/%2e%2e/__init__.py",
             "/static/missing",
+            "/static/viewer/../__init__.py",
+            "/static/viewer/%2e%2e/part.py",
+            "/static/viewer/miroir.css",
+            "/static/timeline.js",
+            "/static/conversations.css",
         ):
             with self.subTest(path=path):
                 response = self.client.get(path, follow_redirects=False)
@@ -314,3 +323,17 @@ class ShellMountGuardTests(unittest.TestCase):
                 shell = Shell("synthetic-token-0123456789")
                 with self.assertRaises(ValueError):
                     shell.mount(Part(paths=paths, policy={"img-src": ("blob:",)}))
+
+    def test_a_parts_static_prefix_is_below_static_and_its_own(self):
+        from src.web.shell import Part, Shell
+
+        folder = Path(__file__).parent
+        for url in ("/assets", "/staticx", "/"):
+            with self.subTest(url=url):
+                shell = Shell("synthetic-token-0123456789")
+                with self.assertRaises(ValueError):
+                    shell.mount(Part(static=folder, static_url=url))
+        shell = Shell("synthetic-token-0123456789")
+        shell.mount(Part(static=folder, static_url="/static/part"))
+        with self.assertRaises(ValueError):
+            shell.mount(Part(static=folder, static_url="/static/part/"))

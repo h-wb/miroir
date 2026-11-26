@@ -22,6 +22,7 @@ from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
 from src.analyses.views import SCREEN_FRAMES
 from src.kernel.errors import OperationError, Timeout, Unavailable
+from src.viewer import navigation
 from src.viewer.database import (
     NOT_CONFIGURED,
     STATEMENT_TIMEOUT_MS,
@@ -71,10 +72,10 @@ def status(
 
 # ---- Which tables -------------------------------------------------------------
 
-# The package whose analyses the viewer shows; the composition root hands it
-# their settings (src.viewer.settings).
-PACKAGE = "timeline"
-MESSAGES_ROLE = "messages"
+# The package whose analyses the viewer shows, and the role of its messages
+# input; the composition root hands it their settings (src.viewer.settings).
+PACKAGE = navigation.PACKAGE
+MESSAGES_ROLE = navigation.MESSAGES_ROLE
 # The kind of the files a screen frame points at, as the view that hides some of
 # them declares it (package split, step 7); each row names its own in step 11.
 FRAMES_KIND = SCREEN_FRAMES.kind

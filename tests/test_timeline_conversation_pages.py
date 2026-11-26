@@ -118,8 +118,12 @@ class ConversationPageTests(ConversationsFixture):
         listed = self.reader.conversations(50, None)["conversations"]
         self.assertEqual(names, [c["display_name"] for c in listed])
         self.assertEqual(names[:3], [SAM, "Book Club", "Alex Example"])
-        self.assertIn('<link rel="stylesheet" href="/static/conversations.css">', page)
-        self.assertIn('<script type="module" src="/static/conversations.js">', page)
+        self.assertIn(
+            '<link rel="stylesheet" href="/static/viewer/conversations.css">', page
+        )
+        self.assertIn(
+            '<script type="module" src="/static/viewer/conversations.js">', page
+        )
         # The group is marked; a preview I sent says so; each row its time.
         book = page[page.index('data-conversation="' + self.book) :]
         book = book[: book.index("</a>")]

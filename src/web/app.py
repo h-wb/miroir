@@ -33,7 +33,8 @@ from src.control.service import MiroirService
 from src.integrations.validation import InvalidArtifact
 from src.kernel.errors import OperationError
 from src.web.metrics import render_metrics
-from src.web.shell import Link, Part, Shell
+from src.web.navigation import LINKS
+from src.web.shell import Part, Shell
 
 DEFAULT_MAX_UPLOAD = 512 * 1024 * 1024
 CHUNK = 1024 * 1024
@@ -51,8 +52,6 @@ METRICS_TOKEN_REUSED = (
     "a scraper must not hold the admin token"
 )
 TEMPLATES_DIR = Path(__file__).parent / "templates"
-# The header's links to the admin pages, before every other part's.
-LINKS = (Link("/", "Connections"), Link("/config", "Configuration"))
 # Query parameters of the upload API that are not import options.
 UPLOAD_PARAMETERS = {"import", "name", "format"}
 

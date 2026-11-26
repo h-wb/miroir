@@ -1021,7 +1021,7 @@ class TimelinePageTests(TimelineApiFixture):
         self.assertIn('data-day="2026-11-20"', day.text)
         self.assertIn('data-timezone="America/Toronto"', day.text)
         self.assertIn(
-            '<script type="module" src="/static/timeline.js"></script>', day.text
+            '<script type="module" src="/static/viewer/timeline.js"></script>', day.text
         )
         self.assertIn("7 screen frames, 6 browser visits.", day.text)
         self.assertIn('id="scrubber"', day.text)
@@ -1135,7 +1135,8 @@ class TimelinePageTests(TimelineApiFixture):
         # The results' history entry is made an ordinary one, so Back shows the
         # empty form rather than offering to send the words again.
         self.assertIn(
-            '<script type="module" src="/static/timeline.js"></script>', found.text
+            '<script type="module" src="/static/viewer/timeline.js"></script>',
+            found.text,
         )
         script = (Path(STATIC_DIR) / "timeline.js").read_text()
         self.assertIn('history.replaceState(null, "", location.pathname)', script)

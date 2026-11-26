@@ -5,11 +5,12 @@ Single-user and self-hosted: one admin bearer token (`MIROIR_API_TOKEN`).
 Browsers log in with it once and get a session cookie derived from it; the token
 itself is never stored in the cookie. The shell owns that check, `/login` and
 `/logout`, the security headers with a content security policy per mounted
-part, `/static/` over its own folder and each part's, the template loader over
-its own folder (`base.html`, `login.html`, `error.html`) and each part's, and
-the header's navigation, to which each part adds its links. A part adds its
-routes to `Shell.app` or hands them to `Shell.mount`; the composition root
-(`src.cli`) decides which parts a process mounts. It imports only the kernel.
+part, `/static/` over its own folder (and each part's that has no prefix of
+its own; a part's prefix lets a gateway route its files by path), the template
+loader over its own folder (`base.html`, `login.html`, `error.html`) and each
+part's, and the header's navigation, to which each part adds its links. A part
+adds its routes to `Shell.app` or hands them to `Shell.mount`; the composition
+root (`src.cli`) decides which parts a process mounts. It imports only the kernel.
 """
 
 import hashlib
@@ -28,6 +29,7 @@ from fastapi.templating import Jinja2Templates
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 SESSION_COOKIE = "miroir_session"
+STATIC_URL = "/static"
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 # The policy of every response a part does not widen. Pages load styles,
@@ -87,8 +89,10 @@ class Part:
     # Its templates, found after the shell's and earlier parts'; they extend
     # `base.html` by name.
     templates: Path | None = None
-    # Its static files, served under `/static/` beside the shell's.
+    # Its static files, served under `static_url`: `/static/` beside the shell's,
+    # or a prefix below it of its own, such as `/static/viewer`.
     static: Path | None = None
+    static_url: str = STATIC_URL
     # The paths it answers, for its policy: "/timeline" is it and what is below.
     paths: tuple[str, ...] = ()
     # Sources it adds to the shell's directives, on its own paths only.
@@ -133,10 +137,12 @@ class Shell:
     """The HTTP surface parts mount into: build it, mount each part, then
     `finish` it into the application to serve."""
 
-    def __init__(self, token: str) -> None:
+    def __init__(self, token: str, home: str = "/") -> None:
+        """`home` is where a login lands: the page of this process to start on."""
         if len(token) < 16:
             raise ValueError("MIROIR_API_TOKEN must be at least 16 characters")
         self._token = token
+        self._home = home
         self._session = hmac.new(
             token.encode(), b"miroir-session", hashlib.sha256
         ).hexdigest()
@@ -145,6 +151,8 @@ class Shell:
         self._policies: list[tuple[tuple[str, ...], str]] = []
         self._notices: dict[str, str] = {}
         self._static: list[Path] = [STATIC_DIR]
+        # Parts' folders served under a prefix of their own: (prefix, folder).
+        self._prefixed: list[tuple[str, Path]] = []
         self._loader = FileSystemLoader([str(TEMPLATES_DIR)])
         self.templates = Jinja2Templates(
             env=Environment(loader=self._loader, autoescape=select_autoescape())
@@ -153,7 +161,9 @@ class Shell:
         self.templates.env.globals["navigation"] = self.navigation
         self._finished = False
         quiet_access_log()
-        self.app = FastAPI(title="Miroir", docs_url=None, redoc_url=None)
+        self.app = FastAPI(
+            title="Miroir", docs_url=None, redoc_url=None, openapi_url=None
+        )
         self._routes()
 
     def accepts(self, token: str) -> bool:
@@ -191,14 +201,21 @@ class Shell:
             raise ValueError("A part that widens the policy names the paths it answers")
         if any(prefix.rstrip("/") == "" for prefix in part.paths):
             raise ValueError("A part cannot widen the policy of every page")
+        url = part.static_url.rstrip("/")
+        if url != STATIC_URL and not url.startswith(STATIC_URL + "/"):
+            raise ValueError(f"A part's static files are served below {STATIC_URL}/")
+        if url in (prefix for prefix, _ in self._prefixed):
+            raise ValueError(f"Two parts serve their static files at {url}")
         self._parts.append(part)
         if part.policy:
             self._policies.append((part.paths, content_security_policy(part.policy)))
         self._notices.update(part.notices)
         if part.templates is not None:
             self._loader.searchpath.append(str(part.templates))
-        if part.static is not None:
+        if part.static is not None and url == STATIC_URL:
             self._static.append(part.static)
+        elif part.static is not None:
+            self._prefixed.append((url, part.static))
         for router in routers:
             self.app.include_router(router)
 
@@ -220,7 +237,8 @@ class Shell:
 
     def finish(self) -> FastAPI:
         """The application: the login check and the headers wrap every part's
-        own middleware, and `/static/` serves every part's folder."""
+        own middleware, and `/static/` serves every part's folder, each under
+        its prefix."""
         if self._finished:
             raise RuntimeError("The shell is already finished")
         self._finished = True
@@ -259,10 +277,13 @@ class Shell:
                 response.headers["Cache-Control"] = "no-cache"
             return response
 
+        # A prefix of a part's own first: the first mount that matches answers.
+        for url, folder in self._prefixed:
+            app.mount(url, StaticFiles(directory=folder))
         static = StaticFiles(directory=STATIC_DIR)
         # A name is looked for in the shell's folder, then in each part's.
         static.all_directories = list(self._static)
-        app.mount("/static", static, name="static")
+        app.mount(STATIC_URL, static, name="static")
         return app
 
     def _routes(self) -> None:
@@ -281,7 +302,7 @@ class Shell:
                     {"failed": True, "notice": None},
                     status_code=401,
                 )
-            response = RedirectResponse("/", status_code=303)
+            response = RedirectResponse(self._home, status_code=303)
             response.set_cookie(
                 SESSION_COOKIE,
                 self._session,
