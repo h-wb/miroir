@@ -17,25 +17,15 @@ _ALLOWED = {
     # A connector declares its media kinds, and knows nothing else of media.
     "integrations": (_KERNEL, f"{_MEDIA}.kinds"),
     "analyses": (_KERNEL,),
-    # Files that rows point at (package split, step 4): so never web, cli, the
-    # viewer (src.core.timeline) or the connector registry; see _MEDIA_DEBT.
+    # Files that rows point at (package split, steps 4 and 5): the kernel only,
+    # never the control plane, web, cli, the viewer or the connector registry.
+    # The control plane hands it what it reads (src.media.target).
     "media": (_KERNEL,),
     "core": (_KERNEL, "src.integrations", "src.analyses", _MEDIA),
     "pipelines": (_KERNEL, "src.core", _MEDIA),
     "adapters": (_KERNEL, "src.core", "src.pipelines"),
     "web": (_KERNEL, "src.core", "src.integrations", _MEDIA),
     "cli": (_KERNEL, "src.core", "src.integrations", "src.adapters", "src.web", _MEDIA),
-}
-# Media's named debt to the control plane: the resolved configuration it is
-# handed and the queue's tables and store in `src.core.operations`. Step 5 moves
-# the queue into media and removes every line; none may be added.
-_MEDIA_DEBT = {
-    ("src.media.derive", "src.core.config.ResolvedConnection"),
-    ("src.media.derive", "src.core.config.ResolvedMiroir"),
-    ("src.media.derive", "src.core.operations.MetadataStore"),
-    ("src.media.derive", "src.core.operations.PendingMedia"),
-    ("src.media.links", "src.core.config.ResolvedConnection"),
-    ("src.media.uploads", "src.core.config.ResolvedConnection"),
 }
 # Libraries a part never imports, and those only one module may import.
 _NEVER = {"media": ("fastapi", "starlette", "prefect")}
@@ -87,7 +77,6 @@ class BoundaryTests(unittest.TestCase):
     def test_server_import_boundaries(self) -> None:
         src = Path(__file__).resolve().parents[1] / "src"
         errors: list[str] = []
-        debts: set[tuple[str, str]] = set()
         for folder in sorted(src.iterdir()):
             if folder.is_dir() and folder.name not in (*_ALLOWED, "__pycache__"):
                 errors.append(f"src/{folder.name}:1: part has no import rule")
@@ -117,9 +106,7 @@ class BoundaryTests(unittest.TestCase):
                         errors.append(f"{location}: kernel may not import {name}")
                     elif part in _ALLOWED and name.startswith("src."):
                         allowed = (f"src.{part}", *_ALLOWED[part])
-                        if (module, name) in _MEDIA_DEBT:
-                            debts.add((module, name))
-                        elif not any(_within(name, prefix) for prefix in allowed):
+                        if not any(_within(name, prefix) for prefix in allowed):
                             errors.append(f"{location}: {part} may not import {name}")
                     if any(_within(name, lib) for lib in _NEVER.get(part, ())):
                         errors.append(f"{location}: {part} may not import {name}")
@@ -163,8 +150,6 @@ class BoundaryTests(unittest.TestCase):
                             "formats.py and contracts.py may not import dlt at module level"
                         )
 
-        for module, name in sorted(_MEDIA_DEBT - debts):
-            errors.append(f"{module}: no longer imports {name}; remove its debt line")
         self.assertFalse(errors, "\n".join(errors))
 
     def test_the_server_and_the_worker_load_no_image_library(self) -> None:
@@ -185,8 +170,10 @@ class BoundaryTests(unittest.TestCase):
             "src.media.links",
             "src.media.names",
             "src.media.profiles",
+            "src.media.queue",
             "src.media.s3",
             "src.media.store",
+            "src.media.target",
             "src.media.uploads",
         )
         probe = (

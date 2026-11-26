@@ -94,7 +94,7 @@ class MediaIdentityTests(DeriveFixture):
             connection = connections[kind]
             for key, body in kind_files.items():
                 self.objects.add(f"site/{connection}/{kind}/{key}", body)
-            self.store.add_pending_media(
+            self.store.media_queue.add_pending_media(
                 "test",
                 connection,
                 kind,

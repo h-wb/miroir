@@ -35,12 +35,13 @@ from pillow_heif import register_heif_opener
 
 from src.cli.main import main
 from src.core.config import load_miroir
-from src.core.operations import ConnectionBusy, MetadataStore, media_pending, operations
+from src.core.operations import ConnectionBusy, MetadataStore, operations
 from src.core.runner import IngestionFailed, execute_operation, request_derive
 from src.core.service import MiroirService
 from src.kernel.errors import OperationError
 from src.media.derive import Decoder, DecoderLost, DecoderUnavailable, _Lost, _write
 from src.media.profiles import PROFILES
+from src.media.queue import media_pending
 from src.media.store import ObjectTooLarge
 from src.web.app import create_app
 from tests.fakes import FakeObjectStore
@@ -251,7 +252,7 @@ class DeriveFixture(unittest.TestCase):
         now = datetime.now(timezone.utc)
         for key, body in files.items():
             self.objects.add(f"site/screen/screenshots/{key}", body)
-        self.store.add_pending_media(
+        self.store.media_queue.add_pending_media(
             "test",
             "screen",
             "screenshots",
@@ -273,7 +274,9 @@ class DeriveFixture(unittest.TestCase):
             return sorted(db.execute(sa.select(media_pending.c.key)).scalars())
 
     def attempts(self) -> dict[str, int]:
-        queued = self.store.pending_media("test", "screen", "screenshots", 100)
+        queued = self.store.media_queue.pending_media(
+            "test", "screen", "screenshots", 100
+        )
         return {entry.key: entry.attempts for entry in queued}
 
     def detail(self, operation_id: str) -> str:
@@ -462,7 +465,9 @@ class DeriveRequestTests(DeriveFixture):
         self.objects.add("site/screen/screenshots/a.jpeg", b"xy")
         failure = sa.exc.OperationalError("INSERT", {}, Exception("down"))
         with (
-            patch.object(self.store, "add_pending_media", side_effect=failure),
+            patch.object(
+                self.store.media_queue, "add_pending_media", side_effect=failure
+            ),
             self.assertLogs("src.core.service", "ERROR"),
         ):
             response = self.client.post(
@@ -475,10 +480,14 @@ class DeriveRequestTests(DeriveFixture):
 
     def test_removing_the_connection_forgets_its_queue(self):
         self.upload({"a.jpeg": jpeg()})
-        self.store.set_backfill_after("test", "screen", "screenshots", "a.jpeg")
+        self.store.media_queue.set_backfill_after(
+            "test", "screen", "screenshots", "a.jpeg"
+        )
         self.service.remove_connection("screen")
         self.assertEqual(self.pending(), [])
-        self.assertEqual(self.store.backfill_after("test", "screen", "screenshots"), "")
+        self.assertEqual(
+            self.store.media_queue.backfill_after("test", "screen", "screenshots"), ""
+        )
 
 
 class DeriveRunTests(DeriveFixture):
@@ -773,7 +782,7 @@ class AttachmentDeriveTests(DeriveFixture):
         now = datetime.now(timezone.utc)
         for key, body in files.items():
             self.objects.add(f"site/messages/attachments/{key}", body)
-        self.store.add_pending_media(
+        self.store.media_queue.add_pending_media(
             "test",
             "messages",
             "attachments",
@@ -1128,7 +1137,7 @@ class DeriveBatchTests(DeriveFixture):
         # The reviewer's case: an entry of a kind that is not derived (renamed,
         # or its thumbnails removed) must not keep scheduling runs.
         old = datetime.now(timezone.utc)
-        self.store.add_pending_media(
+        self.store.media_queue.add_pending_media(
             "test", "screen", "screenshots_old", [("x.jpeg", 5, old)]
         )
         operation_id = self.request()
@@ -1166,7 +1175,8 @@ class BackfillTests(DeriveFixture):
         )
         self.assertIn("backfill walked 3, walk continues", self.detail(first))
         self.assertEqual(
-            self.store.backfill_after("test", "screen", "screenshots"), "2025/2.png"
+            self.store.media_queue.backfill_after("test", "screen", "screenshots"),
+            "2025/2.png",
         )
         self.assertEqual(
             self.rows()["2025/0.png"]["stored_at"],
@@ -1177,7 +1187,9 @@ class BackfillTests(DeriveFixture):
         # The store said nothing follows: finished without an empty page.
         self.assertIn("walked 3, walk finished", self.detail(second))
         self.assertEqual(len(self.rows()), 5)  # the invalid key is skipped
-        self.assertEqual(self.store.backfill_after("test", "screen", "screenshots"), "")
+        self.assertEqual(
+            self.store.media_queue.backfill_after("test", "screen", "screenshots"), ""
+        )
         self.objects.gets.clear()
         again = self.request({"kind": "screenshots", "limit": 100})
         self.derive(again)
@@ -1194,9 +1206,12 @@ class BackfillTests(DeriveFixture):
         self.assertIn("walked 7, walk finished", self.detail(walk))
         self.assertEqual(len(self.rows()), 5)
         # It can end a page and become the cursor without harm.
-        self.store.set_backfill_after("test", "screen", "screenshots", long_name)
+        self.store.media_queue.set_backfill_after(
+            "test", "screen", "screenshots", long_name
+        )
         self.assertEqual(
-            self.store.backfill_after("test", "screen", "screenshots"), long_name
+            self.store.media_queue.backfill_after("test", "screen", "screenshots"),
+            long_name,
         )
         resumed = self.request({"kind": "screenshots", "limit": 100})
         self.derive(resumed)
@@ -1206,7 +1221,7 @@ class BackfillTests(DeriveFixture):
         # After an incident: a good file recorded as failed, the decoder fixed since.
         self.queue({"2025/0.png": png_body()})
         for _ in range(3):
-            self.store.begin_media_attempt(
+            self.store.media_queue.begin_media_attempt(
                 "test", "screen", "screenshots", "2025/0.png"
             )
         self.derive(self.request())
@@ -1246,7 +1261,9 @@ class BackfillTests(DeriveFixture):
             self.assertRaises(Killed),
         ):
             self.derive(retry)
-        [queued] = self.store.pending_media("test", "screen", "screenshots", 10)
+        [queued] = self.store.media_queue.pending_media(
+            "test", "screen", "screenshots", 10
+        )
         self.assertEqual((queued.key, queued.retry), ("2025/0.png", True))
         # Any later run, not only a backfill, derives it despite its row.
         self.derive(self.request())
@@ -1447,14 +1464,16 @@ class DerivePostgresTests(DeriveFixture):
         body = jpeg()
         self.upload({"a.jpeg": body, "b.heic": b"h"})
         self.assertEqual(len(self.executor.submitted), 1)
-        self.store.begin_media_attempt("test", "screen", "screenshots", "a.jpeg")
+        self.store.media_queue.begin_media_attempt(
+            "test", "screen", "screenshots", "a.jpeg"
+        )
         # The same file again keeps its attempts; another size starts over.
         now = datetime.now(timezone.utc)
-        self.store.add_pending_media(
+        self.store.media_queue.add_pending_media(
             "test", "screen", "screenshots", [("a.jpeg", len(body), now)]
         )
         self.assertEqual(self.attempts(), {"a.jpeg": 1, "b.heic": 0})
-        self.store.add_pending_media(
+        self.store.media_queue.add_pending_media(
             "test", "screen", "screenshots", [("b.heic", 2, now)]
         )
         self.assertEqual(self.attempts(), {"a.jpeg": 1, "b.heic": 0})

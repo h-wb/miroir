@@ -20,7 +20,11 @@ class MediaTests(unittest.TestCase):
                 '{"id":"browser","integration":"browser_history","settings":{}},'
                 '{"id":"messages","integration":"apple_messages","settings":{}}]}'
             )
-            self.screen, self.browser, self.messages = load_miroir(path).connections
+            connections = load_miroir(path).connections
+            # What links and uploads read of each connection.
+            self.screen, self.browser, self.messages = (
+                connection.media for connection in connections
+            )
         self.config = MediaConfig(
             endpoint="http://internal.test", bucket="media", prefix="site"
         )
@@ -33,7 +37,7 @@ class MediaTests(unittest.TestCase):
         )
 
     def test_apple_messages_attachments(self):
-        (kind,) = self.messages.integration.media
+        (kind,) = self.messages.kinds
         self.assertEqual(
             (kind.name, kind.resource, kind.column),
             ("attachments", "attachments", "media_key"),

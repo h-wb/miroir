@@ -49,12 +49,15 @@ The key comes from `MIROIR_MEDIA_ACCESS_KEY_ID` and
 and without either. It needs read and write on that bucket and nothing else. An
 object is named `prefix / connection / kind / key`, the key being the value the
 row carries. Media lives in `src/media/` (the
-[package split](../decisions/2026-11-25-package-split.md), step 4): the
+[package split](../decisions/2026-11-25-package-split.md), steps 4 and 5) and
+imports only the kernel: the
 `ObjectStore` protocol (`store.py`), which `s3.py` implements and nothing else
 reaches the bucket by; names and content types (`names.py`); upload links and
 confirmations (`uploads.py`); view links and the bytes copied to a browser
 (`links.py`); the `media` section (`config.py`); kinds (`kinds.py`) and profiles
-(`profiles.py`).
+(`profiles.py`); the derive queue (`queue.py`); and what it reads of a
+connection (`target.py`), which the control plane builds from its own
+configuration and hands in.
 
 | Route | Who | What |
 | --- | --- | --- |
@@ -96,8 +99,8 @@ PDF or other document) gets a row with `unsupported` and is not read. A file ove
   width. A thumbnail's kind is not a kind: it can be neither read nor uploaded by
   name.
 - **When.** When the server answers `stored` to a confirmation (or `present` to
-  an upload request), it queues the file in the metadata store (`media_pending`)
-  before answering and asks for a `derive` operation on the Miroir's media
+  an upload request), it queues the file in the metadata store (`media_pending`,
+  whose definition and repository are media's, `src/media/queue.py`) before answering and asks for a `derive` operation on the Miroir's media
   deployment ([Prefect](runs.md#prefect)), due `derive_delay_seconds` later. Confirmations before it starts
   join it, so a collector confirming thousands of files in a pass causes one run.
   A run handles at most `derive_batch` files of each kind and, if more wait and
@@ -126,8 +129,9 @@ PDF or other document) gets a row with `unsupported` and is not read. A file ove
   applies the file's own rotation (`irot`, `imir`) and the EXIF orientation is
   then ignored, so a photo is turned once.
 - **Records.** One row per stored file in `media_objects`, in the connection's
-  own dataset, written by a dlt pipeline of its own (`<pipeline_name>_media`, in
-  `src/media/derive.py`),
+  own dataset, written by a dlt pipeline of its own (`<pipeline_name>_media`,
+  `MediaWriter` in `src/media/derive.py`, which the runner builds with the
+  connection's own lock, held around each write),
   merged on `(connection_id, kind, key)`. Rows are written every 100 files; a run
   that dies loses at most that much finished work.
 

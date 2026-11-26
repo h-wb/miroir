@@ -23,6 +23,7 @@ from src.integrations.contracts import IntegrationDefinition
 from src.integrations.registry import INTEGRATIONS
 from src.kernel.models import DatabaseIdentifier, Identifier, SecretKey, StrictModel
 from src.media.config import MediaConfig
+from src.media.target import MediaConnection, MediaTarget
 
 if TYPE_CHECKING:
     from src.analyses.catalog import Package
@@ -276,6 +277,22 @@ class ResolvedConnection:
     def can_sync(self) -> bool:
         """A sync fetches from the API and/or scans the watched folder."""
         return self.integration.fetch is not None or self.config.folder is not None
+
+    @property
+    def media(self) -> MediaConnection:
+        """What upload and view links read of this connection."""
+        return MediaConnection(self.config.id, self.integration.media)
+
+    def media_target(self, config: MediaConfig) -> MediaTarget:
+        """What a derive run reads of this connection, with the media section."""
+        return MediaTarget(
+            miroir_id=self.miroir_id,
+            connection_id=self.config.id,
+            pipeline_name=self.binding.pipeline_name,
+            dataset_name=self.binding.dataset_name,
+            kinds=self.integration.media,
+            config=config,
+        )
 
 
 @dataclass(frozen=True)

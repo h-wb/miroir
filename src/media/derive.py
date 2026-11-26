@@ -3,8 +3,10 @@
 A derive run drains the queue of confirmed files (`media_pending`): for each, it
 makes thumbnails where the kind's profile reads it (`src.media.profiles`) and
 writes one `media_objects` row to the connection's dataset, also for a file
-that gets none, so it is not tried again. A backfill first walks the bucket from where its last walk stopped and
-queues what it finds. Only the runner imports this module, inside the run.
+that gets none, so it is not tried again. A backfill first walks the bucket from
+where its last walk stopped and queues what it finds. Only the runner imports
+this module, inside the run, and hands it what it reads (`MediaTarget`), the
+queue (`src.media.queue`) and the writer of `media_objects` (`MediaWriter`).
 
 Images are decoded in a child process (`Decoder`), never here.
 """
@@ -26,8 +28,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any, TypeVar, cast
 
-from src.core.config import ResolvedConnection, ResolvedMiroir
-from src.core.operations import MetadataStore, PendingMedia
 from src.kernel.errors import OperationError
 from src.media.config import MediaConfig
 from src.media.decoder_checks import check_image
@@ -41,7 +41,9 @@ from src.media.names import (
     valid_key,
 )
 from src.media.profiles import PROFILES, Profile, formats
+from src.media.queue import MediaQueue, PendingMedia
 from src.media.store import ObjectStore, ObjectTooLarge, StoredObject
+from src.media.target import ConnectionLock, MediaTarget
 
 if TYPE_CHECKING:
     from dlt.common.schema.typing import TTableSchemaColumns
@@ -368,23 +370,18 @@ class DeriveSummary:
 
 
 def derive_media(
-    miroir: ResolvedMiroir,
-    connection: ResolvedConnection,
+    target: MediaTarget,
     *,
-    store: MetadataStore,
+    queue: MediaQueue,
     object_store: ObjectStore,
-    destination: Any,
-    pipelines_dir: str | None,
-    lock_wait: float,
+    writer: "MediaWriter",
     backfill: dict[str, Any] | None,
 ) -> DeriveSummary:
     """One batch per kind with a profile. A storage failure ends the run after
     recording what was finished; the rest stays queued."""
-    config = miroir.media
-    assert config is not None
+    config = target.config
     summary = DeriveSummary()
-    writer = _Writer(connection, destination, pipelines_dir, store, lock_wait)
-    kinds = [kind for kind in connection.integration.media if kind.profile]
+    kinds = [kind for kind in target.kinds if kind.profile]
     used = formats(kind.derive_profile for kind in kinds if kind.derive_profile)
     with closing(Decoder(decoders=used)) as decoder:
         for kind in kinds:
@@ -392,29 +389,31 @@ def derive_media(
                 if backfill.get("retry"):
                     # One write carrying the intent: rows stay until replaced.
                     again = writer.with_status(kind.name, backfill["retry"])
-                    store.queue_retry(miroir.id, connection.config.id, kind.name, again)
+                    queue.queue_retry(
+                        target.miroir_id, target.connection_id, kind.name, again
+                    )
                     summary.retried = len(again)
                 summary.walked, summary.walk_finished = _walk(
-                    store, object_store, config, connection, kind, backfill["limit"]
+                    queue, object_store, config, target, kind, backfill["limit"]
                 )
-            batch = store.pending_media(
-                miroir.id, connection.config.id, kind.name, config.derive_batch
+            batch = queue.pending_media(
+                target.miroir_id, target.connection_id, kind.name, config.derive_batch
             )
             if batch:
-                _Batch(
-                    store, object_store, config, connection, kind, writer, decoder
-                ).run(batch, summary)
-    summary.remaining = store.count_pending_media(
-        miroir.id, connection.config.id, [kind.name for kind in kinds]
+                _Batch(queue, object_store, config, target, kind, writer, decoder).run(
+                    batch, summary
+                )
+    summary.remaining = queue.count_pending_media(
+        target.miroir_id, target.connection_id, [kind.name for kind in kinds]
     )
     return summary
 
 
 def _walk(
-    store: MetadataStore,
+    queue: MediaQueue,
     object_store: ObjectStore,
     config: MediaConfig,
-    connection: ResolvedConnection,
+    target: MediaTarget,
     kind: MediaKind,
     limit: int,
 ) -> tuple[int, bool]:
@@ -424,9 +423,9 @@ def _walk(
     are found too. A walk that reaches the end starts again next time; files
     already derived are then recognised without being read.
     """
-    miroir_id, connection_id = connection.miroir_id, connection.config.id
+    miroir_id, connection_id = target.miroir_id, target.connection_id
     prefix = kind_prefix(config.prefix, connection_id, kind.name)
-    after = store.backfill_after(miroir_id, connection_id, kind.name)
+    after = queue.backfill_after(miroir_id, connection_id, kind.name)
     walked = 0
     while walked < limit:
         asked = min(LIST_PAGE, limit - walked)
@@ -438,15 +437,15 @@ def _walk(
             key = listed.name.removeprefix(prefix)
             if listed.name.startswith(prefix) and valid_key(key):
                 found.append((key, listed.size, _utc(listed.modified)))
-        store.add_pending_media(miroir_id, connection_id, kind.name, found)
+        queue.add_pending_media(miroir_id, connection_id, kind.name, found)
         walked += len(listing.objects)
         # The store says whether more follow; a short page does not mean the end.
         if not listing.truncated or not listing.objects:
-            store.set_backfill_after(miroir_id, connection_id, kind.name, "")
+            queue.set_backfill_after(miroir_id, connection_id, kind.name, "")
             return walked, True
         # The last name listed, valid or not, so an invalid key cannot stall it.
         after = listing.objects[-1].name.removeprefix(prefix)
-        store.set_backfill_after(miroir_id, connection_id, kind.name, after)
+        queue.set_backfill_after(miroir_id, connection_id, kind.name, after)
     return walked, False
 
 
@@ -455,12 +454,12 @@ _INTERRUPTED = object()
 
 @dataclass
 class _Batch:
-    store: MetadataStore
+    queue: MediaQueue
     object_store: ObjectStore
     config: MediaConfig
-    connection: ResolvedConnection
+    target: MediaTarget
     kind: MediaKind
-    writer: "_Writer"
+    writer: "MediaWriter"
     decoder: Decoder
 
     def run(self, batch: list[PendingMedia], summary: DeriveSummary) -> None:
@@ -499,8 +498,8 @@ class _Batch:
 
     def flush(self, rows: list[dict[str, Any]], done: list[PendingMedia]) -> None:
         self.writer.write(rows)
-        self.store.remove_pending_media(
-            self.connection.miroir_id, self.connection.config.id, self.kind.name, done
+        self.queue.remove_pending_media(
+            self.target.miroir_id, self.target.connection_id, self.kind.name, done
         )
         rows.clear()
         done.clear()
@@ -508,10 +507,10 @@ class _Batch:
     def derive(self, entry: PendingMedia) -> dict[str, Any] | None | object:
         """The file's row; None when it is no longer stored; _INTERRUPTED when
         the decoder was lost on it."""
-        config, connection, kind = self.config, self.connection, self.kind
+        config, target, kind = self.config, self.target, self.kind
         profile = kind.derive_profile
         assert profile is not None  # only kinds with a profile are derived
-        scope = (connection.miroir_id, connection.config.id, kind.name, entry.key)
+        scope = (target.miroir_id, target.connection_id, kind.name, entry.key)
         size = entry.size
         thumbnails: dict[int, bytes] = {}
         reader = profile.decoder(extension(entry.key))
@@ -524,7 +523,7 @@ class _Batch:
             status = "too_large"
         else:
             name = object_name(
-                config.prefix, connection.config.id, kind.name, entry.key
+                config.prefix, target.connection_id, kind.name, entry.key
             )
             try:
                 stored = _get(self.object_store, name, kind.derive_bound)
@@ -534,7 +533,7 @@ class _Batch:
                 if stored is None:
                     return None
                 size = len(stored.body)
-                self.store.begin_media_attempt(*scope)
+                self.queue.begin_media_attempt(*scope)
                 try:
                     # Only the decoder of the key's extension reads the file.
                     status, thumbnails = self.decoder.thumbnails(
@@ -544,21 +543,21 @@ class _Batch:
                     return _INTERRUPTED
                 except DecoderUnavailable:
                     # Not this file's fault: its try is given back, and the run stops.
-                    self.store.restore_media_attempt(*scope, entry.attempts)
+                    self.queue.restore_media_attempt(*scope, entry.attempts)
                     raise
-                self.store.end_media_attempt(*scope)
+                self.queue.end_media_attempt(*scope)
             for width, body in thumbnails.items():
-                target = thumbnail_name(
+                thumbnail = thumbnail_name(
                     config.prefix,
-                    connection.config.id,
+                    target.connection_id,
                     kind.name,
                     entry.key,
                     width,
                     profile.output,
                 )
-                _storage(self.object_store.put, target, body, profile.content_type)
+                _storage(self.object_store.put, thumbnail, body, profile.content_type)
         return {
-            "connection_id": connection.config.id,
+            "connection_id": target.connection_id,
             "kind": kind.name,
             "key": entry.key,
             "size": size,
@@ -594,29 +593,28 @@ def _utc(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
-class _Writer:
+class MediaWriter:
     """`media_objects` in the connection's dataset, through a dlt pipeline of its
-    own, so the connection's load state is never touched."""
+    own, so the connection's load state is never touched. `lock` holds the
+    connection's own lock around each write, as its loads write the dataset."""
 
     def __init__(
         self,
-        connection: ResolvedConnection,
+        target: MediaTarget,
         destination: Any,
         pipelines_dir: str | None,
-        store: MetadataStore,
-        lock_wait: float,
+        lock: ConnectionLock,
     ):
         import dlt
 
-        self.connection = connection
-        self.store = store
-        self.lock_wait = lock_wait
+        self.target = target
+        self.lock = lock
         options: dict[str, Any] = (
             {"pipelines_dir": pipelines_dir} if pipelines_dir else {}
         )
         self.pipeline = dlt.pipeline(
-            pipeline_name=f"{connection.binding.pipeline_name}_media",
-            dataset_name=connection.binding.dataset_name,
+            pipeline_name=f"{target.pipeline_name}_media",
+            dataset_name=target.dataset_name,
             destination=destination,
             **options,
         )
@@ -636,7 +634,7 @@ class _Writer:
                     f"SELECT {key}, {size} FROM {table}"
                     " WHERE connection_id = %s AND kind = %s AND derive_version = %s"
                     f" AND {key} IN ({marks})",
-                    self.connection.config.id,
+                    self.target.connection_id,
                     kind,
                     DERIVE_VERSION,
                     *keys,
@@ -653,7 +651,7 @@ class _Writer:
         rows = self._query(
             "SELECT {key}, {size}, stored_at FROM {table}"
             f" WHERE connection_id = %s AND kind = %s AND thumbnail_status IN ({marks})",
-            self.connection.config.id,
+            self.target.connection_id,
             kind,
             *statuses,
         )
@@ -686,7 +684,5 @@ class _Writer:
             columns=cast("TTableSchemaColumns", COLUMNS),
         )
         # The connection's own loads write the same dataset.
-        with self.store.connection_lock(
-            self.connection.binding.pipeline_name, self.lock_wait
-        ):
+        with self.lock():
             self.pipeline.run(resource)

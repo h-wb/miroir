@@ -130,7 +130,7 @@ class MiroirService:
         miroir = self.miroir()
         connection = self._connection(miroir, connection_id)
         results = uploads.request_uploads(
-            miroir.media, self.object_store, connection, kind, objects
+            miroir.media, self.object_store, connection.media, kind, objects
         )
         # A file found present may be one whose confirmation was lost.
         self._queue_derive(miroir, connection, kind, objects, results, "present")
@@ -142,7 +142,7 @@ class MiroirService:
         miroir = self.miroir()
         connection = self._connection(miroir, connection_id)
         results = uploads.confirm_uploads(
-            miroir.media, self.object_store, connection, kind, objects
+            miroir.media, self.object_store, connection.media, kind, objects
         )
         self._queue_derive(miroir, connection, kind, objects, results, "stored")
         return results
@@ -174,7 +174,9 @@ class MiroirService:
         if not found:
             return
         try:
-            self.store.add_pending_media(miroir.id, connection.config.id, kind, found)
+            self.store.media_queue.add_pending_media(
+                miroir.id, connection.config.id, kind, found
+            )
         except Exception as error:
             log.exception(
                 "Stored media of %s could not be queued", connection.config.id
@@ -233,7 +235,9 @@ class MiroirService:
     def media_view_url(self, connection_id: str, kind: str, key: str) -> str:
         miroir = self.miroir()
         connection = self._connection(miroir, connection_id)
-        return links.view_url(miroir.media, self.object_store, connection, kind, key)
+        return links.view_url(
+            miroir.media, self.object_store, connection.media, kind, key
+        )
 
     def media_thumbnail(
         self, connection_id: str, kind: str, key: str, width: int
@@ -242,7 +246,7 @@ class MiroirService:
         miroir = self.miroir()
         connection = self._connection(miroir, connection_id)
         return links.read_thumbnail(
-            miroir.media, self.object_store, connection, kind, key, width
+            miroir.media, self.object_store, connection.media, kind, key, width
         )
 
     def media_image(
@@ -251,7 +255,9 @@ class MiroirService:
         """An original image to copy to the browser; links.NotStreamed otherwise."""
         miroir = self.miroir()
         connection = self._connection(miroir, connection_id)
-        return links.read_image(miroir.media, self.object_store, connection, kind, key)
+        return links.read_image(
+            miroir.media, self.object_store, connection.media, kind, key
+        )
 
     def _dashboards(
         self, miroir: ResolvedMiroir, analysis: ResolvedAnalysis
@@ -522,7 +528,7 @@ class MiroirService:
         )
         ran = next((o for o in recent if o["attempts"]), None)
         return {
-            "waiting": self.store.count_pending_media(
+            "waiting": self.store.media_queue.count_pending_media(
                 miroir.id, connection.config.id, kinds
             ),
             "last_requested": recent[0]["created_at"] if recent else None,
@@ -971,7 +977,7 @@ class MiroirService:
         # A report in flight while a former connection of this ID was removed may
         # have landed after its cleanup; it does not belong to the new one.
         self.store.delete_collector_reports(miroir.id, connection_id)
-        self.store.delete_media_records(miroir.id, connection_id)
+        self.store.media_queue.delete_media_records(miroir.id, connection_id)
         try:
             for name, value in credentials.items():
                 assert secrets is not None  # checked above
@@ -1065,7 +1071,7 @@ class MiroirService:
         self.store.delete_secrets(miroir.id, connection_id)
         self.store.revoke_delivery_token(miroir.id, connection_id)
         self.store.delete_collector_reports(miroir.id, connection_id)
-        self.store.delete_media_records(miroir.id, connection_id)
+        self.store.media_queue.delete_media_records(miroir.id, connection_id)
 
     # ---- Orchestrator -------------------------------------------------------------
 

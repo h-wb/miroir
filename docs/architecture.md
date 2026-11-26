@@ -25,7 +25,7 @@ towards its parts, one step at a time, and this page says where it is now.
 | `src/kernel/` | The shared vocabulary: `models.py` (`StrictModel`, `Identifier`, `DatabaseIdentifier`, `SecretKey`) and `errors.py` (`OperationError`, the product error the interface and the CLI show, and its bases `Unavailable` and `Timeout`) | Import anything but the standard library and pydantic |
 | `src/integrations/` (connectors) | Know one source: what it can read (a fetch, file formats) and how to turn it into tables | Know how a file arrived, when anything runs, or where it is stored |
 | `src/analyses/` | Catalog of analysis packages (dbt models and dashboards) and the inputs they need | Load data |
-| `src/media/` | The files rows point at: the object store and its S3 client, names, upload and view links, the `media` section, media kinds and profiles, the derive run and its decoder | Have routes, or know about HTTP, the scheduler, the viewer or the connector registry |
+| `src/media/` | The files rows point at: the object store and its S3 client, names, upload and view links, the `media` section, media kinds and profiles, the derive queue's tables and repository, the derive run and its decoder | Have routes, or know about HTTP, the scheduler, the viewer or the connector registry |
 | `src/core/` | Configuration, receiving and storing files, opening a connection's inputs, running and recording loads, secrets | Know about HTTP, the command line or the scheduler |
 | `src/pipelines/` | The flow entry points the scheduler runs | Hold product logic; they call core |
 | `src/adapters/` | Talk to the scheduler (Prefect): plan and apply deployments, submit, observe | Decide what a load is |
@@ -39,7 +39,7 @@ towards its parts, one step at a time, and this page says where it is now.
 | `kernel` | Nothing: the standard library and pydantic only |
 | `integrations` | `kernel`, and `media.kinds` (to declare a kind) |
 | `analyses` | `kernel` only |
-| `media` | `kernel`, and for now the debt below |
+| `media` | `kernel` only |
 | `core` | `kernel`, `integrations`, `analyses`, `media` |
 | `pipelines` | `kernel`, `core`, `media` (the flow builds the worker's bucket client) |
 | `adapters` | `kernel`, `core`, `pipelines` |
@@ -49,13 +49,14 @@ towards its parts, one step at a time, and this page says where it is now.
 Connectors and analyses take their base types and errors from the kernel, never
 from `core`.
 
-Media still imports the control plane in six named places, listed in the test
-as debt: `ResolvedConnection` in `derive`, `links` and `uploads`,
-`ResolvedMiroir` in `derive`, and `MetadataStore` and `PendingMedia` (the
-queue's store and tables, in `src.core.operations`) in `derive`. Step 5 of the
-package split moves the queue into media and removes them; no line may be
-added, and one no longer used fails the test until it is removed. Media never
-imports fastapi, starlette or prefect.
+Media never imports the control plane (package split, step 5). The control
+plane builds what media reads of a connection from its own configuration
+(`MediaConnection` and `MediaTarget`, in `src/media/target.py`) and hands it
+in, with the connection's lock for the derive run's writer. Media owns the
+derive queue's tables and their repository (`src/media/queue.py`); the
+metadata store holds them in its database, its metadata and its one migration
+sequence (`src.core.operations`), and reaches them as `store.media_queue`.
+Media never imports fastapi, starlette or prefect.
 
 Also: nothing under `src/` imports the collector, and a connector's `formats.py` and
 `contracts.py` never import dlt at module level, so files can be validated

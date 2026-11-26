@@ -1122,7 +1122,7 @@ def _derive(
     and otherwise carries on itself. The outcome is a transformation: nothing
     of the connection's own data is loaded, so its status is unchanged.
     """
-    from src.media.derive import derive_media
+    from src.media.derive import MediaWriter, derive_media
 
     store = run.store
     if miroir.media is None or run.object_store is None:
@@ -1130,16 +1130,22 @@ def _derive(
         _block(store, operation, "Blocked", reason)
         raise OperationError(reason)
     object_store = run.object_store
+    target = connection.media_target(miroir.media)
+    pipeline_name = connection.binding.pipeline_name
 
     def batch(backfill: dict[str, Any] | None) -> Any:
+        writer = MediaWriter(
+            target,
+            run.destination,
+            run.pipelines_dir,
+            # The connection's own lock, around each write to its dataset.
+            lambda: store.connection_lock(pipeline_name, run.lock_wait),
+        )
         return derive_media(
-            miroir,
-            connection,
-            store=store,
+            target,
+            queue=store.media_queue,
             object_store=object_store,
-            destination=run.destination,
-            pipelines_dir=run.pipelines_dir,
-            lock_wait=run.lock_wait,
+            writer=writer,
             backfill=backfill,
         )
 
