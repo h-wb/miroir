@@ -19,10 +19,10 @@ import requests
 from fastapi.testclient import TestClient
 
 from src.cli.compose import web_app
-from src.core.config import load_miroir
-from src.core.operations import MetadataStore, OrchestratorUnavailable
-from src.core.runner import execute_operation
-from src.core.service import InlineExecutor, MiroirService, SubprocessExecutor
+from src.control.config import load_miroir
+from src.control.operations import MetadataStore, OrchestratorUnavailable
+from src.control.runner import execute_operation
+from src.control.service import InlineExecutor, MiroirService, SubprocessExecutor
 from src.kernel.errors import OperationError
 from src.web.app import create_app
 from src.web.shell import SESSION_COOKIE
@@ -698,7 +698,7 @@ class WebTests(WebFixture):
         self.assertEqual(self.config_path.read_text(), original + "\n")
 
     def test_prefect_run_links_use_the_backend_run(self):
-        from src.core.runner import run_connection
+        from src.control.runner import run_connection
 
         miroir = load_miroir(self.config_path)
         run_connection(

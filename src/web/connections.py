@@ -12,9 +12,9 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from src.core.config import ConfigurationError
-from src.core.secrets import SecretResolutionError
-from src.core.service import MiroirService
+from src.control.config import ConfigurationError
+from src.control.secrets import SecretResolutionError
+from src.control.service import MiroirService
 from src.kernel.errors import OperationError
 from src.web.app import error_status
 

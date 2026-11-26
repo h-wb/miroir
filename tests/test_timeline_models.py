@@ -23,11 +23,11 @@ import psycopg2.errors
 from dbt.cli.main import dbtRunner
 
 from src.analyses.catalog import PACKAGES
-from src.core.analysis import analysis_plan
-from src.core.artifacts import submit_artifact
-from src.core.config import ConfigurationError, parse_miroir
-from src.core.operations import MetadataStore
-from src.core.runner import import_artifact
+from src.control.analysis import analysis_plan
+from src.control.artifacts import submit_artifact
+from src.control.config import ConfigurationError, parse_miroir
+from src.control.operations import MetadataStore
+from src.control.runner import import_artifact
 from src.media.config import MediaConfig
 from src.media.derive import DERIVE_VERSION, MediaWriter
 from src.pipelines.transform import build_connection_models

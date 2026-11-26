@@ -26,11 +26,11 @@ towards its parts, one step at a time, and this page says where it is now.
 | `src/integrations/` (connectors) | Know one source: what it can read (a fetch, file formats) and how to turn it into tables | Know how a file arrived, when anything runs, or where it is stored |
 | `src/analyses/` | Catalog of analysis packages (dbt models and dashboards) and the inputs they need; what the viewer shows of them, as data (`views.py`: `Withhold`, where rows hide their files) | Load data |
 | `src/media/` | The files rows point at: the object store and its S3 client, names, upload and view links, the `media` section, media kinds and profiles, the derive queue's tables and repository, the derive run and its decoder | Have routes, or know about HTTP, the scheduler, the viewer or the connector registry |
-| `src/core/` | Configuration, receiving and storing files, opening a connection's inputs, running and recording loads, secrets | Know about HTTP, the command line or the scheduler |
+| `src/control/` | Configuration, receiving and storing files, opening a connection's inputs, running and recording loads, secrets | Know about HTTP, the command line or the scheduler |
 | `src/viewer/` | Reading the warehouse and showing it (decision 040): the reader and its read-only sessions, the timeline's API, Day view, search and conversation pages, the `/media` view route and its withheld check, their templates and static files, and `ViewerSettings`, what it reads of the installation | Import the control plane, web, the connectors, dlt, prefect, Pillow or boto3, or read the configuration file |
-| `src/pipelines/` | The flow entry points the scheduler runs | Hold product logic; they call core |
+| `src/pipelines/` | The flow entry points the scheduler runs | Hold product logic; they call control |
 | `src/adapters/` | Talk to the scheduler (Prefect): plan and apply deployments, submit, observe | Decide what a load is |
-| `src/web/`, `src/cli/` | Transport and presentation; both call the same core services. `src/web/app.py` is the control plane's admin part (its API and pages); `src/cli/compose.py` is the web server's composition root | Contain logic of their own; web never imports the viewer |
+| `src/web/`, `src/cli/` | Transport and presentation; both call the same control services. `src/web/app.py` is the control plane's admin part (its API and pages); `src/cli/compose.py` is the web server's composition root | Contain logic of their own; web never imports the viewer |
 | `src/web/shell/` (the web shell) | One HTTP surface both the admin part and the viewer mount: the token and session checks, `/login` and `/logout`, the security headers with a content security policy per mounted part, `/static/`, the template loader with `base.html`, `login.html` and `error.html`, and the header's navigation, to which each part adds its links | Import anything of Miroir but the kernel |
 | `collector/` (`miroir-collector`) | On a personal machine: read a local source, withhold secrets, deliver to a receiving URL, remember what was acknowledged | Parse or load anything, or import any server code |
 
@@ -42,16 +42,16 @@ towards its parts, one step at a time, and this page says where it is now.
 | `integrations` | `kernel`, and `media.kinds` (to declare a kind) |
 | `analyses` | `kernel` only |
 | `media` | `kernel` only |
-| `core` | `kernel`, `integrations`, `analyses`, `media` |
-| `pipelines` | `kernel`, `core`, `media` (the flow builds the worker's bucket client) |
-| `adapters` | `kernel`, `core`, `pipelines` |
+| `control` | `kernel`, `integrations`, `analyses`, `media` |
+| `pipelines` | `kernel`, `control`, `media` (the flow builds the worker's bucket client) |
+| `adapters` | `kernel`, `control`, `pipelines` |
 | `viewer` | `kernel`, `media`, `analyses.views` |
-| `web` | `kernel`, `core`, `integrations`, `analyses`, `media`, the shell |
+| `web` | `kernel`, `control`, `integrations`, `analyses`, `media`, the shell |
 | `web.shell` | `kernel` only (and fastapi, starlette, jinja2) |
-| `cli` | `kernel`, `core`, `integrations`, `analyses`, `adapters`, `web` (the shell included), `media`, `viewer` |
+| `cli` | `kernel`, `control`, `integrations`, `analyses`, `adapters`, `web` (the shell included), `media`, `viewer` |
 
 Connectors and analyses take their base types and errors from the kernel, never
-from `core`.
+from `control`.
 
 Media never imports the control plane (package split, step 5). The control
 plane builds what media reads of a connection from its own configuration
@@ -59,7 +59,7 @@ plane builds what media reads of a connection from its own configuration
 in, with the connection's lock for the derive run's writer. Media owns the
 derive queue's tables and their repository (`src/media/queue.py`); the
 metadata store holds them in its database, its metadata and its one migration
-sequence (`src.core.operations`), and reaches them as `store.media_queue`.
+sequence (`src.control.operations`), and reaches them as `store.media_queue`.
 Media never imports fastapi, starlette or prefect.
 
 The viewer (package split, step 6) is the server's only access to the
@@ -116,10 +116,10 @@ A new folder under `src/` fails the boundary test until it is given a rule.
 
 How data gets in (a fetch, or a delivered file by upload, receiving URL or
 watched folder), how media skips the import path, and how it is read are the
-[flows](miroir/flows.md). In code terms: every transport is in `core`; a sender
+[flows](miroir/flows.md). In code terms: every transport is in `control`; a sender
 such as the collector is a client of the receiving URL, not a transport of its
 own; media are never parsed, so they are not artifacts and never go through a
-connector's format, and core reaches the bucket only through media's
+connector's format, and control reaches the bucket only through media's
 `ObjectStore` protocol (`media/store.py`), implemented by `media/s3.py`.
 
 ## Where a new thing goes
@@ -132,5 +132,5 @@ connector's format, and core reaches the bucket only through media's
   `media/profiles.py` if thumbnails are made, and a media function on the
   source.
 - A new way to schedule or run, or a new place to store: an adapter.
-- A new screen or command: `web` or `cli`, calling a core service; a new view
+- A new screen or command: `web` or `cli`, calling a control service; a new view
   of the warehouse: `viewer`, reading what it needs from its settings.

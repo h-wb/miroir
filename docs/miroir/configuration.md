@@ -11,7 +11,7 @@ created: 2026-11-24T23:30
 
 # Configuration
 
-Miroir reads one JSON file, `miroir.json`, validated by `src/core/config.py`
+Miroir reads one JSON file, `miroir.json`, validated by `src/control/config.py`
 (decision 001). It is the desired state: the interface, the API and the CLI
 all edit it, and each write checks the file's revision first, so two editors
 cannot overwrite each other (a stale edit is refused as a conflict). Unknown

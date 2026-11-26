@@ -19,8 +19,8 @@ import duckdb
 import requests
 from requests.hooks import dispatch_hook
 
-from src.core.config import parse_miroir
-from src.core.sources import open_fetch, open_import
+from src.control.config import parse_miroir
+from src.control.sources import open_fetch, open_import
 from tests.test_miroir import example
 
 

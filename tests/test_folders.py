@@ -9,10 +9,10 @@ from pathlib import Path
 import dlt
 import duckdb
 
-from src.core.artifacts import submit_artifact
-from src.core.config import ConfigurationError, parse_miroir
-from src.core.operations import MetadataStore
-from src.core.runner import IngestionFailed, import_artifact, run_connection
+from src.control.artifacts import submit_artifact
+from src.control.config import ConfigurationError, parse_miroir
+from src.control.operations import MetadataStore
+from src.control.runner import IngestionFailed, import_artifact, run_connection
 from src.kernel.errors import OperationError
 
 CUTOFF = "2026-06-04"

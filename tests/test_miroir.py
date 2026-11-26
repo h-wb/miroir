@@ -9,7 +9,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from src.cli.main import main
-from src.core.config import ConfigurationError, parse_miroir
+from src.control.config import ConfigurationError, parse_miroir
 
 ROOT = Path(__file__).resolve().parents[1]
 

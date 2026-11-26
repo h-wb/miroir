@@ -3,7 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from src.core.config import load_miroir
+from src.control.config import load_miroir
 from src.kernel.errors import OperationError
 from src.media import links, names, uploads
 from src.media.config import MediaConfig

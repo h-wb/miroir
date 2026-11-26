@@ -21,7 +21,7 @@ from typing import Any
 from PIL import Image
 from pillow_heif import register_heif_opener
 
-from src.core.runner import request_derive
+from src.control.runner import request_derive
 from tests.test_derive import DeriveFixture, encoded, jpeg
 
 FIXTURE = Path(__file__).parent / "fixtures" / "media_identity.json"

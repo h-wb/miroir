@@ -8,8 +8,8 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from src.core.config import ConfigurationError, load_miroir, metadata_url
-from src.core.secrets import SecretBox, SecretKeyError, generate_key
+from src.control.config import ConfigurationError, load_miroir, metadata_url
+from src.control.secrets import SecretBox, SecretKeyError, generate_key
 
 
 def saved_secret(path: Path, generate: Callable[[], str]) -> str:

@@ -7,8 +7,8 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from src.cli.compose import web_app
-from src.core.operations import MetadataStore
-from src.core.service import InlineExecutor, MiroirService
+from src.control.operations import MetadataStore
+from src.control.service import InlineExecutor, MiroirService
 from tests.fakes import FakeObjectStore
 
 ADMIN = "test-admin-token-0123456"

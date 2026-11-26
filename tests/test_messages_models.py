@@ -20,11 +20,11 @@ from unittest.mock import patch
 import dlt
 import psycopg2
 
-from src.core.analysis import analysis_plan
-from src.core.artifacts import submit_artifact
-from src.core.config import parse_miroir
-from src.core.operations import MetadataStore
-from src.core.runner import import_artifact
+from src.control.analysis import analysis_plan
+from src.control.artifacts import submit_artifact
+from src.control.config import parse_miroir
+from src.control.operations import MetadataStore
+from src.control.runner import import_artifact
 from src.integrations.apple_messages.formats import FIELDS
 from src.pipelines.transform import build_connection_models
 from tests.postgres import start_postgres

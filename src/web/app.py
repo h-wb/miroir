@@ -20,16 +20,16 @@ from fastapi import FastAPI, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from src.core.config import ConfigurationConflict, ConfigurationError
-from src.core.operations import OrchestratorUnavailable
-from src.core.reports import (
+from src.control.config import ConfigurationConflict, ConfigurationError
+from src.control.operations import OrchestratorUnavailable
+from src.control.reports import (
     INVALID_REPORT,
     MAX_REPORT_BYTES,
     InvalidReport,
     parse_report,
 )
-from src.core.secrets import SecretKeyError, SecretResolutionError
-from src.core.service import MiroirService
+from src.control.secrets import SecretKeyError, SecretResolutionError
+from src.control.service import MiroirService
 from src.integrations.validation import InvalidArtifact
 from src.kernel.errors import OperationError
 from src.web.metrics import render_metrics
@@ -82,7 +82,7 @@ class UploadTooLarge(ValueError):
 
 def error_status(error: Exception) -> int:
     """HTTP status of a product error. 503 asks clients to retry later."""
-    from src.core.runner import AlreadyImported
+    from src.control.runner import AlreadyImported
 
     if isinstance(error, (ConfigurationConflict, AlreadyImported)):
         return 409
@@ -644,7 +644,7 @@ def mount_admin(
     def import_(
         connection_id: str, artifact_id: str, replay: bool = Form(False)
     ) -> Response:
-        from src.core.runner import AlreadyImported
+        from src.control.runner import AlreadyImported
 
         try:
             service.request_import(connection_id, artifact_id, replay)

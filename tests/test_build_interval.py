@@ -11,16 +11,16 @@ from datetime import datetime, timedelta
 import dlt
 import sqlalchemy as sa
 
-from src.core.config import load_miroir
-from src.core.operations import attempts, operations
-from src.core.runner import (
+from src.control.config import load_miroir
+from src.control.operations import attempts, operations
+from src.control.runner import (
     Execution,
     _deferred,
     _new_operation,
     execute_operation,
     request_models,
 )
-from src.core.service import InlineExecutor
+from src.control.service import InlineExecutor
 from tests.test_web import WebFixture
 
 INTERVAL = timedelta(minutes=5)
@@ -193,7 +193,7 @@ class BuildIntervalTests(WebFixture):
 
         self.defer = refuse
         self.load()
-        with self.assertLogs("src.core.runner", "WARNING"):
+        with self.assertLogs("src.control.runner", "WARNING"):
             load = self.load()
         self.assertEqual(self.built, ["Music analysis"] * 2)
         self.assertEqual(self.store.attempts(load)[-1]["transformation"], "succeeded")
@@ -204,7 +204,7 @@ class BuildIntervalTests(WebFixture):
             [("blocked", "NotScheduled")],
         )
         # The failed schedule is not a build: the next load tries to defer again.
-        with self.assertLogs("src.core.runner", "WARNING"):
+        with self.assertLogs("src.control.runner", "WARNING"):
             self.load()
         self.assertEqual(len(self.scheduled), 2)
 

@@ -7,7 +7,7 @@ from pathlib import Path
 from dbt.cli.main import dbtRunner
 from prefect.concurrency.sync import concurrency
 
-from src.core.analysis import AnalysisPlan
+from src.control.analysis import AnalysisPlan
 
 DBT_DIR = Path(__file__).parents[2] / "dbt"
 

@@ -1,6 +1,6 @@
 """The derive queue's tables, moved into media (package split, step 5).
 
-`fixtures/media_queue_ddl.sql` was generated from `src.core.operations` before
+`fixtures/media_queue_ddl.sql` was generated from `src.control.operations` before
 the move. The tables the metadata store creates, and those media reads, must
 compile to the same DDL in both dialects: moving them changed no schema, so
 `SCHEMA_VERSION` stayed.
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.schema import CreateIndex, CreateTable
 
-from src.core import operations
+from src.control import operations
 from src.media import queue
 
 FIXTURE = Path(__file__).parent / "fixtures" / "media_queue_ddl.sql"

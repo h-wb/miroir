@@ -82,7 +82,7 @@ bulk export and the automatic ones never overlap.
 ## How one load runs
 
 Every path, the interface, the API, the CLI, a Prefect schedule, calls
-`run_connection` in `src/core/runner.py` (decisions 005, 006):
+`run_connection` in `src/control/runner.py` (decisions 005, 006):
 
 1. Register the operation, or adopt the requested one; a Prefect retry adds an
    attempt to its flow run's operation. Without the metadata store nothing loads.
@@ -216,7 +216,7 @@ SQLAlchemy Core over SQLite (development, tests) or PostgreSQL, schema
 It holds operations and attempts, the artifact registry and imports, encrypted
 credentials, hashed delivery tokens, receipt times, collector reports, the media
 queue and backfill walks. `schema_info` holds the version, now 8
-(`SCHEMA_VERSION` in `src/core/operations.py`); startup migrates an older store
+(`SCHEMA_VERSION` in `src/control/operations.py`); startup migrates an older store
 and refuses a newer one.
 
 An upgrade of the schema is one-way. Release the server, the worker and the

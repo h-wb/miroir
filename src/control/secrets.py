@@ -14,8 +14,8 @@ from dataclasses import dataclass
 
 from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 
-from src.core.config import ResolvedConnection, SecretReference
-from src.core.operations import MetadataStore
+from src.control.config import ResolvedConnection, SecretReference
+from src.control.operations import MetadataStore
 
 KEY_VARIABLE = "MIROIR_SECRET_KEY"
 

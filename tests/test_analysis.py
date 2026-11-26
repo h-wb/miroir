@@ -14,17 +14,17 @@ from unittest.mock import patch
 import dlt
 import psycopg2
 
-from src.core.analysis import analysis_plan
-from src.core.artifacts import submit_artifact
-from src.core.config import ConfigurationError, parse_miroir
-from src.core.operations import MetadataStore
-from src.core.runner import (
+from src.control.analysis import analysis_plan
+from src.control.artifacts import submit_artifact
+from src.control.config import ConfigurationError, parse_miroir
+from src.control.operations import MetadataStore
+from src.control.runner import (
     execute_operation,
     import_artifact,
     request_models,
     run_connection,
 )
-from src.core.service import InlineExecutor, MiroirService
+from src.control.service import InlineExecutor, MiroirService
 from src.pipelines.transform import build_connection_models
 from tests.postgres import start_postgres
 from tests.test_miroir import example

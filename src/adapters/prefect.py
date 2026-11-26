@@ -21,8 +21,8 @@ from datetime import datetime
 from functools import wraps
 from typing import Any, Literal, ParamSpec, TypedDict, TypeVar
 
-from src.core.config import ResolvedMiroir
-from src.core.operations import MetadataStore, OrchestratorUnavailable
+from src.control.config import ResolvedMiroir
+from src.control.operations import MetadataStore, OrchestratorUnavailable
 from src.kernel.errors import OperationError
 
 P = ParamSpec("P")

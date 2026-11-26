@@ -18,9 +18,9 @@ from datetime import date, datetime
 from fastapi.testclient import TestClient
 
 from src.cli.compose import web_app
-from src.core.analysis import analysis_plan
-from src.core.config import parse_miroir
-from src.core.service import InlineExecutor, MiroirService
+from src.control.analysis import analysis_plan
+from src.control.config import parse_miroir
+from src.control.service import InlineExecutor, MiroirService
 from src.viewer.reader import TimelineDatabase, TimelineReader
 from src.viewer.timeline import _encoded
 from tests.test_messages_models import chat, message

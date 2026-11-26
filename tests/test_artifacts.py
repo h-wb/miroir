@@ -22,10 +22,10 @@ import sqlalchemy as sa
 from sqlalchemy.exc import OperationalError
 
 from src.cli.main import main
-from src.core.artifacts import receive_file, submit_artifact
-from src.core.config import parse_miroir
-from src.core.operations import SCHEMA_VERSION, MetadataStore, schema_info
-from src.core.runner import AlreadyImported, IngestionFailed, import_artifact
+from src.control.artifacts import receive_file, submit_artifact
+from src.control.config import parse_miroir
+from src.control.operations import SCHEMA_VERSION, MetadataStore, schema_info
+from src.control.runner import AlreadyImported, IngestionFailed, import_artifact
 from src.integrations.registry import INTEGRATIONS
 from src.integrations.validation import InvalidArtifact
 from src.kernel.errors import OperationError
@@ -176,7 +176,7 @@ class ArtifactTests(unittest.TestCase):
         health = self.health.integration
         newer = replace(health, formats=(replace(health.formats[0], version=2),))
         registry = {**INTEGRATIONS, "apple_health": newer}
-        with patch("src.core.config.INTEGRATIONS", registry):
+        with patch("src.control.config.INTEGRATIONS", registry):
             self.miroir = parse_miroir(json.dumps(self.config))
         outcome = self.load(artifact)
         self.assertEqual(
@@ -194,7 +194,7 @@ class ArtifactTests(unittest.TestCase):
             original(attempt, **values)
 
         store.update_attempt = lost_completion
-        with self.assertLogs("src.core.runner", "ERROR"):
+        with self.assertLogs("src.control.runner", "ERROR"):
             self.assertFalse(self.load(artifact, store=store).recorded)
         # Not recorded as imported, so a plain import runs again without duplicates.
         self.assertEqual(self.load(artifact).ingestion, "succeeded")

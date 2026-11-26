@@ -21,9 +21,9 @@ import sqlalchemy as sa
 from sqlalchemy.exc import OperationalError
 
 from src.cli.main import main
-from src.core.analysis import analysis_plan
-from src.core.config import metadata_url, parse_miroir
-from src.core.operations import (
+from src.control.analysis import analysis_plan
+from src.control.config import metadata_url, parse_miroir
+from src.control.operations import (
     SCHEMA_VERSION,
     ConnectionBusy,
     MetadataStore,
@@ -32,16 +32,16 @@ from src.core.operations import (
     media_pending,
     schema_info,
 )
-from src.core.operations import (
+from src.control.operations import (
     attempts as attempt_table,
 )
-from src.core.runner import (
+from src.control.runner import (
     IngestionFailed,
     execute_operation,
     request_models,
     run_connection,
 )
-from src.core.secrets import SecretResolutionError, resolve_credentials
+from src.control.secrets import SecretResolutionError, resolve_credentials
 from src.kernel.errors import OperationError
 from tests.test_miroir import example
 
@@ -367,7 +367,7 @@ class OperationTests(unittest.TestCase):
         holder.start()
         held.wait(10)
         threading.Timer(1.5, release.set).start()
-        with patch("src.core.operations.LOCK_POLL_SECONDS", 0.1):
+        with patch("src.control.operations.LOCK_POLL_SECONDS", 0.1):
             outcome = self.run_music(miroir, lock_wait=10)
         holder.join()
         self.assertEqual(outcome.ingestion, "succeeded")
@@ -384,7 +384,7 @@ class OperationTests(unittest.TestCase):
             original(attempt, **values)
 
         store.update_attempt = flaky
-        with self.assertLogs("src.core.runner", "ERROR"):
+        with self.assertLogs("src.control.runner", "ERROR"):
             outcome = self.run_music(miroir, store=store)
         self.assertFalse(outcome.recorded)
         self.assertEqual(outcome.ingestion, "succeeded")
@@ -410,7 +410,7 @@ class OperationTests(unittest.TestCase):
             reopened.migrate()
 
     def test_version_3_upgrade_adds_delivery_tokens_and_preserves_history(self):
-        from src.core.runner import request_sync
+        from src.control.runner import request_sync
 
         operation = request_sync(
             self.miroir(), "music", store=self.store, origin="request"
@@ -451,7 +451,7 @@ class OperationTests(unittest.TestCase):
     def test_version_7_upgrade_adds_the_media_queue_and_keeps_history(self):
         from datetime import datetime, timezone
 
-        from src.core.runner import request_sync
+        from src.control.runner import request_sync
 
         operation = request_sync(
             self.miroir(), "music", store=self.store, origin="request"

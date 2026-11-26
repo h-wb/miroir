@@ -14,9 +14,9 @@ from collections.abc import Callable
 from fastapi import FastAPI
 
 from src.analyses.views import WITHHOLDS
-from src.core.analysis import analysis_plan
-from src.core.config import ConfigurationError, ResolvedAnalysis, ResolvedMiroir
-from src.core.service import MiroirService
+from src.control.analysis import analysis_plan
+from src.control.config import ConfigurationError, ResolvedAnalysis, ResolvedMiroir
+from src.control.service import MiroirService
 from src.kernel.errors import OperationError
 from src.media.store import ObjectStore
 from src.viewer import STATIC_DIR as VIEWER_STATIC

@@ -13,10 +13,10 @@ from unittest.mock import patch
 import dlt
 import duckdb
 
-from src.core.artifacts import submit_artifact
-from src.core.config import parse_miroir
-from src.core.operations import MetadataStore
-from src.core.runner import import_artifact
+from src.control.artifacts import submit_artifact
+from src.control.config import parse_miroir
+from src.control.operations import MetadataStore
+from src.control.runner import import_artifact
 from src.integrations.browser_history.formats import read_rows, validate_batch
 from src.integrations.validation import InvalidArtifact
 
