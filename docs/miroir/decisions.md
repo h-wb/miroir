@@ -27,6 +27,7 @@ amendment under it. Older entries say "workspace" (renamed Miroir by 014) and
 | [006](#006--runner-ordering-register-lock-load-record-model) | Runner ordering: register, lock, load, record, model | Accepted; building superseded by 019, 022 |
 | [007](#007--prefect-entry-point-exists-but-is-not-deployed) | Prefect entry point exists but is not deployed | Superseded by 012, 013 |
 | [008](#008--content-addressed-artifacts-and-explicit-versioned-imports) | Content-addressed artifacts and explicit, versioned imports | Accepted |
+| | [008 amendment — Health loads every collection of the export](#008-amendment--health-loads-every-collection-of-the-export) | Accepted |
 | [009](#009--n8n-is-a-temporary-receiver-for-health-auto-export) | n8n is a temporary receiver for Health Auto Export | Done (2026-11-11) |
 | [010](#010--small-server-rendered-interface-over-shared-services) | Small server-rendered interface over shared services | Accepted |
 | [011](#011--connection-secrets-encrypted-in-the-workspace-pluggable-backends) | Connection secrets: encrypted in the workspace, pluggable backends | Accepted |
@@ -266,6 +267,38 @@ bump the version) in one transaction, and refuses versions it does not know.
 Not yet: archive formats and resource limits, retention/deletion operations, a
 Prefect entry point for imports, migrating the n8n drop folder to `submit`,
 transformation-only retries, and native Apple Health XML or other formats.
+
+### 008 amendment — Health loads every collection of the export
+
+Status: accepted, 2026-11-26. Step 12 of
+[the package split](../decisions/2026-11-25-package-split.md) (*ELT*), for Apple
+Health.
+
+**Nothing in an export is dropped.** `metrics`, `workouts`, `stateOfMind` and
+`medications` keep their tables, keys and the `role`/cutoff split unchanged.
+Every other collection under `data` loads into one generic table,
+`other_records`: one row per object, with `collection`, `item` (the object as
+JSON), `record_key` (SHA-256 of the object's canonical JSON), and the import it
+last came from, `file_sha256` and `role`. The key is `(collection, record_key)`,
+so a replay or an overlapping export merges the same object instead of adding
+it twice. No schema is invented per collection: a collection that analyses need
+gets a table of its own later, and dbt reads `other_records` until then.
+
+**The cutoff applies where a date is.** An object with a `start` or `date`
+(the fields the known collections are dated by) is loaded by the role on its
+side of the cutoff; an object with neither is loaded by every role, and its key
+merges the copies.
+
+**The import's report is a table.** File imports have no report of their own,
+so `other_collections` counts, per file, role and collection, the entries it
+held, those loaded for that role, and those that are not objects
+(`unreadable`, counted, not loaded). Its key is
+`(file_sha256, role, collection)`, so a replay rewrites the same row.
+
+**Old exports.** The parser version goes to 2. Stored exports are imported
+again by a plain import, without `--replay`, and a watched folder re-imports the
+files still in it on its next sync. An export holding only other collections is
+now accepted; one with an empty `data` is still refused.
 
 ## 009 — n8n is a temporary receiver for Health Auto Export
 

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from src.integrations.validation import InvalidArtifact
 
+# The collections with tables of their own; any other is loaded as it is.
 HEALTH_COLLECTIONS = ("metrics", "workouts", "stateOfMind", "medications")
 
 
@@ -17,9 +18,9 @@ def validate_export(path: Path) -> None:
     data = document.get("data") if isinstance(document, dict) else None
     if not isinstance(data, dict):
         raise InvalidArtifact("Expected a top-level 'data' object")
-    present = [key for key in HEALTH_COLLECTIONS if key in data]
-    if not present:
+    if not data:
         raise InvalidArtifact("No Health Auto Export collections found")
+    present = [key for key in HEALTH_COLLECTIONS if key in data]
     for key in present:
         entries = data[key]
         if not isinstance(entries, list) or not all(

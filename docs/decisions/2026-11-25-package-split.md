@@ -169,9 +169,11 @@ only these are allowed:
 Dropping a field is a privacy or size decision, written down with the source's
 allowlist: the collector's column lists for Messages
 (`collector/miroir_collector/sources/apple_messages.py:41-91`) and ScreenMemory
-(`collector/miroir_collector/sources/screenmemory.py:52-61`), the four Health
-collections (`src/integrations/apple_health/source.py:11-16`) and GitHub's
-commit `files` (`src/integrations/github/client.py:131`). A business rule is
+(`collector/miroir_collector/sources/screenmemory.py:52-61`), and GitHub's
+commit `files` (`src/integrations/github/client.py:131`). Health drops nothing:
+the collections without a table of their own load into `other_records`
+([decision 008 amendment](../miroir/decisions.md#008-amendment--health-loads-every-collection-of-the-export)).
+A business rule is
 not an added column: the Apple date conversion
 (`src/integrations/apple_messages/source.py:13-34,60-61`), which staging reads
 instead of the raw dates, moves to a dbt macro, and the `*_at` columns keep
