@@ -3349,7 +3349,7 @@ collector's upload and confirm routes stay in the control plane.
 
 ### 040 amendment — Blobs on the viewer's pages only
 
-Status: accepted, 2026-11-26. Step 8 of
+Status: accepted, 2026-11-26, with pull request #65. Step 8 of
 [the package split](../decisions/2026-11-25-package-split.md). Revises the
 policy *on every response* of phase 0.
 
