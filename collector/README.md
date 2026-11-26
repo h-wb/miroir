@@ -82,7 +82,10 @@ same delivery token. It holds what `status` already shows: each pass's outcome,
 counts, step, reason and HTTP status, plus the run's start and end times, the
 collector's version, the source's name, whether a batch is waiting in the
 spool, and how many earlier runs could not be reported. Nothing from the
-source, no token and no address.
+source, no token and no address. Miroir takes at most 40 entries in a map of
+counts (such as Apple Messages' `masked` or `blanked`), so a larger map is
+reported as its 39 largest entries and `other`, their rest summed; `status`
+and the log line keep it whole.
 
 Reporting never affects a run: a report that cannot be sent leaves the
 outcome, the exit code, the saved positions and the spool exactly as they

@@ -5,12 +5,13 @@
 -- The source's handle is the other person in a direct chat for my own messages
 -- too, so a sender is only ever set for messages from someone else. The sender
 -- is the person (messages_address); sender_written keeps the handle as written.
--- A time before 2001-01-02 is no time (messages_dated).
+-- Times are the raw Apple dates as UTC (apple_time); a time before 2001-01-02
+-- is no time (messages_dated).
 with raw as (
     {{ optional_input('apple_messages', 'messages', {
         'guid': 'text', 'text': 'text', 'text_source': 'text', 'service': 'text',
-        'handle': 'text', 'is_from_me': 'boolean', 'sent_at': 'timestamptz',
-        'edited_at': 'timestamptz', 'retracted_at': 'timestamptz',
+        'handle': 'text', 'is_from_me': 'boolean', 'date': 'bigint',
+        'date_edited': 'bigint', 'date_retracted': 'bigint',
         'item_type': 'bigint', 'associated_message_type': 'bigint',
         'associated_message_guid': 'text', 'thread_originator_guid': 'text',
         'is_audio_message': 'boolean'
@@ -20,7 +21,7 @@ typed as (
     select
         *,
         coalesce(is_from_me, false) as from_me,
-        {{ messages_dated('sent_at') }} as dated_at,
+        {{ messages_dated(apple_time('"date"')) }} as dated_at,
         {{ messages_row_kind('item_type', 'associated_message_type') }} as kind,
         -- U+FFFC stands in the text for each attachment; it is not text.
         case when text_source <> 'unreadable'
@@ -39,8 +40,8 @@ select
     visible_text <> '' as has_text,
     char_length(visible_text) as text_length,
     thread_originator_guid is not null as is_thread_reply,
-    {{ messages_is_unsent('retracted_at') }} as is_unsent,
-    {{ messages_is_edited('edited_at', 'retracted_at') }} as is_edited,
+    {{ messages_is_unsent(apple_time('date_retracted')) }} as is_unsent,
+    {{ messages_is_edited(apple_time('date_edited'), apple_time('date_retracted')) }} as is_edited,
     coalesce(is_audio_message, false) as is_audio,
     case when kind in ('reaction', 'removal') then
         {{ messages_reaction_kind('associated_message_type') }}

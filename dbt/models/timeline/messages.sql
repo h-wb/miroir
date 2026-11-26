@@ -89,8 +89,8 @@ raw as not materialized (
     from (
         {{ optional_input('apple_messages', 'messages', {
             'guid': 'text', 'text': 'text', 'text_source': 'text', 'service': 'text',
-            'handle': 'text', 'is_from_me': 'boolean', 'sent_at': 'timestamptz',
-            'edited_at': 'timestamptz', 'retracted_at': 'timestamptz',
+            'handle': 'text', 'is_from_me': 'boolean', 'date': 'bigint',
+            'date_edited': 'bigint', 'date_retracted': 'bigint',
             'item_type': 'bigint', 'associated_message_type': 'bigint',
             'associated_message_guid': 'text', 'thread_originator_guid': 'text',
             'is_audio_message': 'boolean', '_dlt_load_id': 'text'
@@ -110,7 +110,7 @@ attachment_links as not materialized (
 attachments as not materialized (
     {{ optional_input('apple_messages', 'attachments', {
         'guid': 'text', 'transfer_name': 'text', 'mime_type': 'text',
-        'total_bytes': 'bigint', 'media_key': 'text', 'created_at': 'timestamptz',
+        'total_bytes': 'bigint', 'media_key': 'text', 'created_date': 'bigint',
         '_dlt_load_id': 'text'
     }, ['guid']) }}
 ),
@@ -241,7 +241,7 @@ attachment_items as (
             'media_status', m.thumbnail_status,
             'thumbnail_w360', m.thumbnail_w360,
             'thumbnail_w1280', m.thumbnail_w1280
-        ) order by a.created_at nulls last, a.transfer_name nulls last, a.guid) as items
+        ) order by {{ apple_time('a.created_date', seconds_only=true) }} nulls last, a.transfer_name nulls last, a.guid) as items
     from message_attachments a
     left join lateral {{ files.record }} m on true
     where not {{ messages_is_link_preview('a.transfer_name') }}
@@ -257,7 +257,7 @@ reaction_rows as (
         {{ messages_target_guid('x.associated_message_guid') }} as target_guid,
         {{ messages_target_part('x.associated_message_guid') }} as target_part,
         {{ messages_reaction_kind('x.associated_message_type') }} as reaction_kind,
-        {{ messages_dated('x.sent_at') }} as sent_at
+        {{ messages_dated(apple_time('x."date"')) }} as sent_at
     from reaction_raw x
 ),
 reaction_targets as (
@@ -285,7 +285,7 @@ current_messages as (
     select
         p.guid,
         co.conversation_id,
-        {{ messages_dated('p.sent_at') }} as sent_at,
+        {{ messages_dated(apple_time('p."date"')) }} as sent_at,
         coalesce(p.is_from_me, false) as is_from_me,
         case when not coalesce(p.is_from_me, false) and p.handle <> ''
             then {{ messages_address('p.handle') }} end as sender_handle,
@@ -293,9 +293,9 @@ current_messages as (
         p.service,
         p.text,
         coalesce(p.text_source = 'unreadable', false) as text_unreadable,
-        {{ messages_is_edited('p.edited_at', 'p.retracted_at') }} as is_edited,
-        {{ messages_is_unsent('p.retracted_at') }} as is_unsent,
-        p.edited_at,
+        {{ messages_is_edited(apple_time('p.date_edited'), apple_time('p.date_retracted')) }} as is_edited,
+        {{ messages_is_unsent(apple_time('p.date_retracted')) }} as is_unsent,
+        {{ apple_time('p.date_edited') }} as edited_at,
         coalesce(p.is_audio_message, false) as is_audio,
         p.thread_originator_guid as reply_to_guid,
         coalesce(ai.items, '[]'::jsonb) as attachments,

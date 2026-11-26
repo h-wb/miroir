@@ -101,6 +101,28 @@
     coalesce(substring({{ column }} from '^p:([0-9]+)/')::int, 0)
 {%- endmacro %}
 
+{# A raw Apple date as UTC (decision 038, amendment of 2026-11-26): seconds since
+   2001-01-01, or nanoseconds when it is 10^12 or more either side of 0 (a
+   message's dates; an attachment's created_date is always seconds, so pass
+   seconds_only=true). 0 and null are no time. Nanoseconds are cut to
+   microseconds, rounding down as Postgres keeps no finer. A time outside years
+   1 to 9999 is no time: the connector, which still writes the same rule into
+   the raw tables' *_at columns, cannot hold one. A test compares the two on
+   every row (tests/test_timeline_messages.py). #}
+{% macro apple_time(column, seconds_only=false) -%}
+    {%- set epoch = "timestamptz '2001-01-01 00:00:00+00'" -%}
+    {%- set micros = "(" ~ column ~ " / 1000 - case when " ~ column ~ " % 1000 < 0 then 1 else 0 end)" -%}
+    case
+        {%- if not seconds_only %}
+        when {{ column }} >= 1000000000000 or {{ column }} <= -1000000000000 then
+            {{ epoch }} + ({{ micros }} / 1000000) * interval '1 second'
+                + ({{ micros }} % 1000000) * interval '1 microsecond'
+        {%- endif %}
+        when {{ column }} <> 0 and {{ column }} between -63113904000 and 252423993599 then
+            {{ epoch }} + {{ column }} * interval '1 second'
+    end
+{%- endmacro %}
+
 {# A time before 2001-01-02 is no time: Apple's clock starts at 2001-01-01, and
    a date of 0 or close to it is a missing date, not a message from 2001. #}
 {% macro messages_dated(column) -%}

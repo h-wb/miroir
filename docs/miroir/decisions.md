@@ -60,6 +60,7 @@ amendment under it. Older entries say "workspace" (renamed Miroir by 014) and
 | [038](#038--apple-messages-through-the-collector-keyed-so-nothing-arrives-twice) | Apple Messages through the collector, keyed so nothing arrives twice | Accepted |
 | [039](#039--the-collector-reports-every-run-and-miroir-is-where-a-sources-health-is-seen) | The collector reports every run, and Miroir is where a source's health is seen | Accepted |
 | | [038 follow-up — Apple Messages attachment uploads and contact names](#038-follow-up--apple-messages-attachment-uploads-and-contact-names) | Accepted |
+| | [038 amendment — The Apple date rule is in dbt](#038-amendment--the-apple-date-rule-is-in-dbt) | Accepted |
 | [040](#040--a-timeline-inside-miroir-and-its-groundwork) | A timeline inside Miroir, and its groundwork | Accepted |
 | | [040 amendment — Thumbnails and stored media (phase 1b)](#040-amendment--thumbnails-and-stored-media-phase-1b) | Accepted |
 | | [040 amendment — Queries, the API and images through the server (phase 1c, part 1)](#040-amendment--queries-the-api-and-images-through-the-server-phase-1c-part-1) | Accepted |
@@ -1816,6 +1817,41 @@ disk is not skipped when its metadata becomes eligible later.
 
 Contact names are separately opt-in. Where matching address book cards
 disagree, the collector reports ambiguity and sends no name for that handle.
+
+### 038 amendment — The Apple date rule is in dbt
+
+Status: accepted, 2026-11-26. Step 12 of
+[the package split](../decisions/2026-11-25-package-split.md) for Apple
+Messages (its *ELT* rule). Revises where the dates are turned into times: the
+connector's `*_at` columns (this decision's tables), which the messages
+package (041) and the timeline's message tables (040, phase 2a) read.
+
+A raw Apple date is seconds since 2001-01-01, or nanoseconds on newer
+databases, and 0 is no time. The connector wrote `sent_at`, `read_at`,
+`delivered_at`, `edited_at`, `retracted_at` and an attachment's `created_at`
+by that rule, and the models read those columns. That is a business rule in a
+connector: changing it reached only rows loaded after, and the models could not
+be read without knowing what Python did.
+
+**The models read the raw dates through a macro**, `apple_time` in
+`dbt/macros/messages.sql`: the same rule, a value of 10^12 or more either side
+of 0 being nanoseconds (cut to microseconds, rounding down), an attachment's
+date always seconds, and a time outside years 1 to 9999 none, as the
+connector, which cannot hold one, leaves it. **The connector keeps writing the
+`*_at` columns**: they are part of the raw tables, and removing them would
+change those tables for any reader of them.
+
+What the packages build does not change. A test loads the same rows, the
+fixture's and dates at the rule's edges, builds both packages once with the
+models as they are and once with a copy whose models read the `*_at` columns
+instead, and compares every output; it also compares the macro with the
+connector's column on every row loaded, and with the connector's function at
+the edges a bigint holds.
+
+The same step has the collector count what it blanks: a value of the wrong kind
+for its column is sent as null, as before, and now counted per table and column
+in the pass's `blanked` counts, which reach the log line and the report (039),
+not the batch.
 
 ## 040 — A timeline inside Miroir, and its groundwork
 

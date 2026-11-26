@@ -380,6 +380,55 @@ class AppleMessagesTests(unittest.TestCase):
         self.assertNotIn("skipped", trailer)
         self.assertIsNone(self.collect(batch.cursor)[0])
 
+    def test_values_of_the_wrong_kind_are_sent_as_null_and_counted(self):
+        self.message()
+        self.executescript(f"""
+            UPDATE message SET is_from_me = 2, date_edited = 'soon', part_count = 1.5,
+                subject = X'00ff' WHERE ROWID = {ROW};
+            UPDATE chat SET display_name = X'01';
+            UPDATE attachment SET ROWID = {ROW + 3}, created_date = 'later';
+            INSERT INTO chat_message_join VALUES ({ROW + 1}, {ROW});
+            INSERT INTO message_attachment_join VALUES ({ROW}, {ROW + 3});
+        """)
+        batch, records, trailer = self.collect()
+        rows = {row["type"]: row for row in records}
+        self.assertEqual(
+            [
+                rows[kind][column]
+                for kind, column in (
+                    ("message", "is_from_me"),
+                    ("message", "date_edited"),
+                    ("message", "part_count"),
+                    ("message", "subject"),
+                    ("chat", "display_name"),
+                    ("attachment", "created_date"),
+                )
+            ],
+            [None] * 6,
+        )
+        self.assertEqual(
+            batch.counts["blanked"],
+            {
+                "message_is_from_me": 1,
+                "message_date_edited": 1,
+                "message_part_count": 1,
+                "message_subject": 1,
+                "chat_display_name": 1,
+                "attachment_created_date": 1,
+            },
+        )
+        # A null is not blanked, and the batch's trailer does not change.
+        self.assertNotIn("message_date_retracted", batch.counts["blanked"])
+        self.assertNotIn("blanked", trailer)
+        self.executescript(f"""
+            UPDATE message SET is_from_me = 1, date_edited = NULL, part_count = 1,
+                subject = NULL WHERE ROWID = {ROW};
+            UPDATE chat SET display_name = 'Group';
+            UPDATE attachment SET created_date = 4321;
+        """)
+        self.out.unlink()
+        self.assertEqual(self.collect()[0].counts["blanked"], {})
+
     def test_media_key(self):
         cases = [
             (("guid-1", "IMG_1.HEIC", None), "guid-1.heic"),

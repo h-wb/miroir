@@ -11,6 +11,8 @@ import hashlib
 import json
 import os
 import random
+import re
+import shutil
 import threading
 import time
 import unittest
@@ -19,7 +21,9 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import mkdtemp
+from unittest.mock import patch
 
+import jinja2
 import psycopg2
 import psycopg2.errors
 
@@ -28,8 +32,10 @@ from src.control.analysis import analysis_plan
 from src.control.artifacts import submit_artifact
 from src.control.config import parse_miroir
 from src.control.runner import import_artifact
+from src.integrations.apple_messages.source import _timestamp
 from src.media.config import MediaConfig
 from src.media.derive import DERIVE_VERSION, MediaWriter
+from src.pipelines.transform import DBT_DIR
 from src.viewer.reader import SEARCH_CHARACTERS, search_vector
 from tests.test_messages_models import (
     ALEX,
@@ -48,6 +54,7 @@ from tests.test_messages_models import (
     message,
     reaction,
     row,
+    undated,
     write_batch,
 )
 from tests.test_timeline_models import (
@@ -126,6 +133,126 @@ def messages_package(analysis_id, connection="m"):
 
 def tapback(guid, minutes, chat_guid, code, target, **sender):
     return reaction(guid, minutes, chat_guid, code, target, **sender)
+
+
+# The raw Apple dates, and the column the connector writes beside each.
+CONNECTOR_DATES = {
+    "date": "sent_at",
+    "date_read": "read_at",
+    "date_delivered": "delivered_at",
+    "date_edited": "edited_at",
+    "date_retracted": "retracted_at",
+    "created_date": "created_at",
+}
+_RAW = r"'(\w+\.)?\"?(" + "|".join(CONNECTOR_DATES) + r")\"?'(?:, seconds_only=true)?"
+
+
+def apple_time(column, seconds_only=False):
+    """The dbt macro apple_time over a column, rendered as dbt renders it."""
+    macros = (DBT_DIR / "macros" / "messages.sql").read_text()
+    module = jinja2.Environment().from_string(macros).module
+    return str(module.apple_time(column, seconds_only=seconds_only))
+
+
+def connector_dates_project(root):
+    """A copy of the dbt project whose models read the connector's *_at columns
+    where they read a raw date through apple_time: the models as they were
+    before the rule moved to dbt."""
+    project = root / "dbt-connector-dates"
+    shutil.rmtree(project, ignore_errors=True)
+    shutil.copytree(DBT_DIR, project, ignore=shutil.ignore_patterns("target", "logs"))
+    replaced = 0
+    for path in (project / "models").rglob("*.sql"):
+        text, made = re.subn(
+            r"\{\{ apple_time\(" + _RAW + r"\) \}\}",
+            lambda m: (m[1] or "") + CONNECTOR_DATES[m[2]],
+            path.read_text(),
+        )
+        text, nested = re.subn(
+            r"apple_time\(" + _RAW + r"\)",
+            lambda m: f"'{m[1] or ''}{CONNECTOR_DATES[m[2]]}'",
+            text,
+        )
+        text, declared = re.subn(
+            r"'(" + "|".join(CONNECTOR_DATES) + r")': 'bigint'",
+            lambda m: f"'{CONNECTOR_DATES[m[1]]}': 'timestamptz'",
+            text,
+        )
+        if "apple_time(" in text:
+            raise AssertionError(f"{path.name}: a call to apple_time left as it is")
+        replaced += made + nested + declared
+        path.write_text(text)
+    if not replaced:
+        raise AssertionError("No model reads a raw Apple date")
+    return project
+
+
+EDGE = "+15555550120"
+EDGE_CHAT = "iMessage;-;" + EDGE
+SECONDS = apple(at(1200)) // 10**9
+# Raw dates at the rule's edges, beside the fixture's nanosecond dates.
+EDGE_DATES = [
+    *chat(EDGE_CHAT, EDGE, EDGE),
+    # Seconds, as older databases store them, and nanoseconds finer than a
+    # microsecond.
+    *undated(message("d1", 0, EDGE_CHAT, handle=EDGE), SECONDS),
+    *undated(
+        message(
+            "d2",
+            0,
+            EDGE_CHAT,
+            me=True,
+            handle=EDGE,
+            date_read=SECONDS + 70,
+            date_delivered=(SECONDS + 65) * 10**9 + 1,
+        ),
+        (SECONDS + 60) * 10**9 + 123_456_789,
+    ),
+    # 10^12 - 1 is seconds (past year 9999: no time), 10^12 nanoseconds.
+    *undated(message("d3", 0, EDGE_CHAT, handle=EDGE), 10**12 - 1),
+    *undated(message("d4", 0, EDGE_CHAT, handle=EDGE), 10**12),
+    # Before Apple's epoch, in seconds and in nanoseconds (rounded down).
+    *undated(message("d5", 0, EDGE_CHAT, handle=EDGE), -86_400),
+    *undated(message("d6", 0, EDGE_CHAT, handle=EDGE), -(10**12) - 1),
+    *undated(message("d7", 0, EDGE_CHAT, handle=EDGE), 252_423_993_600),
+    # Edits and unsends at a bigint's extremes and before the epoch.
+    *message("d8", 1210, EDGE_CHAT, handle=EDGE, date_edited=2**63 - 1),
+    *message(
+        "d9", 1211, EDGE_CHAT, handle=EDGE, date_edited=-5, date_retracted=-(2**63)
+    ),
+    *message(
+        "d10", 1212, EDGE_CHAT, handle=EDGE, date_edited=10**12 - 1, date_retracted=0
+    ),
+    *message(
+        "d11",
+        1213,
+        EDGE_CHAT,
+        me=True,
+        handle=EDGE,
+        date_edited=-(10**12) - 999,
+        date_read=2**63 - 1,
+        date_delivered=-(2**63),
+    ),
+    # An attachment's date is always seconds; its message orders by it.
+    *(
+        record
+        for guid, created in (
+            ("da1", SECONDS + 9),
+            ("da2", -60),
+            ("da3", 10**15),
+            ("da4", 252_423_993_599),
+            ("da5", -63_113_904_000),
+            ("da6", 0),
+        )
+        for record in attachment(
+            guid,
+            "d8",
+            transfer_name=guid + ".jpg",
+            media_key=guid + ".jpg",
+            created_date=created,
+        )
+    ),
+]
 
 
 class TimelineMessagesFixture(TimelineBuildFixture):
@@ -371,6 +498,91 @@ class TimelineMessagesTests(TimelineMessagesFixture):
                 f"select conversation_key, handle from {package}.participants order by 1, 2"
             ),
         )
+
+    def test_the_apple_date_rule_in_dbt_matches_the_connector_on_every_row(self):
+        # The macro against the connector's rule, at its edges.
+        values = [
+            *(0, 1, -1, 999, SECONDS, -86_400),
+            *(10**12 - 1, 10**12, -(10**12) + 1, -(10**12), -(10**12) - 1),
+            *(-(10**12) - 999, 123_456_789_012_345_678, 2**63 - 1, -(2**63)),
+            *(252_423_993_599, 252_423_993_600, -63_113_904_000, -63_113_904_001),
+            10**15,
+        ]
+        for seconds in (False, True):
+            with self.subTest(seconds_only=seconds):
+                self.assertEqual(
+                    self.query(
+                        "set local time zone 'UTC'; "
+                        f"select v, {apple_time('v', seconds_only=seconds)} "
+                        f"from unnest(array{values}::bigint[]) v order by v"
+                    ),
+                    [(v, _timestamp(v, seconds=seconds)) for v in sorted(values)],
+                )
+        analyses = [timeline("t"), messages_package("p")]
+        after = self.configure(analyses)
+        before = configuration(analyses, miroir_id="tm_connector_dates")
+        records = [*FIXTURE, *EDGE_DATES]
+        self.deliver(after, records)
+        with patch(
+            "src.pipelines.transform.DBT_DIR", connector_dates_project(self.root)
+        ):
+            self.deliver(before, records)
+        # The macro equals the connector's column on every row loaded.
+        dataset = after.connections[0].binding.dataset_name
+        for table, seconds in (("messages", False), ("attachments", True)):
+            pairs = [
+                (raw, column)
+                for raw, column in CONNECTOR_DATES.items()
+                if (raw == "created_date") == seconds
+            ]
+            differing = " or ".join(
+                apple_time('"' + raw + '"', seconds) + " is distinct from " + column
+                for raw, column in pairs
+            )
+            self.assertEqual(
+                self.query(
+                    f"select count(*), count(*) filter (where {differing}) "
+                    f"from {dataset}.{table}"
+                ),
+                [(sum(r["type"] == table[:-1] for r in records), 0)],
+            )
+        # Both packages' outputs are the same read either way.
+        timeline_after, timeline_before = (self.schema(m, "t") for m in (after, before))
+        self.assertEqual(self.snapshot(timeline_after), self.snapshot(timeline_before))
+        for name in PACKAGES["messages"].relations:
+            with self.subTest(relation=name):
+                self.assertEqual(
+                    *(
+                        self.query(
+                            f"select to_jsonb(r)::text from {self.schema(m, 'p')}.{name} r "
+                            "order by 1"
+                        )
+                        for m in (after, before)
+                    )
+                )
+        # And the edges are what the rule says.
+        rows = {
+            r[0]: r[1:]
+            for r in self.query(
+                "select guid, sent_at, is_edited, is_unsent, edited_at, "
+                "array(select a->>'guid' from jsonb_array_elements(attachments) a) "
+                f"from {timeline_after}.messages where guid like 'd%'"
+            )
+        }
+        epoch = datetime(2001, 1, 1, tzinfo=timezone.utc)
+        sent = epoch + timedelta(seconds=SECONDS)
+        self.assertEqual(rows["d1"][0], sent)
+        self.assertEqual(
+            rows["d2"][0], sent + timedelta(seconds=60, microseconds=123_456)
+        )
+        for guid in ("d3", "d4", "d5", "d6", "d7"):
+            self.assertIsNone(rows[guid][0], guid)
+        self.assertEqual(rows["d9"][1:4], (False, True, epoch - timedelta(seconds=5)))
+        self.assertEqual(rows["d10"][1:4], (False, False, None))
+        self.assertEqual(
+            rows["d11"][3], epoch - timedelta(seconds=1000, microseconds=1)
+        )
+        self.assertEqual(rows["d8"][4], ["da5", "da2", "da1", "da4", "da3", "da6"])
 
     def test_messages_carry_text_attachments_reactions_and_opaque_ids(self):
         miroir = self.configure([timeline("t", reader_role=READER), timeline("other")])

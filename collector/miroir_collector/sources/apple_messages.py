@@ -1035,6 +1035,9 @@ def _track_attachments(
     )
 
 
+# A value of the wrong kind is sent as null (_value) and counted as `blanked`,
+# per kind and column: a flag that is not 0 or 1, a non-integer in an integer
+# column, a non-string in a text column.
 def _value(key: str, value: Any) -> str | int | None:
     if key in _FLAGS:
         return value if type(value) is int and value in (0, 1) else None
@@ -1078,17 +1081,20 @@ def _write(out: Path, now: float, rows: dict[str, list[Row]], masker: Masker) ->
     counts["unreadable"] = 0
     skipped = resent = 0
     masked: Counter[str] = Counter()
+    blanked: Counter[str] = Counter()
     with BatchWriter(out, AppleMessages.format_id, 1, now) as batch:
         for kind, items in rows.items():
             for row in items:
                 if not all(_valid_key(row[key]) for key in _KEYS[kind]):
                     skipped += 1
                     continue
-                record = {
-                    key: _value(key, value)
-                    for key, value in row.items()
-                    if not key.startswith("_") and key != "attributedBody"
-                }
+                record: Row = {}
+                for key, value in row.items():
+                    if key.startswith("_") or key == "attributedBody":
+                        continue
+                    record[key] = _value(key, value)
+                    if value is not None and record[key] is None:
+                        blanked[f"{kind}_{key}"] += 1
                 # Free text is masked. Identifiers are not, on purpose: guids,
                 # chat_identifier, room_name, handles and their services,
                 # service names, mime_type, uti, balloon_bundle_id and
@@ -1111,4 +1117,9 @@ def _write(out: Path, now: float, rows: dict[str, list[Row]], masker: Masker) ->
                 counts[kind] += 1
         counts["masked"] = dict(masked)
         batch.finish(counts)
-    return {**counts, "skipped": skipped, "resent": resent}
+    return {
+        **counts,
+        "skipped": skipped,
+        "resent": resent,
+        "blanked": dict(blanked),
+    }
