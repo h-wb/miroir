@@ -31,7 +31,9 @@ def _bounded(counts: dict[str, Any]) -> dict[str, Any]:
         if isinstance(value, dict) and len(value) > _REPORT_ENTRIES:
             ranked = sorted(value.items(), key=lambda item: (-item[1], item[0]))
             kept = dict(ranked[: _REPORT_ENTRIES - 1])
-            value = {**kept, "other": sum(n for _, n in ranked[_REPORT_ENTRIES - 1 :])}
+            rest = sum(n for _, n in ranked[_REPORT_ENTRIES - 1 :])
+            # A count of its own named `other` (a masking label can be) adds in.
+            value = {**kept, "other": kept.get("other", 0) + rest}
         bounded[key] = value
     return bounded
 
