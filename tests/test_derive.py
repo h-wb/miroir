@@ -35,17 +35,20 @@ from pillow_heif import register_heif_opener
 
 from src.cli.main import main
 from src.core.config import load_miroir
-from src.core.derive import Decoder, DecoderLost, DecoderUnavailable, _Lost, _write
-from src.core.media import ObjectTooLarge
-from src.core.operations import ConnectionBusy, MetadataStore, media_pending, operations
+from src.core.operations import ConnectionBusy, MetadataStore, operations
 from src.core.runner import IngestionFailed, execute_operation, request_derive
 from src.core.service import MiroirService
 from src.kernel.errors import OperationError
+from src.media.derive import Decoder, DecoderLost, DecoderUnavailable, _Lost, _write
+from src.media.profiles import PROFILES
+from src.media.queue import media_pending
+from src.media.store import ObjectTooLarge
 from src.web.app import create_app
 from tests.fakes import FakeObjectStore
 from tests.postgres import start_postgres
 
 ADMIN = "test-admin-token-0123456"
+IMAGE = PROFILES["image"]
 CONFIRM = "/api/connections/screen/media/confirm"
 UPLOADS = "/api/connections/screen/media/uploads"
 
@@ -62,7 +65,7 @@ REPO = Path(__file__).resolve().parents[1]
 # from /proc, before and after making itself undumpable.
 WORKER_READS_ITSELF = """
 import os, subprocess, sys
-from src.core.derive import _undumpable
+from src.media.derive import _undumpable
 
 os.environ["MIROIR_MEDIA_SECRET_ACCESS_KEY"] = "synthetic"
 CHILD = (
@@ -99,7 +102,7 @@ def without_attachment_thumbnails():
     from src.integrations.registry import INTEGRATIONS
 
     messages = INTEGRATIONS["apple_messages"]
-    media = tuple(replace(kind, thumbnails=()) for kind in messages.media)
+    media = tuple(replace(kind, profile=None) for kind in messages.media)
     catalog = {**INTEGRATIONS, "apple_messages": replace(messages, media=media)}
     with patch("src.core.config.INTEGRATIONS", MappingProxyType(catalog)):
         yield
@@ -249,7 +252,7 @@ class DeriveFixture(unittest.TestCase):
         now = datetime.now(timezone.utc)
         for key, body in files.items():
             self.objects.add(f"site/screen/screenshots/{key}", body)
-        self.store.add_pending_media(
+        self.store.media_queue.add_pending_media(
             "test",
             "screen",
             "screenshots",
@@ -271,7 +274,9 @@ class DeriveFixture(unittest.TestCase):
             return sorted(db.execute(sa.select(media_pending.c.key)).scalars())
 
     def attempts(self) -> dict[str, int]:
-        queued = self.store.pending_media("test", "screen", "screenshots", 100)
+        queued = self.store.media_queue.pending_media(
+            "test", "screen", "screenshots", 100
+        )
         return {entry.key: entry.attempts for entry in queued}
 
     def detail(self, operation_id: str) -> str:
@@ -460,7 +465,9 @@ class DeriveRequestTests(DeriveFixture):
         self.objects.add("site/screen/screenshots/a.jpeg", b"xy")
         failure = sa.exc.OperationalError("INSERT", {}, Exception("down"))
         with (
-            patch.object(self.store, "add_pending_media", side_effect=failure),
+            patch.object(
+                self.store.media_queue, "add_pending_media", side_effect=failure
+            ),
             self.assertLogs("src.core.service", "ERROR"),
         ):
             response = self.client.post(
@@ -473,10 +480,14 @@ class DeriveRequestTests(DeriveFixture):
 
     def test_removing_the_connection_forgets_its_queue(self):
         self.upload({"a.jpeg": jpeg()})
-        self.store.set_backfill_after("test", "screen", "screenshots", "a.jpeg")
+        self.store.media_queue.set_backfill_after(
+            "test", "screen", "screenshots", "a.jpeg"
+        )
         self.service.remove_connection("screen")
         self.assertEqual(self.pending(), [])
-        self.assertEqual(self.store.backfill_after("test", "screen", "screenshots"), "")
+        self.assertEqual(
+            self.store.media_queue.backfill_after("test", "screen", "screenshots"), ""
+        )
 
 
 class DeriveRunTests(DeriveFixture):
@@ -559,9 +570,9 @@ class DeriveRunTests(DeriveFixture):
         self.queue({"a.jpeg": jpeg()})
         newer = jpeg(800, 500)
 
-        def replaced_meanwhile(decoder, body, formats):
+        def replaced_meanwhile(decoder, body, formats, profile):
             self.queue({"a.jpeg": newer})
-            return decode(decoder, body, formats)
+            return decode(decoder, body, formats, profile)
 
         with patch.object(Decoder, "thumbnails", replaced_meanwhile):
             self.derive(self.request(), defer=self.schedule)
@@ -611,10 +622,10 @@ class DeriveRunTests(DeriveFixture):
         files["99.jpeg"] = poison = jpeg(401, 300)
         self.queue(files)
 
-        def dies_on_poison(decoder, body, formats):
+        def dies_on_poison(decoder, body, formats, profile):
             if body == poison:
                 raise Killed()
-            return decode(decoder, body, formats)
+            return decode(decoder, body, formats, profile)
 
         for _ in range(3):
             with (
@@ -635,10 +646,10 @@ class DeriveRunTests(DeriveFixture):
         lost = jpeg(801, 500)
         self.queue({"a.jpeg": jpeg(), "b.jpeg": lost, "c.jpeg": jpeg()})
 
-        def lost_on_b(decoder, body, formats):
+        def lost_on_b(decoder, body, formats, profile):
             if body == lost:
                 raise DecoderLost()
-            return decode(decoder, body, formats)
+            return decode(decoder, body, formats, profile)
 
         for tries in range(1, 4):
             operation_id = self.request()
@@ -674,7 +685,7 @@ class DeriveRunTests(DeriveFixture):
         for defer in (None, self.schedule):
             operation_id = self.request()
             with (
-                patch("src.core.derive.subprocess.Popen", side_effect=dies_at_start),
+                patch("src.media.derive.subprocess.Popen", side_effect=dies_at_start),
                 self.assertRaises(IngestionFailed),
             ):
                 self.derive(operation_id, defer=defer)
@@ -701,7 +712,7 @@ class DeriveRunTests(DeriveFixture):
         self.queue(files)
         operation_id = self.request()
         with (
-            patch("src.core.derive.subprocess.Popen", side_effect=without_jpeg),
+            patch("src.media.derive.subprocess.Popen", side_effect=without_jpeg),
             self.assertRaises(IngestionFailed),
         ):
             self.derive(operation_id, defer=self.schedule)
@@ -713,11 +724,11 @@ class DeriveRunTests(DeriveFixture):
         self.queue(files)
         calls: list[int] = []
 
-        def breaks_after_two(decoder, body, formats):
+        def breaks_after_two(decoder, body, formats, profile):
             calls.append(1)
             if len(calls) > 2:
                 raise DecoderUnavailable()
-            return decode(decoder, body, formats)
+            return decode(decoder, body, formats, profile)
 
         operation_id = self.request()
         with (
@@ -771,7 +782,7 @@ class AttachmentDeriveTests(DeriveFixture):
         now = datetime.now(timezone.utc)
         for key, body in files.items():
             self.objects.add(f"site/messages/attachments/{key}", body)
-        self.store.add_pending_media(
+        self.store.media_queue.add_pending_media(
             "test",
             "messages",
             "attachments",
@@ -915,20 +926,20 @@ class AttachmentDeriveTests(DeriveFixture):
             "Media: made 5, unreadable 1, unsupported 2; 0 waiting",
         )
 
-    def test_a_file_over_the_thumbnail_bound_is_too_large_unread(self):
+    def test_a_file_over_the_derive_bound_is_too_large_unread(self):
         kind = self.miroir().connections[1].integration.media[0]
-        self.assertEqual(kind.thumbnail_bound, 50 * 1024 * 1024)
-        self.assertGreater(kind.max_bytes, kind.thumbnail_bound)
+        self.assertEqual(kind.derive_bound, 50 * 1024 * 1024)
+        self.assertGreater(kind.max_bytes, kind.derive_bound)
         self.queue_attachments(
             {
-                "big.jpeg": b"\xff" * (kind.thumbnail_bound + 1),
+                "big.jpeg": b"\xff" * (kind.derive_bound + 1),
                 "edge.png": encoded(Image.new("RGB", (8, 8)), "PNG"),
             }
         )
         self.derive_attachments()
         rows = self.attachment_rows()
         self.assertEqual(rows["big.jpeg"]["thumbnail_status"], "too_large")
-        self.assertEqual(rows["big.jpeg"]["size"], kind.thumbnail_bound + 1)
+        self.assertEqual(rows["big.jpeg"]["size"], kind.derive_bound + 1)
         self.assertEqual(rows["edge.png"]["thumbnail_status"], "made")
         self.assertEqual(self.objects.gets, ["site/messages/attachments/edge.png"])
 
@@ -947,8 +958,8 @@ class AttachmentDeriveTests(DeriveFixture):
     def test_screenshots_are_derived_as_before(self):
         kind = self.miroir().connections[0].integration.media[0]
         self.assertEqual(
-            (kind.thumbnails, kind.thumbnail_max_bytes, kind.thumbnail_bound),
-            ((".jpeg", ".jpg", ".png"), None, 20 * 1024 * 1024),
+            (kind.profile, kind.derive_max_bytes, kind.derive_bound),
+            ("screenshot", None, 20 * 1024 * 1024),
         )
         self.queue({"a.jpeg": jpeg(), "b.heic": b"heic bytes"})
         with patch.object(self.objects, "get", wraps=self.objects.get) as get:
@@ -987,58 +998,60 @@ class DecoderTests(unittest.TestCase):
         decoder = Decoder(timeout=0.05)
         self.addCleanup(decoder.close)
         with self.assertRaises(DecoderLost):
-            decoder.thumbnails(self.large, ("PNG",))
+            decoder.thumbnails(self.large, ("PNG",), IMAGE)
         decoder.timeout = 30
-        self.assertEqual(decoder.thumbnails(jpeg(), ("JPEG",))[0], "made")
+        self.assertEqual(decoder.thumbnails(jpeg(), ("JPEG",), IMAGE)[0], "made")
 
     def test_a_child_killed_while_decoding_is_lost(self):
         decoder = Decoder()
         self.addCleanup(decoder.close)
-        self.assertEqual(decoder.thumbnails(jpeg(), ("JPEG",))[0], "made")
+        self.assertEqual(decoder.thumbnails(jpeg(), ("JPEG",), IMAGE)[0], "made")
         pid = decoder._child.pid
         timer = threading.Timer(0.05, os.kill, (pid, signal.SIGKILL))
         timer.start()
         self.addCleanup(timer.cancel)
         with self.assertRaises(DecoderLost):
-            decoder.thumbnails(self.large, ("PNG",))
+            decoder.thumbnails(self.large, ("PNG",), IMAGE)
         self.assertEqual(
-            decoder.thumbnails(b"not an image", ("JPEG",))[0], "unreadable"
+            decoder.thumbnails(b"not an image", ("JPEG",), IMAGE)[0], "unreadable"
         )
 
     def test_a_memory_limit_below_the_costliest_image_is_unavailable(self):
         decoder = Decoder(memory=300 * 1024 * 1024)
         self.addCleanup(decoder.close)
         with self.assertRaises(DecoderUnavailable):
-            decoder.thumbnails(jpeg(), ("JPEG",))
+            decoder.thumbnails(jpeg(), ("JPEG",), IMAGE)
 
     def test_a_child_that_cannot_start_is_unavailable(self):
         decoder = Decoder()
         self.addCleanup(decoder.close)
         with (
-            patch("src.core.derive.subprocess.Popen", side_effect=dies_at_start),
+            patch("src.media.derive.subprocess.Popen", side_effect=dies_at_start),
             self.assertRaises(DecoderUnavailable),
         ):
-            decoder.thumbnails(jpeg(), ("JPEG",))
+            decoder.thumbnails(jpeg(), ("JPEG",), IMAGE)
 
     def test_a_child_without_a_decoder_its_kinds_use_is_unavailable(self):
         # The reviewer's case: a Pillow without its JPEG decoder passes PNG checks.
         decoder = Decoder(decoders=("JPEG", "PNG"))
         self.addCleanup(decoder.close)
         with (
-            patch("src.core.derive.subprocess.Popen", side_effect=without_jpeg),
+            patch("src.media.derive.subprocess.Popen", side_effect=without_jpeg),
             self.assertRaises(DecoderUnavailable),
         ):
-            decoder.thumbnails(jpeg(), ("JPEG",))
+            decoder.thumbnails(jpeg(), ("JPEG",), IMAGE)
         # Without JPEG among what it must have, the same child would pass.
         png_only = Decoder(decoders=("PNG",))
         self.addCleanup(png_only.close)
-        with patch("src.core.derive.subprocess.Popen", side_effect=without_jpeg):
-            self.assertEqual(png_only.thumbnails(png_body(), ("PNG",))[0], "made")
+        with patch("src.media.derive.subprocess.Popen", side_effect=without_jpeg):
+            self.assertEqual(
+                png_only.thumbnails(png_body(), ("PNG",), IMAGE)[0], "made"
+            )
 
     def test_a_child_that_cannot_be_started_is_unavailable(self):
         for target in (
-            "src.core.derive.subprocess.Popen",
-            "src.core.derive._undumpable",
+            "src.media.derive.subprocess.Popen",
+            "src.media.derive._undumpable",
         ):
             decoder = Decoder()
             self.addCleanup(decoder.close)
@@ -1047,18 +1060,18 @@ class DecoderTests(unittest.TestCase):
                 patch(target, side_effect=OSError("no")),
                 self.assertRaises(DecoderUnavailable),
             ):
-                decoder.thumbnails(jpeg(), ("JPEG",))
+                decoder.thumbnails(jpeg(), ("JPEG",), IMAGE)
 
     def test_a_child_that_does_not_read_cannot_hold_the_worker(self):
         decoder = Decoder()
         self.addCleanup(decoder.close)
         started = time.monotonic()
         with (
-            patch("src.core.derive.subprocess.Popen", side_effect=never_reads),
-            patch("src.core.derive.PROBE_TIMEOUT", 1),
+            patch("src.media.derive.subprocess.Popen", side_effect=never_reads),
+            patch("src.media.derive.PROBE_TIMEOUT", 1),
             self.assertRaises(DecoderUnavailable),
         ):
-            decoder.thumbnails(jpeg(), ("JPEG",))
+            decoder.thumbnails(jpeg(), ("JPEG",), IMAGE)
         self.assertLess(time.monotonic() - started, 10)
         reader, writer = os.pipe()
         self.addCleanup(os.close, reader)
@@ -1124,7 +1137,7 @@ class DeriveBatchTests(DeriveFixture):
         # The reviewer's case: an entry of a kind that is not derived (renamed,
         # or its thumbnails removed) must not keep scheduling runs.
         old = datetime.now(timezone.utc)
-        self.store.add_pending_media(
+        self.store.media_queue.add_pending_media(
             "test", "screen", "screenshots_old", [("x.jpeg", 5, old)]
         )
         operation_id = self.request()
@@ -1162,7 +1175,8 @@ class BackfillTests(DeriveFixture):
         )
         self.assertIn("backfill walked 3, walk continues", self.detail(first))
         self.assertEqual(
-            self.store.backfill_after("test", "screen", "screenshots"), "2025/2.png"
+            self.store.media_queue.backfill_after("test", "screen", "screenshots"),
+            "2025/2.png",
         )
         self.assertEqual(
             self.rows()["2025/0.png"]["stored_at"],
@@ -1173,7 +1187,9 @@ class BackfillTests(DeriveFixture):
         # The store said nothing follows: finished without an empty page.
         self.assertIn("walked 3, walk finished", self.detail(second))
         self.assertEqual(len(self.rows()), 5)  # the invalid key is skipped
-        self.assertEqual(self.store.backfill_after("test", "screen", "screenshots"), "")
+        self.assertEqual(
+            self.store.media_queue.backfill_after("test", "screen", "screenshots"), ""
+        )
         self.objects.gets.clear()
         again = self.request({"kind": "screenshots", "limit": 100})
         self.derive(again)
@@ -1190,9 +1206,12 @@ class BackfillTests(DeriveFixture):
         self.assertIn("walked 7, walk finished", self.detail(walk))
         self.assertEqual(len(self.rows()), 5)
         # It can end a page and become the cursor without harm.
-        self.store.set_backfill_after("test", "screen", "screenshots", long_name)
+        self.store.media_queue.set_backfill_after(
+            "test", "screen", "screenshots", long_name
+        )
         self.assertEqual(
-            self.store.backfill_after("test", "screen", "screenshots"), long_name
+            self.store.media_queue.backfill_after("test", "screen", "screenshots"),
+            long_name,
         )
         resumed = self.request({"kind": "screenshots", "limit": 100})
         self.derive(resumed)
@@ -1202,7 +1221,7 @@ class BackfillTests(DeriveFixture):
         # After an incident: a good file recorded as failed, the decoder fixed since.
         self.queue({"2025/0.png": png_body()})
         for _ in range(3):
-            self.store.begin_media_attempt(
+            self.store.media_queue.begin_media_attempt(
                 "test", "screen", "screenshots", "2025/0.png"
             )
         self.derive(self.request())
@@ -1242,7 +1261,9 @@ class BackfillTests(DeriveFixture):
             self.assertRaises(Killed),
         ):
             self.derive(retry)
-        [queued] = self.store.pending_media("test", "screen", "screenshots", 10)
+        [queued] = self.store.media_queue.pending_media(
+            "test", "screen", "screenshots", 10
+        )
         self.assertEqual((queued.key, queued.retry), ("2025/0.png", True))
         # Any later run, not only a backfill, derives it despite its row.
         self.derive(self.request())
@@ -1387,7 +1408,7 @@ def dies_at_start(args, **options):
 # A child whose Pillow has no JPEG decoder (a build without libjpeg).
 WITHOUT_JPEG = (
     "import runpy, PIL._imaging as core; del core.jpeg_decoder;"
-    " runpy.run_module('src.core.thumbnails', run_name='__main__')"
+    " runpy.run_module('src.media.decoder', run_name='__main__')"
 )
 
 
@@ -1443,14 +1464,16 @@ class DerivePostgresTests(DeriveFixture):
         body = jpeg()
         self.upload({"a.jpeg": body, "b.heic": b"h"})
         self.assertEqual(len(self.executor.submitted), 1)
-        self.store.begin_media_attempt("test", "screen", "screenshots", "a.jpeg")
+        self.store.media_queue.begin_media_attempt(
+            "test", "screen", "screenshots", "a.jpeg"
+        )
         # The same file again keeps its attempts; another size starts over.
         now = datetime.now(timezone.utc)
-        self.store.add_pending_media(
+        self.store.media_queue.add_pending_media(
             "test", "screen", "screenshots", [("a.jpeg", len(body), now)]
         )
         self.assertEqual(self.attempts(), {"a.jpeg": 1, "b.heic": 0})
-        self.store.add_pending_media(
+        self.store.media_queue.add_pending_media(
             "test", "screen", "screenshots", [("b.heic", 2, now)]
         )
         self.assertEqual(self.attempts(), {"a.jpeg": 1, "b.heic": 0})

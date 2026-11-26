@@ -1,0 +1,463 @@
+{
+ "details": {
+  "attachments": "Media: made 10, too_large 1, unreadable 1, unsupported 2; 0 waiting",
+  "screenshots": "Media: made 4, too_large 1, unreadable 1, unsupported 1; 0 waiting"
+ },
+ "inputs": {
+  "attachments/a/animated.gif": "a19e9b2eeebc03e4bb62febf102821eafb5f0cba019612bce6bd6b06012b022f",
+  "attachments/a/big.jpeg": "0d19f131d1f81d19a02e6934ee3304e5e5bf78d78e984d43019dc3a61ce073db",
+  "attachments/a/clip.mov": "98b4ff7a08fdc47099584a1cb0d0dc9a34f90c2f13df88d5b4c0ae9920ba3ebb",
+  "attachments/a/icon.bmp": "9b88fb5864f60774e827da34ac24c5d3e2a2c7f3b16261189a7bd6a8e9955d9a",
+  "attachments/a/letter.pdf": "105156e58646c5274f4f7420d8cd21020fc3cca3eeffb8453fbd3b5859675a7c",
+  "attachments/a/named.png": "f97acc0b31b887609591539134291b11983821a6f9aa1bcae293c7b9fec719de",
+  "attachments/a/photo.heic": "145de54d007cfd9fb8d453cdf7f3a66ed0fedd9c4a42d4e91d08c2970309e149",
+  "attachments/a/photo.jpg": "d31c7c37dd29d6f147673f1b0404b973b3cbbbe0061553afb654822f01292ee5",
+  "attachments/a/plain.png": "063257b769aa1c2e993835fe085062ae9337fbd9b7d1dec5cbfe11621e4913a2",
+  "attachments/a/rotated.jpeg": "02958713b140cb494d13d0347e0ae525db5d5d544552d5b16020d779bb372f7c",
+  "attachments/a/scan.tif": "f557144dc0d9a1a4607aea3703b2f876524b3d0251b914dc0c7cc1cafc9b71ad",
+  "attachments/a/scan.tiff": "eccbcb3fe9020d5a854d9d9250ada2fa6c52f6612c7c1cf7b4a9074b7e9fe8ac",
+  "attachments/a/still.webp": "296ae6b9b6468d424221695958b74ab57dd47694ab4ff772cbd99d03ed762641",
+  "attachments/a/turned.heif": "5bbc5321a517b33674cf8dbb941ebd727649034b8ebbdd9c2cf631b7783d1c27",
+  "screenshots/s/alpha.png": "063257b769aa1c2e993835fe085062ae9337fbd9b7d1dec5cbfe11621e4913a2",
+  "screenshots/s/huge.png": "a20f753b789f382d7071f5c39b68f5c45341d9ee6ffe39225e474b5f90c56826",
+  "screenshots/s/named.png": "f97acc0b31b887609591539134291b11983821a6f9aa1bcae293c7b9fec719de",
+  "screenshots/s/narrow.png": "d17629542dd6a594a96916aac8a55bbd48be67ae698e33f98932558a4f516ea2",
+  "screenshots/s/screen.heic": "145de54d007cfd9fb8d453cdf7f3a66ed0fedd9c4a42d4e91d08c2970309e149",
+  "screenshots/s/screen.jpeg": "72a655e6e773cc6000779d1d468a70ad072f135c012c2f17e21be68c19140c9c",
+  "screenshots/s/screen.jpg": "f94508ac6bba5fb0ccc426cba4f1d351573ad4e37421fc3a39ee97fe3c825a92"
+ },
+ "reads": [
+  [
+   "site/screen/screenshots/s/alpha.png",
+   20971520
+  ],
+  [
+   "site/screen/screenshots/s/named.png",
+   20971520
+  ],
+  [
+   "site/screen/screenshots/s/narrow.png",
+   20971520
+  ],
+  [
+   "site/screen/screenshots/s/screen.jpeg",
+   20971520
+  ],
+  [
+   "site/screen/screenshots/s/screen.jpg",
+   20971520
+  ],
+  [
+   "site/messages/attachments/a/animated.gif",
+   52428800
+  ],
+  [
+   "site/messages/attachments/a/icon.bmp",
+   52428800
+  ],
+  [
+   "site/messages/attachments/a/named.png",
+   52428800
+  ],
+  [
+   "site/messages/attachments/a/photo.heic",
+   52428800
+  ],
+  [
+   "site/messages/attachments/a/photo.jpg",
+   52428800
+  ],
+  [
+   "site/messages/attachments/a/plain.png",
+   52428800
+  ],
+  [
+   "site/messages/attachments/a/rotated.jpeg",
+   52428800
+  ],
+  [
+   "site/messages/attachments/a/scan.tif",
+   52428800
+  ],
+  [
+   "site/messages/attachments/a/scan.tiff",
+   52428800
+  ],
+  [
+   "site/messages/attachments/a/still.webp",
+   52428800
+  ],
+  [
+   "site/messages/attachments/a/turned.heif",
+   52428800
+  ]
+ ],
+ "rows": {
+  "attachments/a/animated.gif": {
+   "connection_id": "messages",
+   "content_type": "image/gif",
+   "derive_version": 1,
+   "key": "a/animated.gif",
+   "kind": "attachments",
+   "size": 375,
+   "stored_at": "2026-01-02T03:04:05+00:00",
+   "thumbnail_status": "made",
+   "thumbnail_w1280": true,
+   "thumbnail_w360": true
+  },
+  "attachments/a/big.jpeg": {
+   "connection_id": "messages",
+   "content_type": "image/jpeg",
+   "derive_version": 1,
+   "key": "a/big.jpeg",
+   "kind": "attachments",
+   "size": 52428801,
+   "stored_at": "2026-01-02T03:04:05+00:00",
+   "thumbnail_status": "too_large",
+   "thumbnail_w1280": false,
+   "thumbnail_w360": false
+  },
+  "attachments/a/clip.mov": {
+   "connection_id": "messages",
+   "content_type": "video/quicktime",
+   "derive_version": 1,
+   "key": "a/clip.mov",
+   "kind": "attachments",
+   "size": 27,
+   "stored_at": "2026-01-02T03:04:05+00:00",
+   "thumbnail_status": "unsupported",
+   "thumbnail_w1280": false,
+   "thumbnail_w360": false
+  },
+  "attachments/a/icon.bmp": {
+   "connection_id": "messages",
+   "content_type": "image/bmp",
+   "derive_version": 1,
+   "key": "a/icon.bmp",
+   "kind": "attachments",
+   "size": 2940054,
+   "stored_at": "2026-01-02T03:04:05+00:00",
+   "thumbnail_status": "made",
+   "thumbnail_w1280": true,
+   "thumbnail_w360": true
+  },
+  "attachments/a/letter.pdf": {
+   "connection_id": "messages",
+   "content_type": "application/pdf",
+   "derive_version": 1,
+   "key": "a/letter.pdf",
+   "kind": "attachments",
+   "size": 18,
+   "stored_at": "2026-01-02T03:04:05+00:00",
+   "thumbnail_status": "unsupported",
+   "thumbnail_w1280": false,
+   "thumbnail_w360": false
+  },
+  "attachments/a/named.png": {
+   "connection_id": "messages",
+   "content_type": "image/png",
+   "derive_version": 1,
+   "key": "a/named.png",
+   "kind": "attachments",
+   "size": 46102,
+   "stored_at": "2026-01-02T03:04:05+00:00",
+   "thumbnail_status": "unreadable",
+   "thumbnail_w1280": false,
+   "thumbnail_w360": false
+  },
+  "attachments/a/photo.heic": {
+   "connection_id": "messages",
+   "content_type": "image/heic",
+   "derive_version": 1,
+   "key": "a/photo.heic",
+   "kind": "attachments",
+   "size": 8539,
+   "stored_at": "2026-01-02T03:04:05+00:00",
+   "thumbnail_status": "made",
+   "thumbnail_w1280": true,
+   "thumbnail_w360": true
+  },
+  "attachments/a/photo.jpg": {
+   "connection_id": "messages",
+   "content_type": "image/jpeg",
+   "derive_version": 1,
+   "key": "a/photo.jpg",
+   "kind": "attachments",
+   "size": 262329,
+   "stored_at": "2026-01-02T03:04:05+00:00",
+   "thumbnail_status": "made",
+   "thumbnail_w1280": true,
+   "thumbnail_w360": true
+  },
+  "attachments/a/plain.png": {
+   "connection_id": "messages",
+   "content_type": "image/png",
+   "derive_version": 1,
+   "key": "a/plain.png",
+   "kind": "attachments",
+   "size": 10570,
+   "stored_at": "2026-01-02T03:04:05+00:00",
+   "thumbnail_status": "made",
+   "thumbnail_w1280": true,
+   "thumbnail_w360": true
+  },
+  "attachments/a/rotated.jpeg": {
+   "connection_id": "messages",
+   "content_type": "image/jpeg",
+   "derive_version": 1,
+   "key": "a/rotated.jpeg",
+   "kind": "attachments",
+   "size": 1965,
+   "stored_at": "2026-01-02T03:04:05+00:00",
+   "thumbnail_status": "made",
+   "thumbnail_w1280": true,
+   "thumbnail_w360": true
+  },
+  "attachments/a/scan.tif": {
+   "connection_id": "messages",
+   "content_type": "image/tiff",
+   "derive_version": 1,
+   "key": "a/scan.tif",
+   "kind": "attachments",
+   "size": 540122,
+   "stored_at": "2026-01-02T03:04:05+00:00",
+   "thumbnail_status": "made",
+   "thumbnail_w1280": true,
+   "thumbnail_w360": true
+  },
+  "attachments/a/scan.tiff": {
+   "connection_id": "messages",
+   "content_type": "image/tiff",
+   "derive_version": 1,
+   "key": "a/scan.tiff",
+   "kind": "attachments",
+   "size": 4500140,
+   "stored_at": "2026-01-02T03:04:05+00:00",
+   "thumbnail_status": "made",
+   "thumbnail_w1280": true,
+   "thumbnail_w360": true
+  },
+  "attachments/a/still.webp": {
+   "connection_id": "messages",
+   "content_type": "image/webp",
+   "derive_version": 1,
+   "key": "a/still.webp",
+   "kind": "attachments",
+   "size": 4684,
+   "stored_at": "2026-01-02T03:04:05+00:00",
+   "thumbnail_status": "made",
+   "thumbnail_w1280": true,
+   "thumbnail_w360": true
+  },
+  "attachments/a/turned.heif": {
+   "connection_id": "messages",
+   "content_type": "image/heif",
+   "derive_version": 1,
+   "key": "a/turned.heif",
+   "kind": "attachments",
+   "size": 624,
+   "stored_at": "2026-01-02T03:04:05+00:00",
+   "thumbnail_status": "made",
+   "thumbnail_w1280": true,
+   "thumbnail_w360": true
+  },
+  "screenshots/s/alpha.png": {
+   "connection_id": "screen",
+   "content_type": "image/png",
+   "derive_version": 1,
+   "key": "s/alpha.png",
+   "kind": "screenshots",
+   "size": 10570,
+   "stored_at": "2026-01-02T03:04:05+00:00",
+   "thumbnail_status": "made",
+   "thumbnail_w1280": true,
+   "thumbnail_w360": true
+  },
+  "screenshots/s/huge.png": {
+   "connection_id": "screen",
+   "content_type": "image/png",
+   "derive_version": 1,
+   "key": "s/huge.png",
+   "kind": "screenshots",
+   "size": 20971521,
+   "stored_at": "2026-01-02T03:04:05+00:00",
+   "thumbnail_status": "too_large",
+   "thumbnail_w1280": false,
+   "thumbnail_w360": false
+  },
+  "screenshots/s/named.png": {
+   "connection_id": "screen",
+   "content_type": "image/png",
+   "derive_version": 1,
+   "key": "s/named.png",
+   "kind": "screenshots",
+   "size": 46102,
+   "stored_at": "2026-01-02T03:04:05+00:00",
+   "thumbnail_status": "unreadable",
+   "thumbnail_w1280": false,
+   "thumbnail_w360": false
+  },
+  "screenshots/s/narrow.png": {
+   "connection_id": "screen",
+   "content_type": "image/png",
+   "derive_version": 1,
+   "key": "s/narrow.png",
+   "kind": "screenshots",
+   "size": 416,
+   "stored_at": "2026-01-02T03:04:05+00:00",
+   "thumbnail_status": "made",
+   "thumbnail_w1280": true,
+   "thumbnail_w360": true
+  },
+  "screenshots/s/screen.heic": {
+   "connection_id": "screen",
+   "content_type": "image/heic",
+   "derive_version": 1,
+   "key": "s/screen.heic",
+   "kind": "screenshots",
+   "size": 8539,
+   "stored_at": "2026-01-02T03:04:05+00:00",
+   "thumbnail_status": "unsupported",
+   "thumbnail_w1280": false,
+   "thumbnail_w360": false
+  },
+  "screenshots/s/screen.jpeg": {
+   "connection_id": "screen",
+   "content_type": "image/jpeg",
+   "derive_version": 1,
+   "key": "s/screen.jpeg",
+   "kind": "screenshots",
+   "size": 130498,
+   "stored_at": "2026-01-02T03:04:05+00:00",
+   "thumbnail_status": "made",
+   "thumbnail_w1280": true,
+   "thumbnail_w360": true
+  },
+  "screenshots/s/screen.jpg": {
+   "connection_id": "screen",
+   "content_type": "image/jpeg",
+   "derive_version": 1,
+   "key": "s/screen.jpg",
+   "kind": "screenshots",
+   "size": 37572,
+   "stored_at": "2026-01-02T03:04:05+00:00",
+   "thumbnail_status": "made",
+   "thumbnail_w1280": true,
+   "thumbnail_w360": true
+  }
+ },
+ "thumbnails": {
+  "site/messages/attachments.w1280/a/animated.gif.webp": [
+   "ce1acf419b9b600678885d18d129c98edf873c8827d86ea258822be9a9ee46a7",
+   "image/webp"
+  ],
+  "site/messages/attachments.w1280/a/icon.bmp.webp": [
+   "9af5ffe0aa870bd97b5e1f521cf4adef50de788ff6d335180174f4ba1cf15466",
+   "image/webp"
+  ],
+  "site/messages/attachments.w1280/a/photo.heic.webp": [
+   "9bce84086340f956fedfec015ea42abc91241d7e7f7c1175f4609d25e36ee8a0",
+   "image/webp"
+  ],
+  "site/messages/attachments.w1280/a/photo.jpg.webp": [
+   "bf47a879db85c6d6c9587b66ab500228b3bcb732072f1aeadb70a3722fc66edb",
+   "image/webp"
+  ],
+  "site/messages/attachments.w1280/a/plain.png.webp": [
+   "0b58a73b660f2357b29334b5c4f2fb261e1786f561e8e87fe4801c6d13c2c24f",
+   "image/webp"
+  ],
+  "site/messages/attachments.w1280/a/rotated.jpeg.webp": [
+   "0bfb129f9f79a625f375ea66f8c38057daf3c24aae27933647e6625e9c497399",
+   "image/webp"
+  ],
+  "site/messages/attachments.w1280/a/scan.tif.webp": [
+   "303c62b55d9881da95e126f00bfd1905a7c149fcacbd81f2afe21eec5ce0c985",
+   "image/webp"
+  ],
+  "site/messages/attachments.w1280/a/scan.tiff.webp": [
+   "3e355beb436f6bdb23fe8c9fac55e869964346a09571365883934bff65b133d5",
+   "image/webp"
+  ],
+  "site/messages/attachments.w1280/a/still.webp.webp": [
+   "6703aab54f847ae94e3ab44b1793d7270993962dff423e0d37f888c169ec8f41",
+   "image/webp"
+  ],
+  "site/messages/attachments.w1280/a/turned.heif.webp": [
+   "5df7443a5ff1bb76e3a358eaddfb003d85c8cec6a8cec2f0bd776001962faffc",
+   "image/webp"
+  ],
+  "site/messages/attachments.w360/a/animated.gif.webp": [
+   "98e372110a146018a38ba61831610c225a1abe0050f7de3af14f062273612a99",
+   "image/webp"
+  ],
+  "site/messages/attachments.w360/a/icon.bmp.webp": [
+   "aa009ca1d9fffd440b7871977bf86fd6d151876f310cd1e2f957d294b88c8b9c",
+   "image/webp"
+  ],
+  "site/messages/attachments.w360/a/photo.heic.webp": [
+   "aa26fde711d82a8db22975c0dfba3a5be8938eaac9feac5e731c1136cfe6d847",
+   "image/webp"
+  ],
+  "site/messages/attachments.w360/a/photo.jpg.webp": [
+   "3ef99eaec1c4e9a2c6f1b33c8715d9104b0807621ef4e169a28bc33a14c6b694",
+   "image/webp"
+  ],
+  "site/messages/attachments.w360/a/plain.png.webp": [
+   "dae2575cee2453fb3ad7f7b0c95f24b230964aca37b85708a37de866233b9f1f",
+   "image/webp"
+  ],
+  "site/messages/attachments.w360/a/rotated.jpeg.webp": [
+   "2dc5c48bbc609d116aab79cd2c040c5c6dccf8e5172a7ae03441006c95a3f3ad",
+   "image/webp"
+  ],
+  "site/messages/attachments.w360/a/scan.tif.webp": [
+   "7bea83935df0de333cf6aae8f54fe053786ef0ad138cbffdf1af77d34a0a9dc2",
+   "image/webp"
+  ],
+  "site/messages/attachments.w360/a/scan.tiff.webp": [
+   "b1b7adb2817e504b4f0e5e01b30cc45cfac68dcb6d3fd9248f4a5aa7fd5e58f7",
+   "image/webp"
+  ],
+  "site/messages/attachments.w360/a/still.webp.webp": [
+   "327f84d1d857c8c7004ffebbe31ecbfe584c87955ee73579661c2b5ab7d6bb51",
+   "image/webp"
+  ],
+  "site/messages/attachments.w360/a/turned.heif.webp": [
+   "4e6267e31f6c9ddd996837c318b673ef3ee35d8a5205d9492a0022fe29ecfaf1",
+   "image/webp"
+  ],
+  "site/screen/screenshots.w1280/s/alpha.png.webp": [
+   "0b58a73b660f2357b29334b5c4f2fb261e1786f561e8e87fe4801c6d13c2c24f",
+   "image/webp"
+  ],
+  "site/screen/screenshots.w1280/s/narrow.png.webp": [
+   "932463314e21d276e93cd6eb880f3f7fe6f3baa028c028ff5f241c481948d52c",
+   "image/webp"
+  ],
+  "site/screen/screenshots.w1280/s/screen.jpeg.webp": [
+   "de66cec3a0d27fe495b78a2a662331f6c17de4ef6294501035e9544d05fe196a",
+   "image/webp"
+  ],
+  "site/screen/screenshots.w1280/s/screen.jpg.webp": [
+   "c3967f677cb703b619b4e61e7b39d1446793f6b454412b04253ecb2e89d11c49",
+   "image/webp"
+  ],
+  "site/screen/screenshots.w360/s/alpha.png.webp": [
+   "dae2575cee2453fb3ad7f7b0c95f24b230964aca37b85708a37de866233b9f1f",
+   "image/webp"
+  ],
+  "site/screen/screenshots.w360/s/narrow.png.webp": [
+   "29b2e0574dcf3e63dcc86562659dcffdf6f0d29e931ef2a9b92b0c6947e9a843",
+   "image/webp"
+  ],
+  "site/screen/screenshots.w360/s/screen.jpeg.webp": [
+   "1c9a38b24c507744fd804dc490831e39aaeb3e23242e08415d5831add68dffc2",
+   "image/webp"
+  ],
+  "site/screen/screenshots.w360/s/screen.jpg.webp": [
+   "7c12baf692839b2f2d7de00a0ccf2fdf2ac1f4e8788ce5806714f03348d93159",
+   "image/webp"
+  ]
+ }
+}

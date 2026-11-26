@@ -2,7 +2,7 @@
 area: "[[Homelab]]"
 categories:
   - "[[Resources]]"
-reviewed: 2026-11-24
+reviewed: 2026-11-26
 summary: How to write, register and test a connector, a dlt source with a small Miroir definition, without breaking its stored state.
 topics:
   - "[[Warehouse]]"
@@ -110,11 +110,13 @@ a change alters rows or values produced by an artifact.
 
 ## Media kinds
 
-A connector whose rows point at files declares a `MediaKind`: its name, the
-resource and column holding each file's key, the allowed extensions, a size
-limit, the extensions the worker makes thumbnails of (none means the kind
-is not derived), and optionally a smaller size above which a file is not read
-to make them (`thumbnail_max_bytes`). Core does the rest: [Media](media.md).
+A connector whose rows point at files declares a `MediaKind`
+(`src/media/kinds.py`, the only part of media a connector imports): its name,
+the resource and column holding each file's key, the allowed extensions, a size
+limit, the profile the worker makes thumbnails with (`profile`; none means the
+kind is not derived), and optionally a smaller size above which a file is not
+read to make them (`derive_max_bytes`). Media does the rest:
+[Media](media.md).
 
 ## Sources on a device
 

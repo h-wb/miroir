@@ -306,7 +306,7 @@ class WebMediaBytesTests(WebMediaTests):
             "https://objects.test/phone/attachments/clip.mov?get=1&expires=300",
         )
         self.assertEqual(self.objects.gets, [OBJECT])
-        with patch("src.core.media.MAX_STREAMED_IMAGE", 4):
+        with patch("src.media.links.MAX_STREAMED_IMAGE", 4):
             large = self.client.get(f"{VIEW}?size=original", headers=self.admin)
         self.assertEqual(large.status_code, 302)
         self.assertEqual(

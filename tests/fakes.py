@@ -3,7 +3,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 from urllib.parse import quote, unquote, urlsplit
 
-from src.core.media import ListedObject, Listing, ObjectTooLarge, StoredObject
+from src.media.store import ListedObject, Listing, ObjectTooLarge, StoredObject
 
 
 class FakeObjectStore:

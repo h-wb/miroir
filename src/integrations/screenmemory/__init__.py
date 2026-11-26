@@ -8,11 +8,11 @@ from typing import Any
 from src.integrations.contracts import (
     FileFormat,
     IntegrationDefinition,
-    MediaKind,
     ResourceDefinition,
 )
 from src.integrations.screenmemory.formats import FORMAT_ID, VERSION, validate_batch
 from src.kernel.models import StrictModel
+from src.media.kinds import MediaKind
 
 
 class ScreenMemorySettings(StrictModel):
@@ -61,9 +61,10 @@ DEFINITION = IntegrationDefinition(
             "image_path",
             (".jpeg", ".jpg", ".png", ".heic"),
             20 * 1024 * 1024,
-            # HEIC is accepted, but the collector stores JPEG: a HEIC screenshot
-            # is recorded `unsupported` (decision 040).
-            thumbnails=(".jpeg", ".jpg", ".png"),
+            # HEIC is accepted, but the collector stores JPEG: the screenshot
+            # profile reads JPEG and PNG only, so a HEIC screenshot is recorded
+            # `unsupported` (decision 040).
+            profile="screenshot",
         ),
     ),
 )

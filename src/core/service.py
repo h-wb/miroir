@@ -19,7 +19,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
-from src.core import media
 from src.core.config import (
     ResolvedAnalysis,
     ResolvedConnection,
@@ -31,6 +30,10 @@ from src.core.config import (
 from src.core.operations import ArtifactOrigin, ConnectionBusy, MetadataStore
 from src.core.secrets import SecretResolutionError, SecretStore, make_resolver
 from src.kernel.errors import OperationError
+from src.media import links, uploads
+from src.media.backfill import backfill_options
+from src.media.kinds import derived_kind
+from src.media.store import ObjectStore, StoredObject
 
 REPO = Path(__file__).resolve().parents[2]
 # A request with no run after this long was never handed to an executor.
@@ -105,7 +108,7 @@ class MiroirService:
     # The Prefect adapter when an orchestrator is configured (decision 013). It is
     # then also the executor; without it, requests run as local subprocesses.
     orchestrator: Orchestrator | None = None
-    object_store: media.ObjectStore | None = None
+    object_store: ObjectStore | None = None
 
     def resolver(self) -> Callable[[ResolvedConnection], dict[str, str]]:
         return make_resolver(self.secrets)
@@ -126,8 +129,8 @@ class MiroirService:
     ) -> list[dict[str, Any]]:
         miroir = self.miroir()
         connection = self._connection(miroir, connection_id)
-        results = media.request_uploads(
-            miroir.media, self.object_store, connection, kind, objects
+        results = uploads.request_uploads(
+            miroir.media, self.object_store, connection.media, kind, objects
         )
         # A file found present may be one whose confirmation was lost.
         self._queue_derive(miroir, connection, kind, objects, results, "present")
@@ -138,8 +141,8 @@ class MiroirService:
     ) -> list[dict[str, Any]]:
         miroir = self.miroir()
         connection = self._connection(miroir, connection_id)
-        results = media.confirm_uploads(
-            miroir.media, self.object_store, connection, kind, objects
+        results = uploads.confirm_uploads(
+            miroir.media, self.object_store, connection.media, kind, objects
         )
         self._queue_derive(miroir, connection, kind, objects, results, "stored")
         return results
@@ -159,7 +162,7 @@ class MiroirService:
         is stored never leaves it underived. The run is only requested: if that
         fails, the queue waits for the next request or a backfill.
         """
-        if media.derived_kind(connection, kind) is None:
+        if derived_kind(connection.integration.media, kind) is None:
             return
         assert isinstance(objects, list)  # validated by request/confirm
         now = datetime.now(timezone.utc)
@@ -171,7 +174,9 @@ class MiroirService:
         if not found:
             return
         try:
-            self.store.add_pending_media(miroir.id, connection.config.id, kind, found)
+            self.store.media_queue.add_pending_media(
+                miroir.id, connection.config.id, kind, found
+            )
         except Exception as error:
             log.exception(
                 "Stored media of %s could not be queued", connection.config.id
@@ -222,7 +227,7 @@ class MiroirService:
         if miroir.media is None:
             raise OperationError("Media is not configured")
         connection = self._connection(miroir, connection_id)
-        options = media.backfill_options(connection, kind, limit, retry)
+        options = backfill_options(connection.integration.media, kind, limit, retry)
         operation_id = self._request_derive(miroir, connection_id, "request", options)
         assert operation_id is not None  # a backfill never joins
         return operation_id
@@ -230,25 +235,29 @@ class MiroirService:
     def media_view_url(self, connection_id: str, kind: str, key: str) -> str:
         miroir = self.miroir()
         connection = self._connection(miroir, connection_id)
-        return media.view_url(miroir.media, self.object_store, connection, kind, key)
+        return links.view_url(
+            miroir.media, self.object_store, connection.media, kind, key
+        )
 
     def media_thumbnail(
         self, connection_id: str, kind: str, key: str, width: int
-    ) -> media.StoredObject | None:
+    ) -> StoredObject | None:
         """A thumbnail to copy to the browser (decision 040); None if none was made."""
         miroir = self.miroir()
         connection = self._connection(miroir, connection_id)
-        return media.read_thumbnail(
-            miroir.media, self.object_store, connection, kind, key, width
+        return links.read_thumbnail(
+            miroir.media, self.object_store, connection.media, kind, key, width
         )
 
     def media_image(
         self, connection_id: str, kind: str, key: str
-    ) -> media.StoredObject | None:
-        """An original image to copy to the browser; media.NotStreamed otherwise."""
+    ) -> StoredObject | None:
+        """An original image to copy to the browser; links.NotStreamed otherwise."""
         miroir = self.miroir()
         connection = self._connection(miroir, connection_id)
-        return media.read_image(miroir.media, self.object_store, connection, kind, key)
+        return links.read_image(
+            miroir.media, self.object_store, connection.media, kind, key
+        )
 
     def _dashboards(
         self, miroir: ResolvedMiroir, analysis: ResolvedAnalysis
@@ -511,7 +520,7 @@ class MiroirService:
     ) -> dict[str, Any] | None:
         """Files waiting for thumbnails and the latest derive run, if any kind has
         thumbnails."""
-        kinds = [k.name for k in connection.integration.media if k.thumbnails]
+        kinds = [k.name for k in connection.integration.media if k.profile]
         if not kinds or miroir.media is None:
             return None
         recent = self.store.recent_operations(
@@ -519,7 +528,7 @@ class MiroirService:
         )
         ran = next((o for o in recent if o["attempts"]), None)
         return {
-            "waiting": self.store.count_pending_media(
+            "waiting": self.store.media_queue.count_pending_media(
                 miroir.id, connection.config.id, kinds
             ),
             "last_requested": recent[0]["created_at"] if recent else None,
@@ -968,7 +977,7 @@ class MiroirService:
         # A report in flight while a former connection of this ID was removed may
         # have landed after its cleanup; it does not belong to the new one.
         self.store.delete_collector_reports(miroir.id, connection_id)
-        self.store.delete_media_records(miroir.id, connection_id)
+        self.store.media_queue.delete_media_records(miroir.id, connection_id)
         try:
             for name, value in credentials.items():
                 assert secrets is not None  # checked above
@@ -1062,7 +1071,7 @@ class MiroirService:
         self.store.delete_secrets(miroir.id, connection_id)
         self.store.revoke_delivery_token(miroir.id, connection_id)
         self.store.delete_collector_reports(miroir.id, connection_id)
-        self.store.delete_media_records(miroir.id, connection_id)
+        self.store.media_queue.delete_media_records(miroir.id, connection_id)
 
     # ---- Orchestrator -------------------------------------------------------------
 

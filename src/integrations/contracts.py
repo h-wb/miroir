@@ -12,6 +12,7 @@ from typing import Any
 
 from src.integrations.delivery import DeliveryMethod
 from src.kernel.models import StrictModel
+from src.media.kinds import MediaKind
 
 
 @dataclass(frozen=True)
@@ -77,29 +78,6 @@ class FileFormat:
     sender: str = ""
     # Name recorded for files arriving at the receiving URL.
     received_name: str = "received"
-
-
-@dataclass(frozen=True)
-class MediaKind:
-    """Files that a resource's rows point at. Stored by core, never parsed."""
-
-    name: str
-    resource: str
-    column: str
-    extensions: tuple[str, ...]
-    max_bytes: int
-    # Extensions the worker makes thumbnails of (decision 040). A kind that
-    # names none is not derived: no thumbnails and no `media_objects` rows.
-    thumbnails: tuple[str, ...] = ()
-    # The largest file the worker reads to make thumbnails of; a larger one is
-    # recorded `too_large` without being read. None means `max_bytes`.
-    thumbnail_max_bytes: int | None = None
-
-    @property
-    def thumbnail_bound(self) -> int:
-        if self.thumbnail_max_bytes is None:
-            return self.max_bytes
-        return min(self.thumbnail_max_bytes, self.max_bytes)
 
 
 @dataclass(frozen=True)

@@ -27,9 +27,10 @@ from src.analyses.catalog import PACKAGES
 from src.core.analysis import analysis_plan
 from src.core.artifacts import submit_artifact
 from src.core.config import parse_miroir
-from src.core.derive import DERIVE_VERSION, _Writer
 from src.core.runner import import_artifact
 from src.core.timeline import SEARCH_CHARACTERS, search_vector
+from src.media.config import MediaConfig
+from src.media.derive import DERIVE_VERSION, MediaWriter
 from tests.test_messages_models import (
     ALEX,
     BOOK,
@@ -217,12 +218,13 @@ class TimelineMessagesFixture(TimelineBuildFixture):
     def media_record(self, miroir, media_key, status="made", connection_id="m"):
         """One media_objects row for an attachment, as the derive worker writes it."""
         connection = next(c for c in miroir.connections if c.config.id == "m")
-        writer = _Writer(
-            connection,
+        writer = MediaWriter(
+            connection.media_target(
+                MediaConfig(endpoint="http://internal.test", bucket="media")
+            ),
             self.execution["destination"],
             self.execution["pipelines_dir"],
-            self.store,
-            5,
+            lambda: self.store.connection_lock(connection.binding.pipeline_name, 5),
         )
         now = datetime.now(timezone.utc)
         made = status == "made"

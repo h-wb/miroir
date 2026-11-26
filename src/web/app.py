@@ -24,7 +24,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
-from src.core import media
 from src.core.config import ConfigurationConflict, ConfigurationError
 from src.core.operations import OrchestratorUnavailable
 from src.core.reports import (
@@ -44,6 +43,9 @@ from src.core.timeline import (
 )
 from src.integrations.validation import InvalidArtifact
 from src.kernel.errors import OperationError
+from src.media.links import NotStreamed
+from src.media.names import image_type, valid_key
+from src.media.store import StorageUnavailable
 from src.web.metrics import render_metrics
 
 SESSION_COOKIE = "miroir_session"
@@ -544,7 +546,7 @@ def create_app(
         A file of a frame the timeline says is withheld is not found, at any size
         or as a link; a timeline that cannot say refuses rather than serve it.
         """
-        if not media.valid_key(key):  # before the warehouse sees it (NUL)
+        if not valid_key(key):  # before the warehouse sees it (NUL)
             return Response(
                 status_code=404, headers={"Cache-Control": "private, no-store"}
             )
@@ -586,15 +588,15 @@ def create_app(
         try:
             if size == "original":
                 found = service.media_image(connection_id, kind, key)
-                content_type = media.image_type(key)
+                content_type = image_type(key)
             elif size in ("360", "1280"):
                 found = service.media_thumbnail(connection_id, kind, key, int(size))
                 content_type = "image/webp"
             else:
                 return Response(status_code=400, headers=no_store)
-        except media.NotStreamed:
+        except NotStreamed:
             return media_link(connection_id, kind, key)
-        except media.StorageUnavailable:
+        except StorageUnavailable:
             return Response(status_code=503, headers=no_store)
         except OperationError:
             return Response(status_code=404, headers=no_store)

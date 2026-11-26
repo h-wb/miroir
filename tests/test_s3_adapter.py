@@ -9,9 +9,9 @@ from botocore.exceptions import ClientError
 from botocore.response import StreamingBody
 from botocore.stub import Stubber
 
-from src.adapters.s3 import S3ObjectStore, from_environment
-from src.core.config import MediaConfig
-from src.core.media import ListedObject, Listing, ObjectTooLarge, StoredObject
+from src.media.config import MediaConfig
+from src.media.s3 import S3ObjectStore, from_environment
+from src.media.store import ListedObject, Listing, ObjectTooLarge, StoredObject
 from tests.fakes import FakeObjectStore
 
 

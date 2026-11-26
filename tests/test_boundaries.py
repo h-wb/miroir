@@ -11,16 +11,31 @@ from pathlib import Path
 # place of the control plane, which they never import.
 _KERNEL = "src.kernel"
 _KERNEL_LIBRARIES = ("pydantic", "pydantic_core", "annotated_types")
+_MEDIA = "src.media"
 _ALLOWED = {
     "kernel": (),
-    "integrations": (_KERNEL,),
+    # A connector declares its media kinds, and knows nothing else of media.
+    "integrations": (_KERNEL, f"{_MEDIA}.kinds"),
     "analyses": (_KERNEL,),
-    "core": (_KERNEL, "src.integrations", "src.analyses"),
-    # The flow builds the worker's object store from its environment.
-    "pipelines": (_KERNEL, "src.core", "src.adapters.s3"),
+    # Files that rows point at (package split, steps 4 and 5): the kernel only,
+    # never the control plane, web, cli, the viewer or the connector registry.
+    # The control plane hands it what it reads (src.media.target).
+    "media": (_KERNEL,),
+    "core": (_KERNEL, "src.integrations", "src.analyses", _MEDIA),
+    "pipelines": (_KERNEL, "src.core", _MEDIA),
     "adapters": (_KERNEL, "src.core", "src.pipelines"),
-    "web": (_KERNEL, "src.core", "src.integrations"),
-    "cli": (_KERNEL, "src.core", "src.integrations", "src.adapters", "src.web"),
+    "web": (_KERNEL, "src.core", "src.integrations", _MEDIA),
+    "cli": (_KERNEL, "src.core", "src.integrations", "src.adapters", "src.web", _MEDIA),
+}
+# Libraries a part never imports, and those only one module may import.
+_NEVER = {"media": ("fastapi", "starlette", "prefect")}
+_ONLY = {
+    # Media is never decoded in the web process, nor in the worker's own: one
+    # module decodes, and it runs as a child process that nothing imports.
+    "PIL": f"{_MEDIA}.decoder",
+    "pillow_heif": f"{_MEDIA}.decoder",
+    "boto3": f"{_MEDIA}.s3",
+    "botocore": f"{_MEDIA}.s3",
 }
 # The warehouse reader (decision 040): it needs nothing of the write side, and
 # only the server's transports open it; flow runs hold their own credentials.
@@ -28,12 +43,10 @@ _ALLOWED = {
 _TIMELINE = "src.core.timeline"
 _TIMELINE_IMPORTS = (_KERNEL, "src.core.config", "src.core.analysis")
 _TIMELINE_IMPORTERS = ("src.web", "src.cli")
-# Media is never decoded in the web process, nor in the worker's own: one module
-# decodes, and it runs as a child process that nothing imports. Only the runner
-# imports the derive run that starts it, inside the run.
 _IMAGE_LIBRARIES = ("PIL", "pillow_heif")
-_DECODER = "src.core.thumbnails"
-_DERIVE = "src.core.derive"
+_DECODER = f"{_MEDIA}.decoder"
+# Only the runner imports the derive run that starts the decoder, inside the run.
+_DERIVE = f"{_MEDIA}.derive"
 _DERIVE_IMPORTER = "src.core.runner"
 
 
@@ -95,6 +108,11 @@ class BoundaryTests(unittest.TestCase):
                         allowed = (f"src.{part}", *_ALLOWED[part])
                         if not any(_within(name, prefix) for prefix in allowed):
                             errors.append(f"{location}: {part} may not import {name}")
+                    if any(_within(name, lib) for lib in _NEVER.get(part, ())):
+                        errors.append(f"{location}: {part} may not import {name}")
+                    for library, owner in _ONLY.items():
+                        if _within(name, library) and module != owner:
+                            errors.append(f"{location}: only {owner} imports {name}")
                     if (
                         module == _TIMELINE
                         and name.startswith("src.")
@@ -105,14 +123,6 @@ class BoundaryTests(unittest.TestCase):
                         _within(module, p) for p in (_TIMELINE, *_TIMELINE_IMPORTERS)
                     ):
                         errors.append(f"{location}: only web and cli import {name}")
-                    if (part == "web" or module == _TIMELINE) and any(
-                        _within(name, library) for library in _IMAGE_LIBRARIES
-                    ):
-                        errors.append(f"{location}: {module} may not decode images")
-                    elif module != _DECODER and any(
-                        _within(name, library) for library in _IMAGE_LIBRARIES
-                    ):
-                        errors.append(f"{location}: only {_DECODER} imports {name}")
                     if _within(name, _DECODER) and module != _DECODER:
                         errors.append(f"{location}: {name} runs as its own process")
                     if _within(name, _DERIVE) and module not in (
@@ -152,10 +162,19 @@ class BoundaryTests(unittest.TestCase):
             "src.web.timeline_pages",
             "src.core.service",
             "src.core.runner",
-            "src.core.media",
             "src.core.timeline",
             "src.adapters.prefect",
-            "src.adapters.s3",
+            "src.media.backfill",
+            "src.media.config",
+            "src.media.kinds",
+            "src.media.links",
+            "src.media.names",
+            "src.media.profiles",
+            "src.media.queue",
+            "src.media.s3",
+            "src.media.store",
+            "src.media.target",
+            "src.media.uploads",
         )
         probe = (
             "import importlib, sys\n"

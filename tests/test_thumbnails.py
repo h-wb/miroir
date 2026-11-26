@@ -8,9 +8,7 @@ from unittest.mock import patch
 
 from PIL import Image, features
 
-from src.core.media import THUMBNAIL_WIDTHS
-from src.core.media import image_decoders as decoders
-from src.core.thumbnails import (
+from src.media.decoder import (
     MAX_ASPECT,
     MAX_HEIGHT,
     MAX_PIXELS,
@@ -18,13 +16,15 @@ from src.core.thumbnails import (
     Refused,
     make_thumbnails,
 )
+from src.media.profiles import PROFILES
+from src.media.profiles import formats as decoders_of
 
 JPEG = ("JPEG",)
 HEIF = ("HEIF",)
 
 
 def make(body: bytes, formats: tuple[str, ...]) -> dict[int, bytes]:
-    return make_thumbnails(body, formats, THUMBNAIL_WIDTHS)
+    return make_thumbnails(body, formats, PROFILES["image"].widths)
 
 
 def encoded(image: Image.Image, fmt: str, **options) -> bytes:
@@ -58,26 +58,64 @@ class ThumbnailTests(unittest.TestCase):
             make(body, formats)
         return caught.exception.status
 
-    def test_every_kind_with_thumbnails_can_decode_them(self):
+    def test_every_derived_kind_has_a_profile_it_can_decode(self):
         from src.integrations.registry import INTEGRATIONS
 
-        kinds = [k for i in INTEGRATIONS.values() for k in i.media if k.thumbnails]
-        self.assertEqual([k.name for k in kinds], ["screenshots", "attachments"])
+        kinds = [k for i in INTEGRATIONS.values() for k in i.media if k.profile]
+        self.assertEqual(
+            {k.name: k.profile for k in kinds},
+            {"screenshots": "screenshot", "attachments": "image"},
+        )
         for kind in kinds:
-            self.assertLessEqual(set(kind.thumbnails), set(kind.extensions))
-            for extension in kind.thumbnails:
-                self.assertTrue(decoders([extension]), extension)
+            profile = kind.derive_profile
+            assert profile is not None
+            self.assertLessEqual(set(profile.decoders), set(kind.extensions))
+        # What each kind decoded before profiles, and how much of a file it reads.
+        screenshots, attachments = kinds
+        self.assertEqual(
+            sorted(PROFILES[screenshots.profile].decoders), [".jpeg", ".jpg", ".png"]
+        )
+        self.assertEqual(
+            sorted(PROFILES[attachments.profile].decoders),
+            sorted(
+                (".heic", ".heif", ".jpeg", ".jpg", ".png")
+                + (".gif", ".webp", ".tiff", ".tif", ".bmp")
+            ),
+        )
+        self.assertEqual(screenshots.derive_bound, 20 * 1024 * 1024)
+        self.assertEqual(attachments.derive_bound, 50 * 1024 * 1024)
+
+    def test_a_profile_makes_only_widths_media_objects_has_columns_for(self):
+        from src.media.derive import COLUMNS, THUMBNAIL_COLUMNS
+
+        self.assertEqual(
+            THUMBNAIL_COLUMNS, {360: "thumbnail_w360", 1280: "thumbnail_w1280"}
+        )
+        self.assertLessEqual(set(THUMBNAIL_COLUMNS.values()), set(COLUMNS))
+        for profile in PROFILES.values():
+            with self.subTest(profile.name):
+                # A new width needs a new column (additive), not just a profile.
+                self.assertEqual(profile.widths, tuple(THUMBNAIL_COLUMNS))
+                self.assertEqual(
+                    (profile.output, profile.content_type), ("webp", "image/webp")
+                )
+
+    def test_a_kind_cannot_name_an_unknown_profile(self):
+        from src.media.kinds import MediaKind
+
+        with self.assertRaises(ValueError):
+            MediaKind("k", "r", "c", (".png",), 10, profile="video")
 
     def test_every_decoder_has_a_check_image_that_it_alone_reads(self):
-        from src.core.decoder_checks import check_image
-        from src.core.media import IMAGE_DECODERS
+        from src.media.decoder_checks import check_image
 
-        for decoder in sorted(set(IMAGE_DECODERS.values())):
+        every = decoders_of(PROFILES.values())
+        for decoder in every:
             with self.subTest(decoder):
                 image = check_image(decoder)
                 self.assertIsNotNone(image)
                 self.assertEqual(sorted(make(image, (decoder,))), [360, 1280])
-                others = tuple(d for d in set(IMAGE_DECODERS.values()) if d != decoder)
+                others = tuple(d for d in every if d != decoder)
                 self.assertEqual(self.refusal(image, others), "unreadable")
 
     def test_pillow_has_webp(self):
@@ -167,8 +205,10 @@ class ThumbnailTests(unittest.TestCase):
         self.assertEqual(self.refusal(png, JPEG), "unreadable")
         self.assertEqual(sorted(make(png, ("JPEG", "PNG"))), [360, 1280])
         self.assertEqual(self.refusal(png, ()), "unsupported")
+        self.assertEqual(PROFILES["screenshot"].formats, ("JPEG", "PNG"))
         self.assertEqual(
-            decoders((".jpeg", ".jpg", ".png", ".heic")), ("HEIF", "JPEG", "PNG")
+            PROFILES["image"].formats,
+            ("BMP", "GIF", "HEIF", "JPEG", "PNG", "TIFF", "WEBP"),
         )
 
     def test_broken_bytes_are_unreadable(self):
@@ -227,7 +267,7 @@ class ThumbnailTests(unittest.TestCase):
         self.assertEqual(opened(made[360]).size, (360, 2880))
 
     def test_running_out_of_memory_is_too_large(self):
-        with patch("src.core.thumbnails._prepared", side_effect=MemoryError):
+        with patch("src.media.decoder._prepared", side_effect=MemoryError):
             self.assertEqual(self.refusal(screen(), JPEG), "too_large")
 
     def test_only_the_first_frame_of_an_animation(self):

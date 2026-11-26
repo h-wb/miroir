@@ -9,10 +9,10 @@ from src.integrations.apple_messages.formats import FORMAT_ID, VERSION, validate
 from src.integrations.contracts import (
     FileFormat,
     IntegrationDefinition,
-    MediaKind,
     ResourceDefinition,
 )
 from src.kernel.models import StrictModel
+from src.media.kinds import MediaKind
 
 
 class AppleMessagesSettings(StrictModel):
@@ -104,22 +104,11 @@ DEFINITION = IntegrationDefinition(
                 ".zip",
             ),
             5000 * 1024 * 1024,
-            # Images only; video, audio and documents are recorded `unsupported`
-            # (decision 040, phase 2b).
-            thumbnails=(
-                ".heic",
-                ".heif",
-                ".jpeg",
-                ".jpg",
-                ".png",
-                ".gif",
-                ".webp",
-                ".tiff",
-                ".tif",
-                ".bmp",
-            ),
+            # Images only, HEIC included; video, audio and documents are recorded
+            # `unsupported` (decision 040, phase 2b).
+            profile="image",
             # A photo is far smaller; a file above this is not read to be decoded.
-            thumbnail_max_bytes=50 * 1024 * 1024,
+            derive_max_bytes=50 * 1024 * 1024,
         ),
     ),
 )

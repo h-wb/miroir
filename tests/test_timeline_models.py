@@ -26,9 +26,10 @@ from src.analyses.catalog import PACKAGES
 from src.core.analysis import analysis_plan
 from src.core.artifacts import submit_artifact
 from src.core.config import ConfigurationError, parse_miroir
-from src.core.derive import DERIVE_VERSION, _Writer
 from src.core.operations import MetadataStore
 from src.core.runner import import_artifact
+from src.media.config import MediaConfig
+from src.media.derive import DERIVE_VERSION, MediaWriter
 from src.pipelines.transform import build_connection_models
 from tests.postgres import start_postgres
 from tests.test_miroir import example
@@ -368,12 +369,13 @@ class TimelineBuildFixture(unittest.TestCase):
         """One media_objects row, written as the derive worker writes it."""
         connection = next(c for c in miroir.connections if c.config.id == "screen")
         made = status == "made"
-        writer = _Writer(
-            connection,
+        writer = MediaWriter(
+            connection.media_target(
+                MediaConfig(endpoint="http://internal.test", bucket="media")
+            ),
             self.execution["destination"],
             self.execution["pipelines_dir"],
-            self.store,
-            5,
+            lambda: self.store.connection_lock(connection.binding.pipeline_name, 5),
         )
         now = datetime.now(timezone.utc)
         writer.write(

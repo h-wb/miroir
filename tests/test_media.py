@@ -3,9 +3,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from src.core import media
-from src.core.config import MediaConfig, load_miroir
+from src.core.config import load_miroir
 from src.kernel.errors import OperationError
+from src.media import links, names, uploads
+from src.media.config import MediaConfig
 from tests.fakes import FakeObjectStore
 
 
@@ -19,7 +20,11 @@ class MediaTests(unittest.TestCase):
                 '{"id":"browser","integration":"browser_history","settings":{}},'
                 '{"id":"messages","integration":"apple_messages","settings":{}}]}'
             )
-            self.screen, self.browser, self.messages = load_miroir(path).connections
+            connections = load_miroir(path).connections
+            # What links and uploads read of each connection.
+            self.screen, self.browser, self.messages = (
+                connection.media for connection in connections
+            )
         self.config = MediaConfig(
             endpoint="http://internal.test", bucket="media", prefix="site"
         )
@@ -27,19 +32,19 @@ class MediaTests(unittest.TestCase):
         self.kind = "screenshots"
 
     def plan(self, objects):
-        return media.request_uploads(
+        return uploads.request_uploads(
             self.config, self.store, self.screen, self.kind, objects
         )
 
     def test_apple_messages_attachments(self):
-        (kind,) = self.messages.integration.media
+        (kind,) = self.messages.kinds
         self.assertEqual(
             (kind.name, kind.resource, kind.column),
             ("attachments", "attachments", "media_key"),
         )
         self.assertEqual(kind.max_bytes, 5000 * 1024 * 1024)
-        self.assertTrue(set(kind.extensions) <= media.CONTENT_TYPES.keys())
-        mov, pdf, unsupported, oversize = media.request_uploads(
+        self.assertTrue(set(kind.extensions) <= names.CONTENT_TYPES.keys())
+        mov, pdf, unsupported, oversize = uploads.request_uploads(
             self.config,
             self.store,
             self.messages,
@@ -73,7 +78,7 @@ class MediaTests(unittest.TestCase):
             "caf\u00e9.jpg",
         ):
             with self.subTest(key=key):
-                self.assertTrue(media.valid_key(key))
+                self.assertTrue(names.valid_key(key))
         for key in (
             None,
             123,
@@ -90,15 +95,15 @@ class MediaTests(unittest.TestCase):
             "a\x85",
         ):
             with self.subTest(key=key):
-                self.assertFalse(media.valid_key(key))
+                self.assertFalse(names.valid_key(key))
 
     def test_object_name(self):
         self.assertEqual(
-            media.object_name("a/b", "screen", self.kind, "c/d.png"),
+            names.object_name("a/b", "screen", self.kind, "c/d.png"),
             "a/b/screen/screenshots/c/d.png",
         )
         self.assertEqual(
-            media.object_name("", "screen", self.kind, "c/d.png"),
+            names.object_name("", "screen", self.kind, "c/d.png"),
             "screen/screenshots/c/d.png",
         )
 
@@ -154,7 +159,7 @@ class MediaTests(unittest.TestCase):
     def test_confirm_and_view(self):
         self.store.objects["site/screen/screenshots/a.JPG"] = 2
         objects = [("a.JPG", 2), ("a.JPG", 3), ("b.png", 3), ("../private.jpg", 1)]
-        results = media.confirm_uploads(
+        results = uploads.confirm_uploads(
             self.config,
             self.store,
             self.screen,
@@ -176,7 +181,7 @@ class MediaTests(unittest.TestCase):
             self.store, "head", side_effect=AssertionError("head called")
         ):
             self.assertEqual(
-                media.view_url(
+                links.view_url(
                     self.config, self.store, self.screen, self.kind, "dir/no.png"
                 ),
                 "https://objects.test/site/screen/screenshots/dir/no.png?get=1&expires=300",
@@ -185,7 +190,7 @@ class MediaTests(unittest.TestCase):
     def test_limits_and_refusals(self):
         item = {"key": "private.jpg", "size": 1}
         self.assertEqual(len(self.plan([item] * 500)), 500)
-        for operation in (media.request_uploads, media.confirm_uploads):
+        for operation in (uploads.request_uploads, uploads.confirm_uploads):
             for args in (
                 (None, self.store, self.screen, self.kind, [item]),
                 (self.config, None, self.screen, self.kind, [item]),
@@ -205,7 +210,7 @@ class MediaTests(unittest.TestCase):
                     operation(*args)
                 self.assertNotIn("private.jpg", str(ctx.exception))
         with self.assertRaises(OperationError) as ctx:
-            media.view_url(
+            links.view_url(
                 self.config, self.store, self.screen, self.kind, "../private.jpg"
             )
         self.assertNotIn("private.jpg", str(ctx.exception))
