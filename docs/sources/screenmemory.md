@@ -43,6 +43,17 @@ ScreenMemory documents none of this, so a new version can change it. The collect
 checks the tables and columns it needs and fails with a fixed message if they are
 gone.
 
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `data_dir` | required | ScreenMemory's data folder |
+| `since` | none | Where it starts without a saved position |
+| `settle_seconds` | 300 | Send a row only once it is this old |
+| `max_rows` | 20000 | Rows per table per batch (1 to 200,000) |
+| `drop_bundle_ids` | none | More apps whose frames are withheld whole |
+| `drop_markers` | none | More text markers that withhold a frame whole |
+| `media` | false | Upload screenshots |
+| `media_dir` | `<data_dir>/screenshots` | Where the screenshots are |
+
 ### Columns read, and why
 
 Only these five columns are read. Other columns and tables of ScreenMemory's

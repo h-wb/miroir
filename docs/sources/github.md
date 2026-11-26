@@ -62,8 +62,7 @@ is never stored (size), nor is any other field of the file. A commit with no fil
 has no rows, and the commit tables are unchanged. Commits loaded before this
 have no file rows until they are fetched again: an API source cannot be
 re-imported, so only commits inside a later run's window gain them. When a commit
-is fetched again its file rows are replaced. GitHub lists at most 300 files per
-commit in this answer.
+is fetched again its file rows are replaced (tested).
 
 Every incremental read re-reads three days, so late merges and edits are merged.
 Commits and searches keep run windows rather than a cursor on record dates, since
