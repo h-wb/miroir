@@ -22,8 +22,9 @@ from src.core.operations import (
     schema_info,
 )
 from src.core.service import InlineExecutor, MiroirService
-from src.web.app import SESSION_COOKIE, create_app
+from src.web.app import create_app
 from src.web.metrics import render_metrics
+from src.web.shell import SESSION_COOKIE
 
 ADMIN = "test-admin-token-0123456"
 METRICS = "test-metrics-token-6543210"

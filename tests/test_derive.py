@@ -33,6 +33,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 from pillow_heif import register_heif_opener
 
+from src.cli.compose import web_app
 from src.cli.main import main
 from src.core.config import load_miroir
 from src.core.operations import ConnectionBusy, MetadataStore, operations
@@ -43,7 +44,6 @@ from src.media.derive import Decoder, DecoderLost, DecoderUnavailable, _Lost, _w
 from src.media.profiles import PROFILES
 from src.media.queue import media_pending
 from src.media.store import ObjectTooLarge
-from src.web.app import create_app
 from tests.fakes import FakeObjectStore
 from tests.postgres import start_postgres
 
@@ -190,9 +190,7 @@ class DeriveFixture(unittest.TestCase):
             self.executor,
             object_store=self.objects,
         )
-        self.client = TestClient(
-            create_app(self.service, ADMIN), follow_redirects=False
-        )
+        self.client = TestClient(web_app(self.service, ADMIN), follow_redirects=False)
         self.token = {
             "Authorization": f"Bearer {self.service.create_delivery_token('screen')}"
         }

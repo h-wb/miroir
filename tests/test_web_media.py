@@ -6,9 +6,9 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from src.cli.compose import web_app
 from src.core.operations import MetadataStore
 from src.core.service import InlineExecutor, MiroirService
-from src.web.app import create_app
 from tests.fakes import FakeObjectStore
 
 ADMIN = "test-admin-token-0123456"
@@ -56,9 +56,7 @@ class WebMediaTests(unittest.TestCase):
             InlineExecutor(self.fail),
             object_store=self.objects,
         )
-        self.client = TestClient(
-            create_app(self.service, ADMIN), follow_redirects=False
-        )
+        self.client = TestClient(web_app(self.service, ADMIN), follow_redirects=False)
         self.screen = bearer(self.service.create_delivery_token("screen"))
         self.browser = bearer(self.service.create_delivery_token("browser"))
         self.body = {

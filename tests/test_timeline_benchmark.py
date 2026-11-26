@@ -17,12 +17,12 @@ from datetime import date, datetime
 
 from fastapi.testclient import TestClient
 
+from src.cli.compose import web_app
 from src.core.analysis import analysis_plan
 from src.core.config import parse_miroir
 from src.core.service import InlineExecutor, MiroirService
 from src.viewer.reader import TimelineDatabase, TimelineReader
 from src.viewer.timeline import _encoded
-from src.web.app import create_app
 from tests.test_messages_models import chat, message
 from tests.test_timeline_messages import (
     TimelineMessagesFixture,
@@ -134,7 +134,7 @@ class TimelineBenchmark(TimelineBuildFixture):
         service = MiroirService(
             config, self.store, self.root / "artifacts", InlineExecutor(self.fail)
         )
-        client = TestClient(create_app(service, TOKEN, timeline=database))
+        client = TestClient(web_app(service, TOKEN, timeline=database))
         headers = {**BEARER, "Accept-Encoding": "gzip"}
         response, median, worst = timed(
             lambda: client.get(f"/api/timeline/screen/{DAY}", headers=headers)
@@ -366,7 +366,7 @@ class TimelineMessagesBenchmark(TimelineMessagesFixture):
         service = MiroirService(
             config, self.store, self.root / "artifacts", InlineExecutor(self.fail)
         )
-        client = TestClient(create_app(service, TOKEN, timeline=database))
+        client = TestClient(web_app(service, TOKEN, timeline=database))
         headers = {**BEARER, "Accept-Encoding": "gzip"}
         for name, route in (
             ("route: list of 50", "/api/timeline/conversations"),

@@ -1,27 +1,23 @@
-"""HTTP API and web interface over the shared miroir services.
+"""HTTP API and web interface over the shared miroir services: the control
+plane's admin part, mounted into the web shell (`src.web.shell`, package split,
+step 8), which checks the admin token and the session for it.
 
-Single-user and self-hosted: one admin bearer token (`MIROIR_API_TOKEN`). Browsers
-log in with it once and get a session cookie derived from it; the token itself
-is never stored in the cookie. Automatic exports use connection-scoped,
-receive-only bearer tokens rather than the administrator token.
+Automatic exports use connection-scoped, receive-only bearer tokens rather than
+the administrator token. `create_app` serves this part alone; `serve` composes
+it with the viewer (`src.cli.compose`).
 """
 
-import hashlib
 import hmac
 import json
-import logging
 import os
 import re
 import tempfile
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
 from src.core.config import ConfigurationConflict, ConfigurationError
@@ -36,14 +32,9 @@ from src.core.secrets import SecretKeyError, SecretResolutionError
 from src.core.service import MiroirService
 from src.integrations.validation import InvalidArtifact
 from src.kernel.errors import OperationError
-from src.viewer import TEMPLATES_DIR as VIEWER_TEMPLATES
-from src.viewer.database import TimelineDatabase
-from src.viewer.reader import timeline_source
-from src.viewer.settings import ViewerSettings
 from src.web.metrics import render_metrics
-from src.web.viewer import viewer_settings
+from src.web.shell import Link, Part, Shell
 
-SESSION_COOKIE = "miroir_session"
 DEFAULT_MAX_UPLOAD = 512 * 1024 * 1024
 CHUNK = 1024 * 1024
 MULTIPART_SLACK = 1024 * 1024  # form fields and part headers around the file
@@ -59,22 +50,9 @@ METRICS_TOKEN_REUSED = (
     "MIROIR_METRICS_TOKEN must differ from MIROIR_API_TOKEN: "
     "a scraper must not hold the admin token"
 )
-# On every response. Pages load styles and scripts from /static only; images may
-# also be blobs the timeline makes from fetched frames (decision 040). No address
-# reaches another host; "no-referrer" would also make browsers post our own forms
-# with "Origin: null", which the login check cannot tell from another site.
-SECURITY_HEADERS = {
-    "Content-Security-Policy": (
-        "default-src 'self'; img-src 'self' blob:; object-src 'none'; "
-        "base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
-    ),
-    "Referrer-Policy": "same-origin",
-    "X-Content-Type-Options": "nosniff",
-}
-STATIC_DIR = Path(__file__).parent / "static"
-# The viewer's static files are served under the same `/static/` paths: its
-# pages and `timeline-core.js` build them (package split, step 6).
-VIEWER_STATIC = ("src.viewer", "static")
+TEMPLATES_DIR = Path(__file__).parent / "templates"
+# The header's links to the admin pages, before every other part's.
+LINKS = (Link("/", "Connections"), Link("/config", "Configuration"))
 # Query parameters of the upload API that are not import options.
 UPLOAD_PARAMETERS = {"import", "name", "format"}
 
@@ -97,38 +75,9 @@ NOTICES = {
     "analysis_removed": "Analysis removed. Its built tables were kept.",
 }
 
-# The viewer's pages extend this base template by name (package split, step 6).
-templates = Jinja2Templates(
-    directory=[str(Path(__file__).parent / "templates"), str(VIEWER_TEMPLATES)]
-)
-
 
 class UploadTooLarge(ValueError):
     pass
-
-
-class Unauthorized(Exception):
-    pass
-
-
-class NoQueryInAccessLog(logging.Filter):
-    """uvicorn's access lines name the path with its query string (client,
-    method, path, version, status). The query is dropped, on every path: an
-    address may carry what was looked for (decision 040)."""
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        args = record.args
-        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
-            record.args = (*args[:2], args[2].split("?", 1)[0], *args[3:])
-        return True
-
-
-def quiet_access_log() -> None:
-    """Install the filter on uvicorn's access logger, once. Logger filters
-    survive uvicorn's own logging configuration, which replaces handlers."""
-    logger = logging.getLogger("uvicorn.access")
-    if not any(isinstance(f, NoQueryInAccessLog) for f in logger.filters):
-        logger.addFilter(NoQueryInAccessLog())
 
 
 def error_status(error: Exception) -> int:
@@ -169,48 +118,48 @@ def create_app(
     token: str,
     max_upload_bytes: int = DEFAULT_MAX_UPLOAD,
     metrics_token: str | None = None,
-    timeline: TimelineDatabase | None = None,
-    viewer: ViewerSettings | None = None,
 ) -> FastAPI:
-    """`metrics_token` enables `/metrics` for a scraper that holds only it.
+    """The admin part alone in a shell of its own: no viewer routes or links.
 
-    `viewer` is what the viewer reads of the installation, built by the
-    composition root. Without it, it is built from `timeline`, the read-only
-    warehouse connection, the service's configuration and its media object
-    store; without either the timeline routes say it is not configured.
+    `metrics_token` enables `/metrics` for a scraper that holds only it.
     """
-    if len(token) < 16:
-        raise ValueError("MIROIR_API_TOKEN must be at least 16 characters")
-    if metrics_token is not None and hmac.compare_digest(
-        metrics_token.encode(), token.encode()
-    ):
-        raise ValueError(METRICS_TOKEN_REUSED)
-    if viewer is None:
-        viewer = viewer_settings(timeline, service.miroir, lambda: service.object_store)
-    session = hmac.new(token.encode(), b"miroir-session", hashlib.sha256).hexdigest()
-    quiet_access_log()
-    app = FastAPI(title="Miroir", docs_url=None, redoc_url=None)
+    shell = Shell(token)
+    mount_admin(shell, service, max_upload_bytes, metrics_token)
+    return shell.finish()
 
-    def authorize(request: Request) -> None:
-        header = request.headers.get("authorization", "")
-        if header.lower().startswith("bearer "):
-            if hmac.compare_digest(header[7:].strip().encode(), token.encode()):
-                return
-            raise Unauthorized
-        cookie = request.cookies.get(SESSION_COOKIE, "")
-        if not hmac.compare_digest(cookie.encode(), session.encode()):
-            raise Unauthorized
-        # Cookies are SameSite=Strict; also refuse cross-origin form posts outright.
-        origin = request.headers.get("origin")
-        if request.method == "GET" or not origin:
-            return
-        if origin == "null":
-            # A browser hides the origin of a same-origin post when the page asked
-            # for no referrer. Its own Sec-Fetch-Site header still tells them apart.
-            if request.headers.get("sec-fetch-site") != "same-origin":
-                raise Unauthorized
-        elif urlsplit(origin).netloc != request.url.netloc:
-            raise Unauthorized
+
+def _public(request: Request) -> bool:
+    """Requests that pass without the admin's login. /metrics checks its own
+    token and never accepts the admin's; the delivery routes authenticate their
+    connection-scoped bearer before reading bytes."""
+    if request.url.path in ("/healthz", "/metrics"):
+        return True
+    return request.method == "POST" and bool(
+        DELIVERY_POST_PATH.fullmatch(request.url.path)
+        or MEDIA_POST_PATH.fullmatch(request.url.path)
+    )
+
+
+def mount_admin(
+    shell: Shell,
+    service: MiroirService,
+    max_upload_bytes: int = DEFAULT_MAX_UPLOAD,
+    metrics_token: str | None = None,
+) -> None:
+    """Mount the control plane's API and pages into the shell."""
+    if metrics_token is not None and shell.accepts(metrics_token):
+        raise ValueError(METRICS_TOKEN_REUSED)
+    app = shell.app
+    page = shell.page
+    templates = shell.templates
+    shell.mount(
+        Part(
+            templates=TEMPLATES_DIR,
+            links=lambda: LINKS,
+            public=_public,
+            notices=NOTICES,
+        )
+    )
 
     @app.middleware("http")
     async def limit_body(
@@ -224,46 +173,6 @@ def create_app(
             message = f"Upload exceeds {max_upload_bytes} bytes"
             return JSONResponse({"error": message}, status_code=413)
         return await call_next(request)
-
-    @app.middleware("http")
-    async def require_login(
-        request: Request, call_next: Callable[[Request], Awaitable[Response]]
-    ) -> Response:
-        # /metrics checks its own token and never accepts the admin's. The login
-        # page needs the stylesheet; nothing under /static is private.
-        if request.url.path in (
-            "/login",
-            "/healthz",
-            "/metrics",
-        ) or request.url.path.startswith("/static/"):
-            return await call_next(request)
-        # These routes authenticate their connection-scoped bearer before reading bytes.
-        if request.method == "POST" and (
-            DELIVERY_POST_PATH.fullmatch(request.url.path)
-            or MEDIA_POST_PATH.fullmatch(request.url.path)
-        ):
-            return await call_next(request)
-        try:
-            authorize(request)
-        except Unauthorized:
-            if request.url.path.startswith("/api/"):
-                return JSONResponse({"error": "unauthorized"}, status_code=401)
-            if request.headers.get("hx-request") == "true":
-                # htmx would swap the login page into the page; it loads it instead.
-                return Response(status_code=401, headers={"HX-Redirect": "/login"})
-            return RedirectResponse("/login", status_code=303)
-        return await call_next(request)
-
-    @app.middleware("http")
-    async def security_headers(
-        request: Request, call_next: Callable[[Request], Awaitable[Response]]
-    ) -> Response:
-        response = await call_next(request)
-        response.headers.update(SECURITY_HEADERS)
-        if request.url.path.startswith("/static/"):
-            # Names carry no version: revalidate (ETag) so a deploy shows at once.
-            response.headers["Cache-Control"] = "no-cache"
-        return response
 
     async def known_error(request: Request, error: Exception) -> Response:
         status = error_status(error)
@@ -669,73 +578,11 @@ def create_app(
 
     # ---- Web interface ---------------------------------------------------------
 
-    def timeline_links() -> tuple[bool, bool]:
-        """The header links the timeline only where there is one to see, and its
-        conversations where it reads a `messages` input."""
-        if viewer.database is None:
-            return False, False
-        try:
-            source = timeline_source(viewer.configuration())
-        except (ConfigurationError, OperationError):
-            return False, False
-        return source is not None, bool(source and source.messages)
-
-    def page(request: Request, name: str, **context: Any) -> HTMLResponse:
-        context["notice"] = NOTICES.get(request.query_params.get("notice", ""))
-        if "timeline_link" not in context:
-            links = timeline_links()
-            context["timeline_link"], context["conversations_link"] = links
-        return templates.TemplateResponse(request, name, context)
-
-    @app.get("/login", response_class=HTMLResponse)
-    def login_form(request: Request) -> HTMLResponse:
-        return page(request, "login.html", failed=False)
-
-    @app.post("/login")
-    def login(request: Request, token_input: str = Form(alias="token")) -> Response:
-        if not hmac.compare_digest(token_input.encode(), token.encode()):
-            return templates.TemplateResponse(
-                request, "login.html", {"failed": True, "notice": None}, status_code=401
-            )
-        response = RedirectResponse("/", status_code=303)
-        response.set_cookie(
-            SESSION_COOKIE,
-            session,
-            httponly=True,
-            samesite="strict",
-            secure=request.url.scheme == "https",
-        )
-        return response
-
-    @app.post("/logout")
-    def logout() -> Response:
-        response = RedirectResponse("/login", status_code=303)
-        response.delete_cookie(SESSION_COOKIE)
-        # Screenshots stay in the browser's cache for a year otherwise, and htmx
-        # keeps the last address (a search's words) in session storage.
-        response.headers["Clear-Site-Data"] = '"cache", "storage"'
-        return response
-
-    from src.viewer.conversations import conversation_pages
-    from src.viewer.media import media_routes
-    from src.viewer.timeline import timeline_pages
-    from src.viewer.timeline_pages import timeline_page_routes
     from src.web.analyses import analysis_pages
     from src.web.connections import connection_pages
 
     app.include_router(connection_pages(service, page))
     app.include_router(analysis_pages(service, page))
-    app.include_router(timeline_pages(viewer, page))
-    # Before the Day view's `/timeline/{day}`, which would take the path.
-    app.include_router(conversation_pages(viewer, page))
-    app.include_router(timeline_page_routes(viewer, page))
-    # The `/media` view route, after the viewer's withheld check (step 7).
-    app.include_router(media_routes(viewer))
-    app.mount(
-        "/static",
-        StaticFiles(directory=STATIC_DIR, packages=[VIEWER_STATIC]),
-        name="static",
-    )
 
     @app.get("/", response_class=HTMLResponse)
     def overview(request: Request) -> HTMLResponse:
@@ -832,8 +679,6 @@ def create_app(
                 status_code=409 if isinstance(error, ConfigurationConflict) else 400,
             )
         return RedirectResponse("/config?notice=saved", status_code=303)
-
-    return app
 
 
 def _in_flight(status: dict) -> bool:

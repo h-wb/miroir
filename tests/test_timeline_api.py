@@ -23,6 +23,7 @@ import psycopg2
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
 
+from src.cli.compose import web_app
 from src.core.analysis import analysis_plan
 from src.core.config import parse_miroir
 from src.core.service import InlineExecutor, MiroirService
@@ -45,7 +46,6 @@ from src.viewer.reader import (
     snippet,
 )
 from src.viewer.timeline_pages import MEDIA_LABELS
-from src.web.app import create_app
 from tests import test_messages_models as apple_messages
 from tests.fakes import FakeObjectStore
 from tests.test_timeline_models import (
@@ -188,7 +188,7 @@ class TimelineApiFixture(TimelineBuildFixture):
         )
         if database is True:
             database = self.database
-        app = create_app(service, TOKEN, timeline=database or None)
+        app = web_app(service, TOKEN, timeline=database or None)
         return TestClient(app)
 
     def stored(self, connection, key):
@@ -1266,9 +1266,12 @@ class TimelinePageTests(TimelineApiFixture):
         )
 
     def test_data_is_text_never_markup(self):
-        from src.web.app import templates
+        from src.viewer import TEMPLATES_DIR
+        from src.web.shell import Part, Shell
 
-        rendered = templates.get_template("_timeline_results.html").render(
+        shell = Shell(TOKEN)
+        shell.mount(Part(templates=TEMPLATES_DIR))
+        rendered = shell.templates.get_template("_timeline_results.html").render(
             kind="screen",
             labels=MEDIA_LABELS,
             more=None,

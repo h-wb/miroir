@@ -1909,7 +1909,8 @@ after every load, exactly as before. In detail:
   reason). `same-origin` keeps a real origin on them.
   The storage host is not in the policy yet: no page shows video before the
   conversations phase.
-- htmx 2.0.11, vendored as `src/web/static/htmx.min.js`, with its version and
+- htmx 2.0.11, vendored as `src/web/static/htmx.min.js` (now
+  `src/web/shell/static/`), with its version and
   SHA-256 in `VENDORED.md` beside it, checked by a test. `base.html` configures it
   with `allowEval: false`, `includeIndicatorStyles: false`, `allowScriptTags:
   false` and `selfRequestsOnly: true`. No page loads it yet.
@@ -3345,6 +3346,20 @@ the `media` section and each connection's media kinds, read when it answers,
 and the object store the composition root built. The control plane's service no
 longer has `media_view_url`, `media_thumbnail` or `media_image`; the
 collector's upload and confirm routes stay in the control plane.
+
+### 040 amendment — Blobs on the viewer's pages only
+
+Status: accepted, 2026-11-26. Step 8 of
+[the package split](../decisions/2026-11-25-package-split.md). Revises the
+policy *on every response* of phase 0.
+
+The policy allowed `img-src 'self' blob:` on every response, for the images the
+timeline makes from fetched frames. The web shell (`src/web/shell/`) now sets
+the headers with the policy of the part that answers the path: the viewer's
+paths (`/timeline` and below, `/api/timeline/…`, `/media/…`) keep
+`img-src 'self' blob:`; every other response, the admin pages, `/login` and
+`/static/` among them, has `img-src 'self'`. The other directives and headers
+are unchanged, so no page's policy is wider than before.
 
 ## 041 — A messages analysis: conversations by identifier, no text
 

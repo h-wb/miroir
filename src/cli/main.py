@@ -608,10 +608,10 @@ def _absolute_sqlite(url: str) -> str:
 def _serve(args: argparse.Namespace, miroir: Any, store: Any, secrets: Any) -> int:
     import uvicorn
 
+    from src.cli.compose import viewer_settings, web_app
     from src.core.service import MiroirService, SubprocessExecutor
     from src.viewer.database import TimelineConfigurationError
-    from src.web.app import METRICS_TOKEN_REUSED, create_app
-    from src.web.viewer import viewer_settings
+    from src.web.app import METRICS_TOKEN_REUSED
 
     token = os.environ.get("MIROIR_API_TOKEN", "")
     if len(token) < 16:
@@ -663,8 +663,9 @@ def _serve(args: argparse.Namespace, miroir: Any, store: Any, secrets: Any) -> i
         orchestrator=orchestrator,
         object_store=object_store,
     )
-    # What the viewer reads of the installation, built here (package split, step 6).
+    # The shell, the admin part and the viewer, with what the viewer reads of
+    # the installation (package split, steps 6 and 8).
     viewer = viewer_settings(timeline, service.miroir, lambda: object_store)
-    app = create_app(service, token, metrics_token=metrics_token, viewer=viewer)
+    app = web_app(service, token, metrics_token=metrics_token, viewer=viewer)
     uvicorn.run(app, host=args.host, port=args.port)
     return 0
