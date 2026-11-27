@@ -54,6 +54,6 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            PIPELINES_CODE_REVISION=${{ github.sha }}
-          cache-from: type=gha,scope=pipelines
-          cache-to: type=gha,mode=max,scope=pipelines
+            MIROIR_CODE_REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=miroir
+          cache-to: type=gha,mode=max,scope=miroir
