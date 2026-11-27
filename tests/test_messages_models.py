@@ -25,8 +25,8 @@ from src.control.artifacts import submit_artifact
 from src.control.config import parse_miroir
 from src.control.operations import MetadataStore
 from src.control.runner import import_artifact
+from src.flows.transform import build_connection_models
 from src.integrations.apple_messages.formats import FIELDS
-from src.pipelines.transform import build_connection_models
 from tests.postgres import start_postgres
 
 ALEX, SAM, ROBIN, KAI, LEE = (
@@ -292,7 +292,7 @@ class MessagesModelsTests(unittest.TestCase):
         environment.start()
         cls.addClassCleanup(environment.stop)
         concurrency = patch(
-            "src.pipelines.transform.concurrency",
+            "src.flows.transform.concurrency",
             side_effect=lambda *a, **kw: nullcontext(),
         )
         concurrency.start()

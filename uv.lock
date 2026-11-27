@@ -1293,94 +1293,6 @@ postgres = [
 ]
 
 [[package]]
-name = "dlt-pipelines"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "boto3" },
-    { name = "croniter" },
-    { name = "cryptography" },
-    { name = "dbt-core" },
-    { name = "dbt-postgres" },
-    { name = "dlt", extra = ["postgres"] },
-    { name = "fastapi" },
-    { name = "jinja2" },
-    { name = "pendulum" },
-    { name = "pillow", version = "12.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "pillow", version = "13.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "pillow-heif", version = "1.8.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "pillow-heif", version = "1.9.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "prefect", version = "3.8.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "prefect", version = "3.9.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "prefect-kubernetes", version = "0.7.13", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "prefect-kubernetes", version = "0.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "pydantic" },
-    { name = "python-multipart" },
-    { name = "requests" },
-    { name = "sqlalchemy", version = "2.0.55", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "sqlalchemy", version = "2.1.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "uvicorn" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "black" },
-    { name = "dlt", extra = ["duckdb"] },
-    { name = "httpx" },
-    { name = "kingfisher-secret-scanner" },
-    { name = "marimo" },
-    { name = "mypy" },
-    { name = "ruff" },
-    { name = "urllib3" },
-]
-test = [
-    { name = "dlt", extra = ["duckdb"] },
-    { name = "httpx" },
-    { name = "kingfisher-secret-scanner" },
-    { name = "urllib3" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "boto3", specifier = ">=1.44.7" },
-    { name = "croniter", specifier = ">=2" },
-    { name = "cryptography", specifier = ">=42" },
-    { name = "dbt-core", specifier = ">=1.12.5" },
-    { name = "dbt-postgres", specifier = ">=1.11.0" },
-    { name = "dlt", extras = ["postgres"], specifier = ">=1.27.2" },
-    { name = "fastapi", specifier = ">=0.110,<1" },
-    { name = "jinja2", specifier = ">=3.1,<4" },
-    { name = "pendulum", specifier = ">=3.2.0" },
-    { name = "pillow", specifier = ">=12" },
-    { name = "pillow-heif", specifier = ">=1" },
-    { name = "prefect", specifier = ">=3.4,<4" },
-    { name = "prefect-kubernetes", specifier = ">=0.6" },
-    { name = "pydantic", specifier = ">=2.10,<3" },
-    { name = "python-multipart", specifier = ">=0.0.9" },
-    { name = "requests", specifier = ">=2.34.2" },
-    { name = "sqlalchemy", specifier = ">=2.0,<3" },
-    { name = "uvicorn", specifier = ">=0.30,<1" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "black", specifier = ">=23.0.0" },
-    { name = "dlt", extras = ["duckdb"], specifier = ">=1.27.2" },
-    { name = "httpx", specifier = ">=0.27,<1" },
-    { name = "kingfisher-secret-scanner", specifier = "==1.6.4" },
-    { name = "marimo", specifier = ">=0.16.5" },
-    { name = "mypy", specifier = ">=1.5.0" },
-    { name = "ruff", specifier = ">=0.1.0" },
-    { name = "urllib3", specifier = ">=2.2,<3" },
-]
-test = [
-    { name = "dlt", extras = ["duckdb"], specifier = ">=1.27.2" },
-    { name = "httpx", specifier = ">=0.27,<1" },
-    { name = "kingfisher-secret-scanner", specifier = "==1.6.4" },
-    { name = "urllib3", specifier = ">=2.2,<3" },
-]
-
-[[package]]
 name = "docker"
 version = "7.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2758,6 +2670,94 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a6/ae/0c75d87f004cd56f30862fa1330f6a4e36a26ea32463a6d17d5d1ab32413/metricflow-0.213.0.tar.gz", hash = "sha256:e6b5e8f05a0b9b0183430416052a61747fc89f809c39f2cdc5a3d9ba7a3f6931", size = 643641, upload-time = "2026-09-10T19:24:20.562Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/58/6c/2ec7e3c433bdab3cf15f4424769794f6d0dab9ecd3c43da00cdb85435d44/metricflow-0.213.0-py3-none-any.whl", hash = "sha256:6e1865535a200607529970f6ca1a9fcd22b7814d0b71cd654d9ee01eecf0157b", size = 999530, upload-time = "2026-09-10T19:24:17.846Z" },
+]
+
+[[package]]
+name = "miroir"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "boto3" },
+    { name = "croniter" },
+    { name = "cryptography" },
+    { name = "dbt-core" },
+    { name = "dbt-postgres" },
+    { name = "dlt", extra = ["postgres"] },
+    { name = "fastapi" },
+    { name = "jinja2" },
+    { name = "pendulum" },
+    { name = "pillow", version = "12.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "pillow", version = "13.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "pillow-heif", version = "1.8.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "pillow-heif", version = "1.9.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "prefect", version = "3.8.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "prefect", version = "3.9.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "prefect-kubernetes", version = "0.7.13", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "prefect-kubernetes", version = "0.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "pydantic" },
+    { name = "python-multipart" },
+    { name = "requests" },
+    { name = "sqlalchemy", version = "2.0.55", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "sqlalchemy", version = "2.1.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "uvicorn" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "black" },
+    { name = "dlt", extra = ["duckdb"] },
+    { name = "httpx" },
+    { name = "kingfisher-secret-scanner" },
+    { name = "marimo" },
+    { name = "mypy" },
+    { name = "ruff" },
+    { name = "urllib3" },
+]
+test = [
+    { name = "dlt", extra = ["duckdb"] },
+    { name = "httpx" },
+    { name = "kingfisher-secret-scanner" },
+    { name = "urllib3" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "boto3", specifier = ">=1.44.7" },
+    { name = "croniter", specifier = ">=2" },
+    { name = "cryptography", specifier = ">=42" },
+    { name = "dbt-core", specifier = ">=1.12.5" },
+    { name = "dbt-postgres", specifier = ">=1.11.0" },
+    { name = "dlt", extras = ["postgres"], specifier = ">=1.27.2" },
+    { name = "fastapi", specifier = ">=0.110,<1" },
+    { name = "jinja2", specifier = ">=3.1,<4" },
+    { name = "pendulum", specifier = ">=3.2.0" },
+    { name = "pillow", specifier = ">=12" },
+    { name = "pillow-heif", specifier = ">=1" },
+    { name = "prefect", specifier = ">=3.4,<4" },
+    { name = "prefect-kubernetes", specifier = ">=0.6" },
+    { name = "pydantic", specifier = ">=2.10,<3" },
+    { name = "python-multipart", specifier = ">=0.0.9" },
+    { name = "requests", specifier = ">=2.34.2" },
+    { name = "sqlalchemy", specifier = ">=2.0,<3" },
+    { name = "uvicorn", specifier = ">=0.30,<1" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "black", specifier = ">=23.0.0" },
+    { name = "dlt", extras = ["duckdb"], specifier = ">=1.27.2" },
+    { name = "httpx", specifier = ">=0.27,<1" },
+    { name = "kingfisher-secret-scanner", specifier = "==1.6.4" },
+    { name = "marimo", specifier = ">=0.16.5" },
+    { name = "mypy", specifier = ">=1.5.0" },
+    { name = "ruff", specifier = ">=0.1.0" },
+    { name = "urllib3", specifier = ">=2.2,<3" },
+]
+test = [
+    { name = "dlt", extras = ["duckdb"], specifier = ">=1.27.2" },
+    { name = "httpx", specifier = ">=0.27,<1" },
+    { name = "kingfisher-secret-scanner", specifier = "==1.6.4" },
+    { name = "urllib3", specifier = ">=2.2,<3" },
 ]
 
 [[package]]

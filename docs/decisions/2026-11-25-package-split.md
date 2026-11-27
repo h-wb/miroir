@@ -325,7 +325,7 @@ production working.
 8. web shell: login, headers and navigation; a security policy per part.
 9. Rename `src/core` to `src/control`, once media and viewer have left it.
 10. The viewer's own process: a `view` entry point and `serve` without the
-    viewer (pipelines#67). The home-ops Deployment and routes were built and then
+    viewer (miroir#67). The home-ops Deployment and routes were built and then
     not deployed: the installation runs one container (revised 2026-11-27).
 11. Lanes from declarations: the `contract` relation and its check; search kinds
     and day totals from `events` and the lane list; `media_ref` in place of the
@@ -340,7 +340,11 @@ production working.
 
 - The Prefect flow `src/pipelines/miroir.py:sync_connection`
   (`src/adapters/prefect.py:225,236`). Moving it needs a `deployments apply`
-  and breaks runs already scheduled.
+  and breaks runs already scheduled. Moved on purpose on 2026-11-27, to
+  `src/flows/miroir.py:sync_connection`, with the repository's rename
+  ([014 amendment](../miroir/decisions.md#014-amendment--the-repository-distribution-and-cli-are-named-miroir)):
+  plan now compares the entrypoint, so after the image is deployed every
+  deployment plans as an update and `deployments apply` moves them all.
 - `python -m src.cli`, which home-ops calls.
 - The `media_objects` table and its `<pipeline>_media` dlt pipeline and state
   (`src/core/derive.py:594`).

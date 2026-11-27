@@ -31,13 +31,13 @@ With [mise](https://mise.jdx.dev), as one pinned tool:
 
 ```toml
 [tools]
-"pipx:git+https://github.com/h-wb/pipelines#subdirectory=collector" = "collector-vX.Y.Z"
+"pipx:git+https://github.com/h-wb/miroir#subdirectory=collector" = "collector-vX.Y.Z"
 ```
 
 Or with uv alone:
 
 ```bash
-uv tool install "git+https://github.com/h-wb/pipelines@collector-vX.Y.Z#subdirectory=collector"
+uv tool install "git+https://github.com/h-wb/miroir@collector-vX.Y.Z#subdirectory=collector"
 miroir-collector --version
 ```
 

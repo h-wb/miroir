@@ -114,11 +114,11 @@ These run here, into a local DuckDB file, never into the warehouse, and skip
 dbt, whose models target Postgres:
 
 ```bash
-uv run --locked pipelines-miroir --config miroir.json run music --duckdb /tmp/mirror.duckdb
-uv run --locked pipelines-miroir submit health ~/Downloads/export.json --option role=historical
-uv run --locked pipelines-miroir import health <artifact-id> --duckdb /tmp/mirror.duckdb [--replay]
-uv run --locked pipelines-miroir artifacts health
-uv run --locked pipelines-miroir status
+uv run --locked miroir --config miroir.json run music --duckdb /tmp/mirror.duckdb
+uv run --locked miroir submit health ~/Downloads/export.json --option role=historical
+uv run --locked miroir import health <artifact-id> --duckdb /tmp/mirror.duckdb [--replay]
+uv run --locked miroir artifacts health
+uv run --locked miroir status
 ```
 
 `run` loads one connection; dlt's working state goes beside the file
@@ -136,9 +136,12 @@ successful load, and how many requests have not started. A `running` attempt is
 
 Prefect is the one orchestrator (decisions 012, 013, 029). With a `deployment`
 section, each connection gets one deployment of the flow `sync_connection`
-(`src/pipelines/miroir.py`), named `sync-connection/<miroir>-<connection>`, with
+(`src/flows/miroir.py`), named `sync-connection/<miroir>-<connection>`, with
 a concurrency limit of 1, its schedule, and the section's pool, image and job
-variables. Miroir decides what a load is; Prefect only runs it.
+variables. Plan also compares each deployment's entrypoint with the flow's path,
+so a deployment applied before a move (`src/pipelines/` became `src/flows/`,
+decision 029 amendment) is an update. Miroir decides what a load is; Prefect
+only runs it.
 
 While some connection has a media kind with thumbnails, the Miroir also gets one
 media deployment, `sync-connection/<miroir>--media` (decision 033 amendment):
@@ -156,9 +159,9 @@ behind each other in Prefect. Preparing a connection also creates or updates the
 media deployment.
 
 ```bash
-uv run --locked pipelines-miroir deployments plan    # creates, updates, removals; hand edits show as drift
-uv run --locked pipelines-miroir deployments apply   # or the Apply deployments button
-uv run --locked pipelines-miroir refresh
+uv run --locked miroir deployments plan    # creates, updates, removals; hand edits show as drift
+uv run --locked miroir deployments apply   # or the Apply deployments button
+uv run --locked miroir refresh
 ```
 
 With a pool configured, the server submits each request as a flow run,
@@ -171,7 +174,7 @@ died before recording an attempt is not closed by `refresh`: cancel it in
 Prefect.
 
 On a cluster each flow run is its own Kubernetes Job from the pinned image. The
-image is built in CI from `uv.lock` (Python 3.12, `PIPELINES_CODE_REVISION`
+image is built in CI from `uv.lock` (Python 3.12, `MIROIR_CODE_REVISION`
 baked in). The Job needs the configuration and artifacts at the configured
 paths, the warehouse and metadata credentials and the master key; the media
 deployment's Jobs alone also need the bucket key. How the installation provides

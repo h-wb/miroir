@@ -15,7 +15,7 @@ created: 2026-09-24T22:01
 Every bike share rental: stations, times, bike type.
 
 - **Integration**: `bikeshare`, fetched on a connection's schedule. The connections configured today are listed in the interface and by
-  `pipelines-miroir connections`.
+  `miroir connections`.
 - **Code**: [`src/integrations/bikeshare/`](../../src/integrations/bikeshare/)
 - **Raw tables**: `trips`, with dlt's child tables `trips__start_location` and
   `trips__end_location`

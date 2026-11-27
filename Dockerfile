@@ -32,6 +32,6 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     MIROIR_PREFECT_CONFIG_PATH=/miroir/data/miroir/miroir.json
 # Set by CI to the commit the image was built from; recorded on every attempt.
-ARG PIPELINES_CODE_REVISION=unknown
-ENV PIPELINES_CODE_REVISION=${PIPELINES_CODE_REVISION}
+ARG MIROIR_CODE_REVISION=unknown
+ENV MIROIR_CODE_REVISION=${MIROIR_CODE_REVISION}
 CMD ["python", "-m", "src.cli"]

@@ -115,7 +115,7 @@ layer without removing work, since dlt already owns state and merging.
 
 ## Commands
 
-`pipelines-miroir` (or `python -m src.cli`) takes `--config` before the command
+`miroir` (or `python -m src.cli`) takes `--config` before the command
 (default `miroir.json` in the current folder, gitignored). Output is JSON; exit
 status 0 is success, 1 a failed run, 2 an invalid or unreadable configuration.
 Commands that read the metadata store take `--metadata` (a SQLAlchemy URL;

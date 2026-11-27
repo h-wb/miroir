@@ -27,10 +27,12 @@ from src.kernel.errors import OperationError
 from tests.test_miroir import example
 
 POOL = "test-pool"
-DEPLOYMENT = {"work_pool": POOL, "image": "ghcr.io/x/pipelines:abc"}
+DEPLOYMENT = {"work_pool": POOL, "image": "ghcr.io/x/miroir:abc"}
 # What the installation sets: a reference the work pool's template resolves.
 MEDIA_JOB_VARIABLES = {"env_from": [{"secretRef": {"name": "miroir-media"}}]}
 SCREEN = {"id": "screen", "integration": "screenmemory", "settings": {}}
+# What `to_deployment` sets from the repository root, where the suite runs.
+ENTRYPOINT = "src/flows/miroir.py:sync_connection"
 
 
 def closed_api() -> str:
@@ -111,6 +113,7 @@ class PrefectAdapterTests(unittest.TestCase):
         self.assertEqual(
             json.loads(json.dumps(music)),
             {
+                "entrypoint": ENTRYPOINT,
                 "parameters": {
                     "connection_id": "music",
                     "config_path": "/miroir/miroir.json",
@@ -119,7 +122,7 @@ class PrefectAdapterTests(unittest.TestCase):
                     {"cron": "0 3 * * *", "timezone": "Europe/Paris", "day_or": True}
                 ],
                 "work_pool_name": POOL,
-                "job_variables": {"image": "ghcr.io/x/pipelines:abc"},
+                "job_variables": {"image": "ghcr.io/x/miroir:abc"},
                 "concurrency_limit": 1,
             },
         )
@@ -131,7 +134,7 @@ class PrefectAdapterTests(unittest.TestCase):
         )
         self.assertEqual(
             actual["personal-music"]["attributes"]["job_variables"],
-            {"image": "ghcr.io/x/pipelines:abc"},
+            {"image": "ghcr.io/x/miroir:abc"},
         )
 
         # A schedule change in the miroir is an update...
@@ -213,7 +216,7 @@ class PrefectAdapterTests(unittest.TestCase):
         raw["connections"].append(orphan)
         self.converge(parse_miroir(json.dumps(raw)))
         raw["connections"].pop()
-        raw["deployment"] = {"work_pool": POOL, "image": "ghcr.io/x/pipelines:new"}
+        raw["deployment"] = {"work_pool": POOL, "image": "ghcr.io/x/miroir:new"}
         path = Path(self.tmp.name) / "miroir.json"
         path.write_text(json.dumps(raw))
         service = MiroirService(
@@ -227,17 +230,57 @@ class PrefectAdapterTests(unittest.TestCase):
         actual = self.orchestrator.actual(service.miroir())
         self.assertEqual(
             actual["setup_scope-health"]["attributes"]["job_variables"]["image"],
-            "ghcr.io/x/pipelines:new",
+            "ghcr.io/x/miroir:new",
         )
         self.assertEqual(
             actual["setup_scope-music"]["attributes"]["job_variables"]["image"],
-            "ghcr.io/x/pipelines:abc",
+            "ghcr.io/x/miroir:abc",
         )
         self.assertIn("setup_scope-orphan", actual)
         remaining = self.orchestrator.plan(service.miroir())
         self.assertEqual(
             {(c["action"], c["deployment"]) for c in remaining},
             {("update", "setup_scope-music"), ("delete", "setup_scope-orphan")},
+        )
+
+    def test_a_deployment_at_the_former_entrypoint_is_an_update(self):
+        from prefect import get_client
+        from prefect.client.schemas.actions import DeploymentUpdate
+
+        raw = example()
+        raw["id"] = "moved_flow"
+        raw["deployment"] = DEPLOYMENT
+        ws = parse_miroir(json.dumps(raw))
+        self.addCleanup(self.delete_deployments, ws)
+        self.converge(ws)
+        actual = self.orchestrator.actual(ws)
+        self.assertEqual(
+            {name: d["attributes"]["entrypoint"] for name, d in actual.items()},
+            {"moved_flow-health": ENTRYPOINT, "moved_flow-music": ENTRYPOINT},
+        )
+
+        # A deployment applied before the flow's package was renamed.
+        former = "src/pipelines/miroir.py:sync_connection"
+        with get_client(sync_client=True) as client:
+            client.update_deployment(
+                uuid.UUID(actual["moved_flow-health"]["id"]),
+                DeploymentUpdate(entrypoint=former),
+            )
+        [update] = self.orchestrator.plan(ws)
+        self.assertEqual(
+            (update["action"], update["deployment"], update["changes"]),
+            (
+                "update",
+                "moved_flow-health",
+                {"entrypoint": {"have": former, "want": ENTRYPOINT}},
+            ),
+        )
+        self.converge(ws)
+        self.assertEqual(
+            self.orchestrator.actual(ws)["moved_flow-health"]["attributes"][
+                "entrypoint"
+            ],
+            ENTRYPOINT,
         )
 
     def test_submit_is_idempotent_and_observe_reconciles(self):
@@ -317,7 +360,7 @@ class PrefectAdapterTests(unittest.TestCase):
         from prefect.client.schemas.objects import StateType
 
         from src.control.runner import request_models
-        from src.pipelines.miroir import schedule_build
+        from src.flows.miroir import schedule_build
 
         ws = miroir()
         self.converge(ws)
@@ -464,10 +507,11 @@ class PrefectAdapterTests(unittest.TestCase):
         self.assertEqual(
             json.loads(json.dumps(create["set"])),
             {
+                "entrypoint": ENTRYPOINT,
                 "parameters": {"config_path": "/miroir/miroir.json"},
                 "schedules": [],
                 "work_pool_name": POOL,
-                "job_variables": {"image": "ghcr.io/x/pipelines:abc"},
+                "job_variables": {"image": "ghcr.io/x/miroir:abc"},
                 "concurrency_limit": 1,
             },
         )
@@ -489,11 +533,11 @@ class PrefectAdapterTests(unittest.TestCase):
         actual = self.orchestrator.actual(referenced)
         self.assertEqual(
             actual[media]["attributes"]["job_variables"],
-            {**MEDIA_JOB_VARIABLES, "image": "ghcr.io/x/pipelines:abc"},
+            {**MEDIA_JOB_VARIABLES, "image": "ghcr.io/x/miroir:abc"},
         )
         self.assertEqual(
             actual["media_owned-screen"]["attributes"]["job_variables"],
-            {"image": "ghcr.io/x/pipelines:abc"},
+            {"image": "ghcr.io/x/miroir:abc"},
         )
 
         # Without a kind that has thumbnails, it is removed with its connection.
@@ -579,7 +623,7 @@ class DeploymentSettingsTests(unittest.TestCase):
         declared = miroir(
             deployment={
                 "work_pool": "config-pool",
-                "image": "ghcr.io/h-wb/pipelines:sha-config",
+                "image": "ghcr.io/h-wb/miroir:sha-config",
                 "job_variables": {"namespace": "from-config"},
             }
         )
@@ -588,7 +632,7 @@ class DeploymentSettingsTests(unittest.TestCase):
         self.assertEqual(spec["work_pool_name"], "config-pool")
         self.assertEqual(
             spec["job_variables"],
-            {"namespace": "from-config", "image": "ghcr.io/h-wb/pipelines:sha-config"},
+            {"namespace": "from-config", "image": "ghcr.io/h-wb/miroir:sha-config"},
         )
         bare = miroir(deployment={"work_pool": "config-pool"})
         self.assertEqual(
@@ -599,7 +643,7 @@ class DeploymentSettingsTests(unittest.TestCase):
         adapter = PrefectOrchestrator(self.store, "/config.json")
         deployment = {
             "work_pool": "config-pool",
-            "image": "ghcr.io/h-wb/pipelines:sha-config",
+            "image": "ghcr.io/h-wb/miroir:sha-config",
             "job_variables": {"namespace": "from-config"},
         }
         plain = adapter.desired(parse_miroir(json.dumps(with_screen("m", deployment))))
@@ -623,7 +667,7 @@ class DeploymentSettingsTests(unittest.TestCase):
             {
                 "namespace": "from-config",
                 **MEDIA_JOB_VARIABLES,
-                "image": "ghcr.io/h-wb/pipelines:sha-config",
+                "image": "ghcr.io/h-wb/miroir:sha-config",
             },
         )
         self.assertEqual(media["parameters"], {"config_path": "/config.json"})
@@ -644,7 +688,7 @@ class DeploymentSettingsTests(unittest.TestCase):
             adapter.desired(parse_miroir(json.dumps(overridden)))["m--media"][
                 "job_variables"
             ]["image"],
-            "ghcr.io/h-wb/pipelines:sha-config",
+            "ghcr.io/h-wb/miroir:sha-config",
         )
         # Without deployment.image too: the connections' image from job_variables.
         unpinned = {key: value for key, value in deployment.items() if key != "image"}

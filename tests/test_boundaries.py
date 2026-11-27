@@ -23,8 +23,8 @@ _ALLOWED = {
     # The control plane hands it what it reads (src.media.target).
     "media": (_KERNEL,),
     "control": (_KERNEL, "src.integrations", "src.analyses", _MEDIA),
-    "pipelines": (_KERNEL, "src.control", _MEDIA),
-    "adapters": (_KERNEL, "src.control", "src.pipelines"),
+    "flows": (_KERNEL, "src.control", _MEDIA),
+    "adapters": (_KERNEL, "src.control", "src.flows"),
     # The control plane's admin part, mounted into the shell; never the viewer.
     "web": (_KERNEL, "src.control", "src.integrations", "src.analyses", _MEDIA),
     # One HTTP surface (package split, step 8): login, headers, static files,

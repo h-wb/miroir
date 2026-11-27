@@ -18,7 +18,7 @@ export holds (symptoms, ECG readings and so on) as raw JSON.
 
 - **Integration**: `apple_health`, fed on each export through a connection's
   receiving URL. The connections configured today are listed in the interface and by
-  `pipelines-miroir connections`.
+  `miroir connections`.
 - **Code**: [`src/integrations/apple_health/`](../../src/integrations/apple_health/)
 - **Raw tables**: `metrics`, `workouts`, `state_of_mind`, `medications`,
   `other_records`, `other_collections`
@@ -80,8 +80,8 @@ imported under version 1 is loaded again by a plain import, without replay:
   never the warehouse:
 
   ```bash
-  uv run --locked pipelines-miroir artifacts health
-  uv run --locked pipelines-miroir import health <artifact-id> --duckdb /tmp/mirror.duckdb [--replay]
+  uv run --locked miroir artifacts health
+  uv run --locked miroir import health <artifact-id> --duckdb /tmp/mirror.duckdb [--replay]
   ```
 
 The server, the worker and the flow-run image must run the same version. An

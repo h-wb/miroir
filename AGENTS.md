@@ -1,4 +1,4 @@
-# pipelines: instructions for agents
+# miroir: instructions for agents
 
 The code of Miroir, the warehouse, and of `miroir-collector`, the program that feeds it from a device. Start with the [handbook](https://github.com/h-wb/handbook): its [Warehouse](https://github.com/h-wb/handbook/blob/main/Systems/Warehouse.md) and [Device collector](https://github.com/h-wb/handbook/blob/main/Systems/Device%20collector.md) pages say how this fits with the rest. What is deployed and how to operate it is in [home-ops](https://github.com/h-wb/home-ops/blob/main/kubernetes/apps/main/automation/miroir/README.md), not here.
 
@@ -12,7 +12,7 @@ This repo is public and general. Work on it with made-up data only.
 
 ## Layout
 
-- `src/`: the server. `control/` the product, `integrations/` one package per connector, `analyses/catalog.py` the analysis packages, `web/` and `cli/` the two transports, `adapters/` Prefect and S3, `pipelines/` the flow entry points. Who may import whom: [docs/architecture.md](docs/architecture.md), enforced by `tests/test_boundaries.py`; a new folder under `src/` fails it until it gets a rule.
+- `src/`: the server. `control/` the product, `integrations/` one package per connector, `analyses/catalog.py` the analysis packages, `web/` and `cli/` the two transports, `adapters/` Prefect and S3, `flows/` the flow entry points. Who may import whom: [docs/architecture.md](docs/architecture.md), enforced by `tests/test_boundaries.py`; a new folder under `src/` fails it until it gets a rule.
 - `collector/`: its own package, standard library plus urllib3, pydantic and the Kingfisher scanner. It never imports `src/` and nothing in `src/` imports it. Its rules are in `collector/tests/test_boundaries.py`.
 - `dbt/`: the models the analyses build. `examples/`: a synthetic configuration.
 - Pages: [docs/README.md](docs/README.md) is the index. Design decisions: [docs/miroir/decisions.md](docs/miroir/decisions.md), cited by number from code and pages.

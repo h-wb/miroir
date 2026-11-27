@@ -34,7 +34,9 @@ CONCURRENCY_LIMIT = 1
 # Tags the media deployment, beside the miroir's own tags.
 MEDIA_TAG = "miroir:media"
 # The deployment attributes the miroir owns; a difference in any of them is drift.
+# `entrypoint` is not one of `to_deployment`'s arguments: it is what it sets.
 OWNED = (
+    "entrypoint",
     "parameters",
     "schedules",
     "work_pool_name",
@@ -101,6 +103,20 @@ def media_deployment_name(miroir_id: str) -> str:
     """The miroir's media deployment. Identifiers cannot hold `-`, so no
     connection's `<miroir>-<connection>` can be `<miroir>--media`."""
     return f"{miroir_id}--media"
+
+
+def _entrypoint() -> str:
+    """Where a deployment applied now points: what `to_deployment` sets, the
+    flow's file relative to the working directory and its function. A deployment
+    still pointing at a former path is an update, so apply moves it."""
+    from prefect.deployments.runner import RunnerDeployment
+
+    from src.flows.miroir import sync_connection
+
+    deployment = sync_connection.to_deployment(name="entrypoint")
+    assert isinstance(deployment, RunnerDeployment)  # see the module docstring
+    assert deployment.entrypoint is not None
+    return deployment.entrypoint
 
 
 def _owned(attributes: Any) -> dict[str, Any]:
@@ -214,6 +230,7 @@ class PrefectOrchestrator:
             result[deployment.name] = {
                 "id": str(deployment.id),
                 "attributes": {
+                    "entrypoint": deployment.entrypoint,
                     "parameters": dict(deployment.parameters or {}),
                     "schedules": [s.schedule for s in deployment.schedules],
                     "work_pool_name": deployment.work_pool_name,
@@ -227,9 +244,10 @@ class PrefectOrchestrator:
     def plan(self, miroir: ResolvedMiroir) -> list[dict[str, Any]]:
         """Changes needed for Prefect to match the miroir. Read-only."""
         desired, actual = self.desired(miroir), self.actual(miroir)
+        entrypoint = _entrypoint()
         changes: list[dict[str, Any]] = []
         for name, spec in sorted(desired.items()):
-            want = _owned(spec)
+            want = _owned({**spec, "entrypoint": entrypoint})
             # None for the media deployment, which serves every connection.
             connection_id = spec["parameters"].get("connection_id")
             if name not in actual:
@@ -269,7 +287,7 @@ class PrefectOrchestrator:
         from prefect import get_client
         from prefect.deployments.runner import RunnerDeployment
 
-        from src.pipelines.miroir import sync_connection
+        from src.flows.miroir import sync_connection
 
         desired = self.desired(miroir)
         for change in changes:

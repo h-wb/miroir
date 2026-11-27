@@ -198,9 +198,9 @@ Files stored before thumbnails existed are found by walking the bucket under
 
 ```bash
 # Where flow runs can be requested (needs the deployment section); prints the operation ID.
-uv run --locked pipelines-miroir media-backfill screen screenshots --limit 10000
+uv run --locked miroir media-backfill screen screenshots --limit 10000
 # Apple Messages attachments of a connection named `messages`.
-uv run --locked pipelines-miroir media-backfill messages attachments --limit 10000
+uv run --locked miroir media-backfill messages attachments --limit 10000
 ```
 
 `--limit` (default 10,000, at most 1,000,000) is how many stored files this run

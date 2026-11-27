@@ -18,7 +18,7 @@ collector (decision 038).
 
 - **Integration**: `apple_messages`, sent by the collector, with attachments
   as media. The connections configured today are listed in the interface and by
-  `pipelines-miroir connections`.
+  `miroir connections`.
 - **Code**: connector [`src/integrations/apple_messages/`](../../src/integrations/apple_messages/),
   source [`collector/miroir_collector/sources/apple_messages.py`](../../collector/miroir_collector/sources/apple_messages.py)
 - **Packages**: `messages` (decision 041,

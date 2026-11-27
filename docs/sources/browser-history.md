@@ -18,7 +18,7 @@ was in view and how much was typed on it.
 
 - **Integration**: `browser_history`, sent by the collector's `zen_history`
   source (decision 032) or loaded from a snapshot. The connections configured today are listed in the interface and by
-  `pipelines-miroir connections`.
+  `miroir connections`.
 - **Code**: connector [`src/integrations/browser_history/`](../../src/integrations/browser_history/)
   with two formats, a full snapshot and the collector's batches; collector source
   [`collector/miroir_collector/sources/zen_history.py`](../../collector/miroir_collector/sources/zen_history.py)

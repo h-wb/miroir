@@ -28,7 +28,7 @@ towards its parts, one step at a time, and this page says where it is now.
 | `src/media/` | The files rows point at: the object store and its S3 client, names, upload and view links, the `media` section, media kinds and profiles, the derive queue's tables and repository, the derive run and its decoder | Have routes, or know about HTTP, the scheduler, the viewer or the connector registry |
 | `src/control/` | Configuration, receiving and storing files, opening a connection's inputs, running and recording loads, secrets | Know about HTTP, the command line or the scheduler |
 | `src/viewer/` | Reading the warehouse and showing it (decision 040): the reader and its read-only sessions, the timeline's API, Day view, search and conversation pages, the `/media` view route and its withheld check, their templates and static files, and `ViewerSettings`, what it reads of the installation | Import the control plane, web, the connectors, dlt, prefect, Pillow or boto3, or read the configuration file |
-| `src/pipelines/` | The flow entry points the scheduler runs | Hold product logic; they call control |
+| `src/flows/` | The flow entry points the scheduler runs | Hold product logic; they call control |
 | `src/adapters/` | Talk to the scheduler (Prefect): plan and apply deployments, submit, observe | Decide what a load is |
 | `src/web/`, `src/cli/` | Transport and presentation; both call the same control services. `src/web/app.py` is the control plane's admin part (its API and pages); `src/cli/compose.py` (`serve`) and `src/cli/view.py` (`view`) are the web server's composition roots | Contain logic of their own; web never imports the viewer |
 | `src/web/shell/` (the web shell) | One HTTP surface both the admin part and the viewer mount: the token and session checks, `/login` and `/logout`, the security headers with a content security policy per mounted part, `/static/`, the template loader with `base.html`, `login.html` and `error.html`, and the header's navigation, to which each part adds its links | Import anything of Miroir but the kernel |
@@ -43,8 +43,8 @@ towards its parts, one step at a time, and this page says where it is now.
 | `analyses` | `kernel` only |
 | `media` | `kernel` only |
 | `control` | `kernel`, `integrations`, `analyses`, `media` |
-| `pipelines` | `kernel`, `control`, `media` (the flow builds the worker's bucket client) |
-| `adapters` | `kernel`, `control`, `pipelines` |
+| `flows` | `kernel`, `control`, `media` (the flow builds the worker's bucket client) |
+| `adapters` | `kernel`, `control`, `flows` |
 | `viewer` | `kernel`, `media`, `analyses.views` |
 | `web` | `kernel`, `control`, `integrations`, `analyses`, `media`, the shell |
 | `web.shell` | `kernel` only (and fastapi, starlette, jinja2) |

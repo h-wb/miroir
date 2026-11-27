@@ -1,13 +1,13 @@
-name: pipelines
+name: miroir
 version: "1.0.0"
-profile: pipelines
+profile: miroir
 
 model-paths: ["models"]
 macro-paths: ["macros"]
 clean-targets: ["target", "dbt_packages"]
 
 models:
-  pipelines:
+  miroir:
     staging:
       +schema: staging
       +materialized: view

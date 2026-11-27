@@ -47,7 +47,7 @@ class SecretBox:
             return cls(MultiFernet([Fernet(part.encode()) for part in parts]))
         except ValueError:
             raise SecretKeyError(
-                f"{KEY_VARIABLE} must be Fernet keys (pipelines-miroir generate-key)"
+                f"{KEY_VARIABLE} must be Fernet keys (miroir generate-key)"
             ) from None
 
     @classmethod
