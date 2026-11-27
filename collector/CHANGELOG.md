@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/h-wb/pipelines/compare/collector-v0.3.0...collector-v0.4.0) (2026-11-26)
+
+
+### Features
+
+* **collector:** Apple Messages dates in dbt, the allowlists written down, blanked values counted ([#70](https://github.com/h-wb/pipelines/issues/70)) ([0044893](https://github.com/h-wb/pipelines/commit/00448934d029e0c7ff5e3ccca375e4d8b020817a))
+
 ## [0.3.0](https://github.com/h-wb/pipelines/compare/collector-v0.2.0...collector-v0.3.0) (2026-11-21)
 
 
