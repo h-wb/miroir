@@ -18,7 +18,7 @@ which app was in front. Collected on the Mac by the Miroir collector (decision 0
 
 - **Integration**: `screenmemory`, sent by the collector, with screenshots as
   media. The connections configured today are listed in the interface and by
-  `pipelines-miroir connections`.
+  `miroir connections`.
 - **Code**: connector [`src/integrations/screenmemory/`](../../src/integrations/screenmemory/),
   source [`collector/miroir_collector/sources/screenmemory.py`](../../collector/miroir_collector/sources/screenmemory.py)
 - **Tables**: `frames`, `app_usage`, in the connection's dataset

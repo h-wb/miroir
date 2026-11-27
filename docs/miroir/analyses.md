@@ -50,8 +50,8 @@ and history. A connection cannot be removed while another analysis links it; its
 own default analysis goes with it.
 
 ```bash
-uv run --locked pipelines-miroir --config miroir.json analyses
-uv run --locked pipelines-miroir --config miroir.json models together [--full-refresh]
+uv run --locked miroir --config miroir.json analyses
+uv run --locked miroir --config miroir.json models together [--full-refresh]
 ```
 
 How builds are triggered, serialised and judged current: [Connections and

@@ -69,7 +69,7 @@ secrets = [
   "MIROIR_METADATA__PASSWORD",
 ]
 env = { MIROIR_PREFECT_CONFIG_PATH = "/miroir/data/miroir/miroir.json" }
-run = "pipelines-miroir --config miroir.json deployments apply"
+run = "miroir --config miroir.json deployments apply"
 
 [tasks."miroir:refresh"]
 depends = ["pass:login"]
@@ -79,7 +79,7 @@ secrets = [
   "PREFECT_API_AUTH_STRING",
   "MIROIR_METADATA__PASSWORD",
 ]
-run = "pipelines-miroir --config miroir.json refresh"
+run = "miroir --config miroir.json refresh"
 
 [tasks.prefect]
 depends = ["pass:login"]

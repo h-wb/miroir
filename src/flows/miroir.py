@@ -22,8 +22,8 @@ from src.control.config import load_miroir, metadata_url
 from src.control.operations import MetadataStore
 from src.control.runner import run_connection
 from src.control.secrets import SecretBox, SecretStore, make_resolver
+from src.flows.transform import build_connection_models
 from src.media.s3 import from_environment
-from src.pipelines.transform import build_connection_models
 
 
 def schedule_build(

@@ -75,7 +75,7 @@ class InlineExecutor:
 
 @dataclass
 class SubprocessExecutor:
-    """Runs each operation as `pipelines-miroir execute` in its own process.
+    """Runs each operation as `miroir execute` in its own process.
 
     A crash or kill only affects that operation, as on a worker. Finished
     children are reaped on the next submission.

@@ -32,10 +32,10 @@ from src.control.analysis import analysis_plan
 from src.control.artifacts import submit_artifact
 from src.control.config import parse_miroir
 from src.control.runner import import_artifact
+from src.flows.transform import DBT_DIR
 from src.integrations.apple_messages.source import _timestamp
 from src.media.config import MediaConfig
 from src.media.derive import DERIVE_VERSION, MediaWriter
-from src.pipelines.transform import DBT_DIR
 from src.viewer.reader import SEARCH_CHARACTERS, search_vector
 from tests.test_messages_models import (
     ALEX,
@@ -523,9 +523,7 @@ class TimelineMessagesTests(TimelineMessagesFixture):
         before = configuration(analyses, miroir_id="tm_connector_dates")
         records = [*FIXTURE, *EDGE_DATES]
         self.deliver(after, records)
-        with patch(
-            "src.pipelines.transform.DBT_DIR", connector_dates_project(self.root)
-        ):
+        with patch("src.flows.transform.DBT_DIR", connector_dates_project(self.root)):
             self.deliver(before, records)
         # The macro equals the connector's column on every row loaded.
         dataset = after.connections[0].binding.dataset_name

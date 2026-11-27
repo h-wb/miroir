@@ -16,7 +16,7 @@ My GitHub footprint: everything in the repos I own (any author, bots included)
 and my activity in other people's repos.
 
 - **Integration**: `github`, fetched on a connection's schedule. The connections configured today are listed in the interface and by
-  `pipelines-miroir connections`.
+  `miroir connections`.
 - **Code**: [`src/integrations/github/`](../../src/integrations/github/), one
   module per resource in `resources/` (decision 028)
 - **Packages**: `github` (`commits`, `pull_requests`, `issues`, `issue_comments`,

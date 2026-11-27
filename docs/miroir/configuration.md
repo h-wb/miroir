@@ -26,7 +26,7 @@ never echo a value. The installation's file is not in git; a synthetic one is
   "connections": [],
   "analyses": [],
   "links": {"prefect_ui": "https://prefect.example", "metabase": "https://metabase.example"},
-  "deployment": {"work_pool": "miroir-k8s", "image": "ghcr.io/h-wb/pipelines:sha-<full-commit>"},
+  "deployment": {"work_pool": "miroir-k8s", "image": "ghcr.io/h-wb/miroir:sha-<full-commit>"},
   "media": {"endpoint": "http://garage.example:3900", "bucket": "miroir-media"}
 }
 ```
@@ -129,9 +129,9 @@ store, or `{"provider": "env", "key": "NAME"}` or
 metadata store, and resolved only inside the run that needs them.
 
 ```bash
-export MIROIR_SECRET_KEY="$(uv run --locked pipelines-miroir generate-key)"   # back it up apart from the database
-uv run --locked pipelines-miroir set-credential music access_token            # prompts, or reads stdin
-uv run --locked pipelines-miroir check music
+export MIROIR_SECRET_KEY="$(uv run --locked miroir generate-key)"   # back it up apart from the database
+uv run --locked miroir set-credential music access_token            # prompts, or reads stdin
+uv run --locked miroir check music
 ```
 
 In the interface, **Add a connection** asks for settings and credentials and
@@ -141,4 +141,4 @@ connection's status turns `rejected` when a check or a run is refused (HTTP 401
 or 403) and recovers after a passing check or a successful load.
 
 To rotate the key: set `MIROIR_SECRET_KEY="<new>,<old>"`, run
-`pipelines-miroir rotate-secrets`, then drop the old key.
+`miroir rotate-secrets`, then drop the old key.

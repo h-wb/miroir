@@ -16,7 +16,7 @@ Every listen. ListenBrainz is the hub: players scrobble into it and Miroir
 mirrors it.
 
 - **Integration**: `listenbrainz`, fetched on a connection's schedule. The connections configured today are listed in the interface and by
-  `pipelines-miroir connections`.
+  `miroir connections`.
 - **Code**: [`src/integrations/listenbrainz/`](../../src/integrations/listenbrainz/)
 - **Raw table**: `listens`
 - **Packages**: `music`, `crossovers`

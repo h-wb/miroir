@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "dlt-pipelines"
+name = "miroir"
 version = "0.1.0"
-description = "Data pipelines using dlt (data load tool)"
+description = "Miroir, a personal data warehouse: connections load services and devices with dlt, analyses build dbt models, Prefect runs every load"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -30,7 +30,7 @@ dependencies = [
 ]
 
 [project.scripts]
-pipelines-miroir = "src.cli.main:main"
+miroir = "src.cli.main:main"
 
 [dependency-groups]
 test = [

@@ -26,7 +26,7 @@ from src.cli.compose import web_app
 from src.control.analysis import analysis_plan
 from src.control.config import parse_miroir
 from src.control.service import InlineExecutor, MiroirService
-from src.pipelines import transform
+from src.flows import transform
 from src.viewer.database import TimelineDatabase
 from tests.test_timeline_models import (
     READER,

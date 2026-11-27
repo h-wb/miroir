@@ -101,7 +101,7 @@ class AlreadyImported(OperationError):
 
 def code_revision() -> str:
     """The deployed commit, from the environment or the checkout."""
-    if revision := os.environ.get("PIPELINES_CODE_REVISION"):
+    if revision := os.environ.get("MIROIR_CODE_REVISION"):
         return revision[:64]
     try:
         head = subprocess.run(

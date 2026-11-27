@@ -68,7 +68,7 @@ is no longer the words.
 ([package split](../decisions/2026-11-25-package-split.md#runtime), step 10):
 
 ```bash
-uv run --locked pipelines-miroir --config miroir.json view --port 8766
+uv run --locked miroir --config miroir.json view --port 8766
 # In a container: /app/.venv/bin/python -m src.cli --config miroir.json view --host 0.0.0.0
 ```
 

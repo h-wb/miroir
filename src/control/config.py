@@ -212,7 +212,7 @@ class Deployment(StrictModel):
     """
 
     work_pool: str = Field(min_length=1, max_length=100)
-    # The image flow runs execute; a digest-pinned tag (ghcr.io/h-wb/pipelines:sha-…).
+    # The image flow runs execute; a digest-pinned tag (ghcr.io/h-wb/miroir:sha-…).
     image: str | None = None
     # Job variables for the work pool (e.g. the namespace); None falls back to
     # the environment default, an empty object replaces it with nothing.

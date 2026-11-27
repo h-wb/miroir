@@ -57,7 +57,7 @@ mise run prefect -- flow-run logs <flow-run-id>
 `miroir:deploy` and `miroir:refresh` read the checkout's gitignored
 `miroir.json`, which must match the installation's copy; flow runs read the
 installation's path (`MIROIR_PREFECT_CONFIG_PATH`). Run
-`pipelines-miroir deployments plan` first to see what apply would change.
+`miroir deployments plan` first to see what apply would change.
 
 ## Builds
 

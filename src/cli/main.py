@@ -34,7 +34,7 @@ EXECUTE_LOCK_WAIT = 3600.0
 def main(argv: list[str] | None = None) -> int:
     from src.control.config import metadata_url
 
-    parser = argparse.ArgumentParser(prog="pipelines-miroir")
+    parser = argparse.ArgumentParser(prog="miroir")
     parser.add_argument("--config", type=Path, default=Path("miroir.json"))
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("integrations", help="List bundled connector capabilities")
@@ -712,7 +712,7 @@ def _serve(args: argparse.Namespace, miroir: Any, store: Any, secrets: Any) -> i
     if secrets is None:
         print(
             "MIROIR_SECRET_KEY is not set: credentials cannot be stored in the "
-            "miroir (generate one with `pipelines-miroir generate-key`)",
+            "miroir (generate one with `miroir generate-key`)",
             file=sys.stderr,
         )
     service = MiroirService(

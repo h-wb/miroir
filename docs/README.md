@@ -42,7 +42,7 @@ One row per connector in `src/integrations/registry.py`; a collector source is a
 module in `collector/miroir_collector/sources/`. Any number of connections can
 use a connector. The connections configured in an installation (their names,
 schedules, datasets and dashboards) are in its `miroir.json`, which the
-interface edits: read them there, or with `pipelines-miroir connections`.
+interface edits: read them there, or with `miroir connections`.
 
 | Source | Reads | Connector | Collector source | Raw tables | Packages |
 | --- | --- | --- | --- | --- | --- |

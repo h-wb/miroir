@@ -10,7 +10,7 @@ topics:
 created: 2025-10-06T20:46
 ---
 
-# pipelines
+# miroir
 
 Miroir, a personal data warehouse: connections mirror the services and devices I
 use into Postgres with [dlt](https://dlthub.com/), analyses build dbt models on
@@ -31,7 +31,7 @@ src/integrations/  one connector package per source
 src/analyses/      the catalog of analysis packages
 src/web, src/cli   the interface, HTTP API and CLI over the same services
 src/adapters/      Prefect and S3
-src/pipelines/     the flow entry points Prefect runs
+src/flows/         the flow entry points Prefect runs
 collector/         miroir-collector, its own package
 dbt/               staging views and one model group per package
 docs/              documentation

@@ -1,5 +1,5 @@
 # Reuses the credentials dlt already gets from the environment
-pipelines:
+miroir:
   target: prod
   outputs:
     prod:

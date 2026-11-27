@@ -19,8 +19,8 @@ for small swaps.
 
 ```bash
 export MIROIR_API_TOKEN="$(openssl rand -hex 24)"
-export MIROIR_SECRET_KEY="$(uv run --locked pipelines-miroir generate-key)"
-uv run --locked pipelines-miroir --config miroir.json serve --duckdb /tmp/miroir.duckdb
+export MIROIR_SECRET_KEY="$(uv run --locked miroir generate-key)"
+uv run --locked miroir --config miroir.json serve --duckdb /tmp/miroir.duckdb
 # http://127.0.0.1:8765; log in with the token. A missing miroir.json is created empty.
 ```
 

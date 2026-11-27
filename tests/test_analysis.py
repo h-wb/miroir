@@ -25,7 +25,7 @@ from src.control.runner import (
     run_connection,
 )
 from src.control.service import InlineExecutor, MiroirService
-from src.pipelines.transform import build_connection_models
+from src.flows.transform import build_connection_models
 from tests.postgres import start_postgres
 from tests.test_miroir import example
 from tests.test_operations import listens_response
@@ -100,7 +100,7 @@ class DbtPostgresTests(unittest.TestCase):
         environment.start()
         cls.addClassCleanup(environment.stop)
         concurrency = patch(
-            "src.pipelines.transform.concurrency",
+            "src.flows.transform.concurrency",
             side_effect=lambda *a, **kw: nullcontext(),
         )
         concurrency.start()

@@ -34,6 +34,7 @@ amendment under it. Older entries say "workspace" (renamed Miroir by 014) and
 | [012](#012--keep-prefect-run-each-flow-in-its-own-kubernetes-job-from-a-versioned-image) | Keep Prefect; run each flow in its own Kubernetes Job from a versioned image | Accepted |
 | [013](#013--prefect-is-the-orchestrator-the-workspace-only-reconciles-with-it) | Prefect is the orchestrator; the workspace only reconciles with it | Accepted |
 | [014](#014--the-product-is-miroir-workspace-is-retired) | The product is Miroir; "workspace" is retired | Accepted |
+| | [014 amendment — The repository, distribution and CLI are named miroir](#014-amendment--the-repository-distribution-and-cli-are-named-miroir) | Accepted |
 | [015](#015--the-metadata-store-gets-its-own-postgres-not-metabases) | The metadata store gets its own Postgres, not Metabase's | Accepted |
 | [016](#016--execution-settings-live-in-the-configuration-not-the-writers-environment) | Execution settings live in the configuration, not the writer's environment | Accepted; fallbacks superseded by 029 |
 | [017](#017--file-delivery-is-independent-of-parsing-connection-scoped-receive-tokens) | File delivery is independent of parsing; connection-scoped receive tokens | Accepted |
@@ -49,6 +50,7 @@ amendment under it. Older entries say "workspace" (renamed Miroir by 014) and
 | [027](#027--shared-connector-diagnostics-and-revision-checked-connection-edits) | Shared connector diagnostics and revision-checked connection edits | Accepted; scope superseded for GitHub by 028 |
 | [028](#028--github-uses-native-rest-resources-dependencies-and-incremental-lag) | GitHub uses native REST resources, dependencies, and incremental lag | Accepted |
 | [029](#029--the-prefect-adapter-describes-deployments-in-prefects-own-attributes) | The Prefect adapter describes deployments in Prefect's own attributes | Accepted |
+| | [029 amendment — Plan compares the entrypoint](#029-amendment--plan-compares-the-entrypoint) | Accepted |
 | [030](#030--a-local-agent-delivers-device-sources-through-the-receiving-url) | A local agent delivers device sources through the receiving URL | Accepted |
 | [031](#031--the-agent-is-its-own-package-part-boundaries-are-tested) | The agent is its own package; part boundaries are tested | Accepted |
 | [032](#032--the-receiving-url-takes-a-format-browser-history-gains-incremental-batches) | The receiving URL takes a format; browser history gains incremental batches | Accepted |
@@ -550,6 +552,27 @@ gone entirely rather than half-kept:
 Earlier entries in this log keep the wording of their time; paths moved with
 `docs/workspace/` → `docs/miroir/`.
 
+### 014 amendment — The repository, distribution and CLI are named miroir
+
+Status: accepted, 2026-11-27.
+
+"pipelines" named the project in four places after 014: the repository
+(`h-wb/pipelines`, so the image `ghcr.io/h-wb/pipelines`), the distribution
+(`dlt-pipelines`), the CLI binary (`pipelines-miroir`) and the flow's package
+(`src/pipelines/`). They are now `h-wb/miroir` (GitHub redirects the old URLs),
+`ghcr.io/h-wb/miroir`, `miroir`, `miroir` and `src/flows/`, with the dbt project
+and profile (`miroir`) and the image's build variable (`MIROIR_CODE_REVISION`).
+Containers still call `python -m src.cli`. The generic word stays where it is
+dlt's: a dlt pipeline, `pipeline_name`, `pipelines_dir`, `<pipeline>_media`.
+
+The flow's entrypoint is a persistent identity that moves on purpose: Prefect
+stores `src/pipelines/miroir.py:sync_connection` in each deployment. Plan now
+compares it (029 amendment), so after the image with the new path is deployed,
+`deployments plan` shows every deployment as an update of `entrypoint` and
+`deployments apply` moves them all. A run that starts between the image's
+deploy and the apply looks for the old path, which the image no longer has, and
+fails: apply right after the deploy, and request such a run again.
+
 ## 015 — The metadata store gets its own Postgres, not Metabase's
 
 Status: accepted, 2026-10-29.
@@ -1026,6 +1049,18 @@ converged installation still plans nothing.
 Kept on purpose: slugged schedules are removed before an update. Prefect refuses
 to replace them with unslugged ones, and giving ours a slug would not help,
 because Prefect then updates by slug and leaves a hand-added one in place.
+
+### 029 amendment — Plan compares the entrypoint
+
+Status: accepted, 2026-11-27, with the 014 amendment.
+
+The entrypoint is not one of `to_deployment`'s arguments, so plan did not
+compare it, and a deployment kept whatever path it was first applied with. It is
+now an owned attribute (`OWNED` in `src/adapters/prefect.py`): plan reads it from
+Prefect's deployment and compares it with what `to_deployment` sets, the flow's
+file relative to the server's working directory. A deployment at another path is
+an update, and apply moves it. The spec stays exactly `to_deployment`'s
+arguments.
 
 ## 030 — A local agent delivers device sources through the receiving URL
 
