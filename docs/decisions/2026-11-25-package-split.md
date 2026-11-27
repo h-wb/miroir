@@ -17,7 +17,8 @@ is and changes with each step.
 Miroir becomes six parts with one concern each, plus a thin web shell, still in
 one repo, one distribution and one image: kernel, connectors, analyses, media,
 the control plane (`src/core` renamed `src/control`) and the viewer. The viewer
-runs as a process of its own. New timeline features are paused while the code
+can run as a process of its own; the installation runs it inside the server
+(revised 2026-11-27, below). New timeline features are paused while the code
 moves.
 
 ## Why
@@ -237,6 +238,14 @@ sits on the kind, not on the analysis.
 
 ## Runtime
 
+*Revised 2026-11-27:* the installation runs **one container**, `serve` with both
+parts, as before the split. The split's value is in the code: the parts, their
+contracts and the boundary tests hold the same in one process. The image keeps
+`view` and `serve --without-viewer` ([Processes](../architecture.md#processes)),
+so the layout below can be deployed later without a code change, for example if
+the viewer's credential isolation becomes worth an extra pod. The rest of this
+section is that layout, as designed.
+
 One image, two Deployments behind one hostname, routed by path at the gateway.
 
 ```mermaid
@@ -315,9 +324,9 @@ production working.
    amendment to decision 040.
 8. web shell: login, headers and navigation; a security policy per part.
 9. Rename `src/core` to `src/control`, once media and viewer have left it.
-10. The viewer's own process: a `view` entry point, `serve` without the viewer,
-    and in home-ops a viewer Deployment with only the reader credentials and a
-    read-only media key, and the path routes.
+10. The viewer's own process: a `view` entry point and `serve` without the
+    viewer (pipelines#67). The home-ops Deployment and routes were built and then
+    not deployed: the installation runs one container (revised 2026-11-27).
 11. Lanes from declarations: the `contract` relation and its check; search kinds
     and day totals from `events` and the lane list; `media_ref` in place of the
     hand-written joins and literal kinds; links from each row's kind; no
