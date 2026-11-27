@@ -1,4 +1,4 @@
-# fnox secret map for the dlt pipelines. Contains only ProtonPass references
+# fnox secret map for Miroir. Contains only ProtonPass references
 # (no secret values), so it is safe to commit.
 #
 # mise injects only the keys granted by each task's `secrets = [...]` list
@@ -34,8 +34,12 @@ GITHUB__ACCESS_TOKEN           = { provider = "protonpass", value = "pass://Auto
 DESTINATION__POSTGRES__CREDENTIALS__PASSWORD = { provider = "protonpass", value = "pass://Automation General/postgres-metabase/password" }
 PREFECT_API_URL                              = { provider = "protonpass", value = "pass://Automation General/prefect/api-url" }
 PREFECT_API_AUTH_STRING                      = { provider = "protonpass", value = "pass://Automation General/prefect/api-auth-string" }
-# Provisioning prerequisite: Automation General/miroir is not populated yet. Copy
-# the existing installation key from BWS and metadata password from CNPG; never
+# Miroir's admin API token, a copy of MIROIR_API_TOKEN from the BWS item `miroir`,
+# for operator calls to the API (builds, syncs, imports). It is the only API
+# token, so it is full admin: grant it only to commands that call the API.
+MIROIR_API_TOKEN                             = { provider = "protonpass", value = "pass://Automation General/miroir/api-token" }
+# Provisioning prerequisite: the fields below are not populated yet. Copy the
+# existing installation key from BWS and metadata password from CNPG; never
 # generate a replacement key for an existing encrypted installation.
 # Miroir metadata database (schema miroir_meta in the postgres-miroir CNPG
 # cluster, decision 015). In the cluster, flow-run Jobs read the password from
